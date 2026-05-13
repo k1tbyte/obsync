@@ -1,6 +1,6 @@
 {
 	"name": "obsync",
-	"version": "1.0.0",
+	"version": "0.0.1",
 	"description": "Simple plugin to synchronize files to S3.",
 	"main": "main.js",
 	"type": "module",
