@@ -1,6 +1,6 @@
-import type { Plugin } from "obsidian";
+import { debounce, type Plugin } from "obsidian";
 
-import { AUTO_PULL_BUSY_COOLDOWN_MS, AUTO_PULL_STARTUP_DELAY_MS } from "../constants";
+import { AUTO_PULL_BUSY_COOLDOWN_MS, AUTO_PULL_STARTUP_DELAY_MS, VAULT_EVENT_DEBOUNCE_MS } from "../constants";
 import type { ObsyncSettings } from "../settings/model";
 import type { SyncController } from "./controller";
 
@@ -12,6 +12,7 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 	let lastRun = 0;
 
 	const tick = async (): Promise<void> => {
+		if (!navigator.onLine) return;
 		const now = Date.now();
 		if (now - lastRun < AUTO_PULL_BUSY_COOLDOWN_MS) return;
 		lastRun = now;
@@ -31,4 +32,16 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 		const intervalMs = host.settings.autoPullIntervalMinutes * 60_000;
 		host.registerInterval(window.setInterval(() => void tick(), intervalMs));
 	}
+
+	const triggerRefresh = debounce(
+		() => {
+			if (!controller.getSnapshot().busy) void controller.refresh();
+		},
+		VAULT_EVENT_DEBOUNCE_MS,
+		true,
+	);
+	host.registerEvent(host.app.vault.on("modify", triggerRefresh));
+	host.registerEvent(host.app.vault.on("create", triggerRefresh));
+	host.registerEvent(host.app.vault.on("delete", triggerRefresh));
+	host.registerEvent(host.app.vault.on("rename", triggerRefresh));
 }

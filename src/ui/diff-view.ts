@@ -128,6 +128,19 @@ export class DiffView extends ItemView {
 		const model = this.model;
 		if (!model) return;
 
+		if (model.direction === EDiffDirection.Conflict) {
+			const keepLocal = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Keep local",
+			});
+			keepLocal.addEventListener("click", () => void this.resolveKeepLocal());
+			const acceptRemote = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Accept remote",
+			});
+			acceptRemote.addEventListener("click", () => void this.resolveAcceptRemote());
+		}
+
 		if (!model.isBinary && model.hunks.hunks.length > 0) {
 			const prev = header.createEl("button", { cls: "obsync-icon-btn", text: "↑" });
 			prev.setAttr("aria-label", "Previous hunk");
@@ -136,6 +149,16 @@ export class DiffView extends ItemView {
 			next.setAttr("aria-label", "Next hunk");
 			next.addEventListener("click", () => this.jumpHunk(1));
 		}
+
+		const prevFile = header.createEl("button", { cls: "obsync-icon-btn", text: "◀" });
+		prevFile.setAttr("aria-label", "Previous file");
+		prevFile.disabled = this.getAdjacentPath(-1) === null;
+		prevFile.addEventListener("click", () => void this.navigateFile(-1));
+
+		const nextFile = header.createEl("button", { cls: "obsync-icon-btn", text: "▶" });
+		nextFile.setAttr("aria-label", "Next file");
+		nextFile.disabled = this.getAdjacentPath(1) === null;
+		nextFile.addEventListener("click", () => void this.navigateFile(1));
 
 		if (!Platform.isMobile) {
 			const modeBtn = header.createEl("button", {
@@ -228,7 +251,8 @@ export class DiffView extends ItemView {
 			const span = pre.createSpan({ cls: "obsync-unified-line" });
 			if (line.startsWith("+")) span.addClass("is-add");
 			else if (line.startsWith("-")) span.addClass("is-del");
-			span.setText(line);
+			span.createSpan({ cls: "obsync-line-prefix", text: line[0] ?? " " });
+			span.createSpan({ cls: "obsync-line-content", text: line.slice(1) });
 		}
 
 		card.addEventListener("click", () => this.setCurrentHunk(hunk.index));
@@ -349,6 +373,52 @@ export class DiffView extends ItemView {
 		} catch (err) {
 			this.notifyError(err);
 		}
+	}
+
+	private async resolveKeepLocal(): Promise<void> {
+		if (!this.path) return;
+		try {
+			await this.plugin.controller.resolveConflictKeepLocal(this.path);
+			new Notice("Obsync: kept local version");
+			await this.refreshModel();
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async resolveAcceptRemote(): Promise<void> {
+		if (!this.path) return;
+		try {
+			await this.plugin.controller.resolveConflictAcceptRemote(this.path);
+			new Notice("Obsync: accepted remote version");
+			await this.refreshModel();
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private getAdjacentPath(delta: number): string | null {
+		const snapshot = this.plugin.controller.getSnapshot();
+		const diff = snapshot.result?.diff;
+		if (!diff || !this.path) return null;
+		const paths = [
+			...diff.conflicts.map((c) => c.path),
+			...diff.localChanges.map((c) => c.path),
+			...diff.remoteChanges.map((c) => c.path),
+		];
+		const idx = paths.indexOf(this.path);
+		if (idx < 0) return null;
+		const next = idx + delta;
+		if (next < 0 || next >= paths.length) return null;
+		return paths[next] ?? null;
+	}
+
+	private async navigateFile(delta: number): Promise<void> {
+		const target = this.getAdjacentPath(delta);
+		if (!target) return;
+		this.path = target;
+		this.currentHunkIndex = -1;
+		await this.refreshModel();
 	}
 
 	private destroyMerge(): void {

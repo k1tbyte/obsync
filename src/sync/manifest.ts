@@ -9,7 +9,13 @@ export async function fetchRemoteManifest(
 ): Promise<Manifest | null> {
 	const blob = await storage.get(REMOTE_MANIFEST_KEY);
 	if (!blob) return null;
-	return decryptJson<Manifest>(key, blob);
+	const manifest = await decryptJson<Manifest>(key, blob);
+	if (manifest.version > MANIFEST_VERSION) {
+		throw new Error(
+			`Remote manifest version ${manifest.version} requires a newer Obsync version.`,
+		);
+	}
+	return manifest;
 }
 
 export async function publishManifest(

@@ -68,3 +68,11 @@ export const SOURCE_CONTROL_VIEW_TYPE = "obsync-source-control";
 export const DIFF_VIEW_TYPE = "obsync-diff";
 
 export const STATUS_EVENT = "obsync:status-changed";
+
+export const RESET_CONFIRMATION_TEXT = "RESET";
+export const IMPORT_CONFIRMATION_TEXT = "IMPORT";
+export const QR_SIZE = 320;
+export const QR_ERROR_CORRECTION = "L" as const;
+
+export const S3_TIMEOUT_MS = 30_000;
+export const VAULT_EVENT_DEBOUNCE_MS = 1_500;

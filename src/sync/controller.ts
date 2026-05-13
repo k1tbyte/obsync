@@ -38,6 +38,7 @@ import {
 	type FileDiffModel,
 	type ProjectionDeps,
 } from "./projection";
+import { resetRemoteStorage as resetStorageObjects } from "./reset";
 
 export interface SyncControllerHost {
 	app: App;
@@ -57,6 +58,8 @@ export interface SyncStatusSnapshot {
 	busy: boolean;
 	error: string | null;
 	result: CompareResult | null;
+	progressText: string | null;
+	staleReason: string | null;
 }
 
 export type SyncStatusListener = (snapshot: SyncStatusSnapshot) => void;
@@ -72,6 +75,8 @@ export class SyncController {
 	private resultAt: number | null = null;
 	private pendingOps = 0;
 	private error: string | null = null;
+	private progressText: string | null = null;
+	private staleReason: string | null = null;
 	private readonly listeners = new Set<SyncStatusListener>();
 	private readonly diffCache = new Map<string, FileDiffModel>();
 	private chain: Promise<void> = Promise.resolve();
@@ -90,6 +95,8 @@ export class SyncController {
 			busy: this.pendingOps > 0,
 			error: this.error,
 			result: this.result,
+			progressText: this.progressText,
+			staleReason: this.staleReason,
 		};
 	}
 
@@ -128,6 +135,15 @@ export class SyncController {
 		});
 	}
 
+	invalidate(reason: string): void {
+		this.result = null;
+		this.error = null;
+		this.progressText = null;
+		this.diffCache.clear();
+		this.staleReason = reason;
+		this.broadcast();
+	}
+
 	async refreshAndAutoPull(): Promise<void> {
 		await this.refresh();
 		const result = this.result;
@@ -136,6 +152,48 @@ export class SyncController {
 		if (result.diff.localChanges.length > 0) return;
 		if (result.diff.remoteChanges.length === 0) return;
 		await this.pullPaths(result.diff.remoteChanges.map((c) => c.path));
+	}
+
+	async resetRemoteStorage(): Promise<boolean> {
+		return this.enqueue(async () => {
+			this.error = null;
+			this.progressText = "Resetting remote storage…";
+			this.broadcast();
+			try {
+				const deps = await this.host.openSession();
+				if (!deps) return false;
+				const result = await resetStorageObjects(
+					deps.storage,
+					deps.concurrency,
+					(done, total) => {
+						this.progressText = `Deleting remote sync data ${done}/${total}…`;
+						this.broadcast();
+					},
+				);
+				const resetState = resetLocalState(deps.state);
+				await this.host.persistState(resetState);
+				this.progressText = "Refreshing…";
+				this.broadcast();
+				const refreshed = await compare({ ...deps, state: resetState });
+				this.result = refreshed;
+				this.resultAt = Date.now();
+				this.diffCache.clear();
+				this.staleReason = null;
+				await this.host.persistState({ ...resetState, hashCache: refreshed.updatedCache });
+				await this.host.logInfo(
+					ESyncLogOperation.Reset,
+					`Reset remote storage; deleted ${result.deletedKeys.length} remote key(s).`,
+					result.deletedKeys.slice(0, 50),
+				);
+				return true;
+			} catch (err) {
+				this.error = err instanceof Error ? err.message : String(err);
+				await this.host.logError(ESyncLogOperation.Reset, this.error);
+				return false;
+			} finally {
+				this.progressText = null;
+			}
+		});
 	}
 
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {
@@ -149,7 +207,11 @@ export class SyncController {
 			if (blockedByRemote) {
 				throw new Error("Cannot push: some of the selected files have remote changes; pull first");
 			}
-			const manifest = await pushPaths(deps, result, paths);
+			const manifest = await pushPaths(deps, result, paths, (done, total) => {
+				this.progressText = `Pushing ${done}/${total}…`;
+				this.broadcast();
+			});
+			this.progressText = null;
 			const state = advanceStateAfterPush(deps.state, result, manifest);
 			await this.host.persistState(state);
 			await this.host.logInfo(
@@ -168,7 +230,11 @@ export class SyncController {
 			if (result.diff.conflicts.length > 0) {
 				throw new Error("Cannot pull: conflicts must be resolved first");
 			}
-			const baseline = await pullPaths(deps, result, paths);
+			const baseline = await pullPaths(deps, result, paths, (done, total) => {
+				this.progressText = `Pulling ${done}/${total}…`;
+				this.broadcast();
+			});
+			this.progressText = null;
 			const hashCache = mergeBaselineIntoCache(baseline, result.updatedCache);
 			const state: LocalState = {
 				deviceId: deps.state.deviceId || randomId(),
@@ -299,6 +365,51 @@ export class SyncController {
 		});
 	}
 
+	async resolveConflictKeepLocal(path: string): Promise<void> {
+		await this.runOperation(ESyncLogOperation.Push, async (deps, result) => {
+			const localBytes = await loadLocalBytes(deps.adapter, path);
+			if (!localBytes) throw new Error(`Local file missing: ${path}`);
+			const { manifest, entry } = await pushSingleFile(deps, result, { path, bytes: localBytes });
+			const baseline = updateBaselineEntry(deps.state.baseline ?? manifest, path, entry);
+			const hashCache = { ...result.updatedCache };
+			hashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
+			const state: LocalState = {
+				deviceId: deps.state.deviceId || randomId(),
+				vaultId: manifest.vaultId,
+				baseline,
+				hashCache,
+			};
+			await this.host.persistState(state);
+			await this.host.logInfo(ESyncLogOperation.Push, `Resolved conflict (kept local): ${path}.`);
+		});
+	}
+
+	async resolveConflictAcceptRemote(path: string): Promise<void> {
+		await this.runOperation(ESyncLogOperation.Pull, async (deps, result) => {
+			if (!result.remote) throw new Error("Cannot resolve: remote manifest is missing");
+			const remoteEntry = result.remote.files[path];
+			if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
+			const blob = await deps.storage.get(objectKey(remoteEntry.hash));
+			if (!blob) throw new Error(`Missing remote object for ${path}`);
+			const plaintext = await decryptBytes(deps.key, blob);
+			const verify = await sha256Hex(plaintext);
+			if (verify !== remoteEntry.hash) throw new Error(`Hash mismatch resolving ${path}`);
+			await writeBinary(deps.adapter, path, plaintext);
+			const baseline = updateBaselineEntry(deps.state.baseline ?? result.remote, path, remoteEntry);
+			const hashCache = { ...result.updatedCache };
+			const mtime = Date.now();
+			hashCache[path] = { mtime, size: plaintext.length, hash: remoteEntry.hash };
+			const state: LocalState = {
+				deviceId: deps.state.deviceId || randomId(),
+				vaultId: baseline.vaultId,
+				baseline,
+				hashCache,
+			};
+			await this.host.persistState(state);
+			await this.host.logInfo(ESyncLogOperation.Pull, `Resolved conflict (accepted remote): ${path}.`);
+		});
+	}
+
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
 		const status = this.getStatusForPath(path);
 		if (!status) return null;
@@ -365,20 +476,23 @@ export class SyncController {
 		return bytesToText(bytes);
 	}
 
-	private enqueue(task: () => Promise<void>): Promise<void> {
+	private enqueue<T>(task: () => Promise<T>): Promise<T> {
 		this.pendingOps++;
 		if (this.pendingOps === 1) this.broadcast();
 		const run = this.chain.then(() => task(), () => task());
-		this.chain = run.catch(() => undefined);
-		void run.finally(() => {
+		this.chain = run.then(() => undefined, () => undefined);
+		const finish = (): void => {
 			this.pendingOps--;
 			if (this.pendingOps === 0) this.broadcast();
-		});
+		};
+		run.then(finish, finish);
 		return run;
 	}
 
 	private async doRefresh(): Promise<void> {
 		this.error = null;
+		this.progressText = "Refreshing…";
+		this.broadcast();
 		try {
 			const deps = await this.host.openSession();
 			if (!deps) return;
@@ -386,11 +500,14 @@ export class SyncController {
 			this.result = result;
 			this.resultAt = Date.now();
 			this.diffCache.clear();
+			this.staleReason = null;
 			const state: LocalState = { ...deps.state, hashCache: result.updatedCache };
 			await this.host.persistState(state);
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : String(err);
 			await this.host.logError(ESyncLogOperation.Compare, this.error);
+		} finally {
+			this.progressText = null;
 		}
 	}
 
@@ -414,11 +531,14 @@ export class SyncController {
 				this.result = refreshed;
 				this.resultAt = Date.now();
 				this.diffCache.clear();
+				this.staleReason = null;
 				const state: LocalState = { ...deps.state, hashCache: refreshed.updatedCache };
 				await this.host.persistState(state);
 			} catch (err) {
 				this.error = err instanceof Error ? err.message : String(err);
 				await this.host.logError(operation, this.error);
+			} finally {
+				this.progressText = null;
 			}
 		});
 	}
@@ -458,6 +578,15 @@ function mergeBaselineIntoCache(
 		next[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
 	}
 	return next;
+}
+
+function resetLocalState(state: LocalState): LocalState {
+	return {
+		deviceId: state.deviceId || randomId(),
+		vaultId: null,
+		baseline: null,
+		hashCache: state.hashCache,
+	};
 }
 
 function updateBaselineEntry(

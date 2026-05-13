@@ -3,7 +3,12 @@ import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { AUTO_PULL_MAX_MINUTES, AUTO_PULL_MIN_MINUTES } from "../constants";
 import { clearCachedPassphrase } from "../crypto/passphrase-cache";
 import type ObsyncPlugin from "../main";
-import type { SettingsSyncCategories } from "./model";
+import { confirmRemoteReset } from "../ui/reset-modal";
+import {
+	askSettingsTransferInput,
+	showSettingsTransferExport,
+} from "../ui/settings-transfer-modal";
+import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import { renderLogsView } from "./logs-view";
 
 enum ESettingsViewTab {
@@ -39,6 +44,12 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 	{ key: "themes", name: "Themes", desc: "themes folder inside the config folder" },
 ];
 
+const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
+
+interface UpdateOptions {
+	refreshScope?: boolean;
+}
+
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
 	private activeTab = ESettingsViewTab.Settings;
@@ -60,11 +71,13 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 		this.renderStorageSection(containerEl);
 		this.renderCredentialsSection(containerEl);
+		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
 		this.renderIgnoreSection(containerEl);
 		this.renderAutomationSection(containerEl);
 		this.renderUiSection(containerEl);
 		this.renderAdvancedSection(containerEl);
+		this.renderMaintenanceSection(containerEl);
 		this.renderSecuritySection(containerEl);
 	}
 
@@ -161,6 +174,32 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			});
 	}
 
+	private renderTransferSection(parent: HTMLElement): void {
+		new Setting(parent).setName("Device transfer").setHeading();
+		new Setting(parent).setDesc(
+			"Export or import compact encrypted sync settings. Local-only display preferences stay on each device.",
+		);
+
+		new Setting(parent)
+			.setName("Export setup")
+			.setDesc("Create a compact encrypted link and QR code for another device.")
+			.addButton((button) =>
+				button
+					.setButtonText("Export")
+					.onClick(() => void this.handleExportSettings()),
+			);
+
+		new Setting(parent)
+			.setName("Import setup")
+			.setDesc("Paste an encrypted setup link and replace storage, sync scope, ignore, and automation settings.")
+			.addButton((button) =>
+				button
+					.setButtonText("Import")
+					.setWarning()
+					.onClick(() => void this.handleImportSettings()),
+			);
+	}
+
 	private renderSettingsSyncSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Obsidian configuration scope").setHeading();
 		new Setting(parent).setDesc(
@@ -175,7 +214,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					t.setValue(this.plugin.settings.settingsSync[row.key]).onChange((v) =>
 						this.update({
 							settingsSync: { ...this.plugin.settings.settingsSync, [row.key]: v },
-						}),
+						}, { refreshScope: true }),
 					),
 				);
 		}
@@ -194,7 +233,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;
 				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) =>
-					this.update({ ignorePatterns: v }),
+					this.update({ ignorePatterns: v }, { refreshScope: true }),
 				);
 			});
 	}
@@ -255,15 +294,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.showFileExplorerIndicators)
 					.onChange((v) => this.update({ showFileExplorerIndicators: v })),
 			);
-
-		new Setting(parent)
-			.setName("Editor gutter markers")
-			.setDesc("Show +/~/- markers in the editor for tracked changes.")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.showEditorGutter)
-					.onChange((v) => this.update({ showEditorGutter: v })),
-			);
 	}
 
 	private renderAdvancedSection(parent: HTMLElement): void {
@@ -276,7 +306,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				t.setValue(String(Math.round(this.plugin.settings.maxFileBytes / (1024 * 1024)))).onChange(
 					(v) => {
 						const mb = Math.max(1, Number.parseInt(v, 10) || 0);
-						this.update({ maxFileBytes: mb * 1024 * 1024 });
+						this.update({ maxFileBytes: mb * 1024 * 1024 }, { refreshScope: true });
 					},
 				),
 			);
@@ -289,6 +319,20 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					const n = Math.max(1, Math.min(16, Number.parseInt(v, 10) || 1));
 					this.update({ concurrency: n });
 				}),
+			);
+	}
+
+	private renderMaintenanceSection(parent: HTMLElement): void {
+		new Setting(parent).setName("Maintenance").setHeading();
+
+		new Setting(parent)
+			.setName("Reset remote storage")
+			.setDesc("Delete the remote Obsync manifest and objects for the configured bucket prefix.")
+			.addButton((button) =>
+				button
+					.setButtonText("Reset remote")
+					.setWarning()
+					.onClick(() => void this.handleResetRemote()),
 			);
 	}
 
@@ -341,8 +385,55 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private update(partial: Partial<typeof this.plugin.settings>): void {
+	private update(partial: Partial<ObsyncSettings>, options: UpdateOptions = {}): void {
 		Object.assign(this.plugin.settings, partial);
-		void this.plugin.saveSettings();
+		void this.plugin.saveSettings().then(() => {
+			if (options.refreshScope) {
+				this.plugin.scheduleScopeRefresh(SCOPE_SETTINGS_CHANGED);
+			}
+		});
+	}
+
+	private async handleExportSettings(): Promise<void> {
+		try {
+			const url = await this.plugin.createSettingsTransferUrl();
+			if (!url) return;
+			showSettingsTransferExport(this.app, url);
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleImportSettings(): Promise<void> {
+		const input = await askSettingsTransferInput(this.app);
+		if (!input) return;
+		try {
+			const imported = await this.plugin.importSettingsTransfer(input);
+			if (!imported) return;
+			new Notice("Obsync: settings imported.");
+			this.display();
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleResetRemote(): Promise<void> {
+		const confirmed = await confirmRemoteReset(this.app, {
+			bucket: this.plugin.settings.bucket,
+			prefix: this.plugin.settings.prefix,
+		});
+		if (!confirmed) return;
+		const ok = await this.plugin.controller.resetRemoteStorage();
+		if (!ok) {
+			this.notifyError(this.plugin.controller.getSnapshot().error ?? "Unknown reset error");
+			return;
+		}
+		new Notice("Obsync: remote storage reset.");
+	}
+
+	private notifyError(err: unknown): void {
+		const message = err instanceof Error ? err.message : String(err);
+		new Notice(`Obsync error: ${message}`, 8000);
+		console.error("[obsync]", err);
 	}
 }

@@ -433,39 +433,43 @@
 }
 
 .obsync-unified-line {
-    display: block;
+	display: block;
+}
+
+.obsync-line-prefix {
+	display: inline-block;
+	width: 1.5em;
+	text-align: center;
+	user-select: none;
+	opacity: 0.6;
+}
+
+.obsync-line-content {
+	white-space: pre;
 }
 
 .obsync-unified-line.is-add {
-    background-color: rgba(0, 255, 0, 0.08);
-    color: var(--color-green);
+	background-color: rgba(0, 255, 0, 0.08);
+	color: var(--color-green);
 }
 
 .obsync-unified-line.is-del {
-    background-color: rgba(255, 0, 0, 0.08);
-    color: var(--color-red);
+	background-color: rgba(255, 0, 0, 0.08);
+	color: var(--color-red);
 }
 
-/* Editor gutter markers */
-.obsync-gutter {
-    width: 4px;
+.obsync-transfer-url {
+    width: 100%;
+    font-family: var(--font-monospace);
 }
 
-.obsync-gutter-marker {
-    width: 4px;
-    height: 100%;
-}
-
-.obsync-gutter-marker.obsync-add {
-    background-color: var(--color-green);
-}
-
-.obsync-gutter-marker.obsync-modify {
-    background-color: var(--color-orange);
-}
-
-.obsync-gutter-marker.obsync-delete {
-    background-color: var(--color-red);
+.obsync-transfer-qr {
+    display: block;
+    width: min(100%, 20rem);
+    height: auto;
+    margin-bottom: var(--size-4-3);
+    background-color: white;
+    padding: 4px;
 }
 
 /* File explorer indicators */

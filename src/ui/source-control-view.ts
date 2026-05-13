@@ -39,6 +39,10 @@ interface TreeNode {
 	children: TreeNode[];
 }
 
+interface MutableTreeNode extends TreeNode {
+	folders: Map<string, MutableTreeNode>;
+}
+
 interface SectionRefs {
 	actionButton: HTMLButtonElement | null;
 	revertButton: HTMLButtonElement | null;
@@ -107,6 +111,9 @@ export class SourceControlView extends ItemView {
 				(snapshot: unknown) => this.render(snapshot as SyncStatusSnapshot),
 			),
 		);
+		if (!this.plugin.controller.getSnapshot().result) {
+			void this.plugin.controller.refresh();
+		}
 	}
 
 	async onClose(): Promise<void> {
@@ -165,11 +172,22 @@ export class SourceControlView extends ItemView {
 
 	private signatureOf(snapshot: SyncStatusSnapshot): string {
 		const diff = snapshot.result?.diff;
-		if (!diff) return `empty|${snapshot.busy}|${snapshot.error ?? ""}`;
+		if (!diff) {
+			return [
+				"empty",
+				snapshot.busy ? "busy" : "idle",
+				snapshot.error ?? "",
+				snapshot.progressText ?? "",
+				snapshot.staleReason ?? "",
+			].join("|");
+		}
 		const summarize = (list: ReadonlyArray<{ path: string; type?: string }>): string =>
 			list.map((c) => `${c.type ?? ""}:${c.path}`).join(",");
 		return [
 			snapshot.busy ? "busy" : "idle",
+			snapshot.error ?? "",
+			snapshot.progressText ?? "",
+			snapshot.staleReason ?? "",
 			summarize(diff.conflicts.map((c) => ({ path: c.path }))),
 			summarize(diff.localChanges),
 			summarize(diff.remoteChanges),
@@ -209,13 +227,19 @@ export class SourceControlView extends ItemView {
 			line.setText(`Error: ${snapshot.error}`);
 			return;
 		}
+		if (snapshot.busy) {
+			line.setText(snapshot.progressText ?? "Syncing…");
+			return;
+		}
+		if (snapshot.staleReason) {
+			line.setText(snapshot.staleReason);
+			return;
+		}
 		const last = snapshot.lastCompareAt
 			? new Date(snapshot.lastCompareAt).toLocaleTimeString()
 			: "never";
 		line.setText(
-			snapshot.busy
-				? "Syncing…"
-				: `Last compared: ${last} · ↑ ${snapshot.pendingLocal} · ↓ ${snapshot.pendingRemote} · ⚠ ${snapshot.conflicts}`,
+			`Last compared: ${last} · ↑ ${snapshot.pendingLocal} · ↓ ${snapshot.pendingRemote} · ⚠ ${snapshot.conflicts}`,
 		);
 	}
 
@@ -387,6 +411,21 @@ export class SourceControlView extends ItemView {
 					.onClick(() => void this.handleRevertSingle(path)),
 			);
 		}
+		if (section === ESection.Conflicts) {
+			menu.addSeparator();
+			menu.addItem((item) =>
+				item
+					.setTitle("Keep local")
+					.setIcon("check")
+					.onClick(() => void this.handleResolveKeepLocal(path)),
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Accept remote")
+					.setIcon("download")
+					.onClick(() => void this.handleResolveAcceptRemote(path)),
+			);
+		}
 		menu.showAtMouseEvent(event);
 	}
 
@@ -394,6 +433,24 @@ export class SourceControlView extends ItemView {
 		try {
 			await this.plugin.controller.revertPaths([path]);
 			new Notice(`Obsync: reverted ${path}`);
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleResolveKeepLocal(path: string): Promise<void> {
+		try {
+			await this.plugin.controller.resolveConflictKeepLocal(path);
+			new Notice(`Obsync: kept local version of ${path}`);
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleResolveAcceptRemote(path: string): Promise<void> {
+		try {
+			await this.plugin.controller.resolveConflictAcceptRemote(path);
+			new Notice(`Obsync: accepted remote version of ${path}`);
 		} catch (err) {
 			this.notifyError(err);
 		}
@@ -553,7 +610,7 @@ function emptyState(): SectionState {
 }
 
 function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
-	const root: TreeNode = { name: "", fullPath: "", children: [] };
+	const root = createFolderNode("", "");
 	for (const row of rows) {
 		const parts = row.path.split("/");
 		let current = root;
@@ -561,9 +618,10 @@ function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
 		for (let i = 0; i < parts.length - 1; i++) {
 			const name = parts[i] as string;
 			prefix = prefix ? `${prefix}/${name}` : name;
-			let child = current.children.find((c) => !c.row && c.name === name);
+			let child = current.folders.get(name);
 			if (!child) {
-				child = { name, fullPath: prefix, children: [] };
+				child = createFolderNode(name, prefix);
+				current.folders.set(name, child);
 				current.children.push(child);
 			}
 			current = child;
@@ -576,6 +634,10 @@ function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
 		});
 	}
 	return root;
+}
+
+function createFolderNode(name: string, fullPath: string): MutableTreeNode {
+	return { name, fullPath, children: [], folders: new Map() };
 }
 
 function toRowFromChange(change: FileChange): FileRow {

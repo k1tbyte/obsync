@@ -24,7 +24,7 @@ export async function scanVault(
 	const skipped: SkippedFile[] = [];
 	const updatedCache: Record<string, HashCacheEntry> = {};
 
-	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(adapter, ROOT);
+	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(adapter, scope, ROOT);
 	for (const path of paths) {
 		if (!scope.includes(path)) continue;
 		const stat = await adapter.stat(path);
@@ -61,6 +61,7 @@ async function buildEntry(
 
 async function listAllFiles(
 	adapter: DataAdapter,
+	scope: ScopePolicy,
 	dir: string,
 ): Promise<{ files: string[]; emptyFolders: string[] }> {
 	const files: string[] = [];
@@ -69,11 +70,13 @@ async function listAllFiles(
 	while (stack.length > 0) {
 		const current = stack.pop() as string;
 		const listing = await safeList(adapter, current);
-		if (current !== dir && listing.files.length === 0 && listing.folders.length === 0) {
+		const includedFiles = listing.files.filter((file) => scope.includes(file));
+		const includedFolders = listing.folders.filter((folder) => scope.canDescend(folder));
+		if (current !== dir && includedFiles.length === 0 && includedFolders.length === 0) {
 			emptyFolders.push(current);
 		}
-		for (const file of listing.files) files.push(file);
-		for (const folder of listing.folders) stack.push(folder);
+		for (const file of includedFiles) files.push(file);
+		for (const folder of includedFolders) stack.push(folder);
 	}
 	return { files, emptyFolders };
 }

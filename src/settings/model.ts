@@ -36,7 +36,6 @@ export interface ObsyncSettings {
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
 	showFileExplorerIndicators: boolean;
-	showEditorGutter: boolean;
 	uiLayout: "tree" | "flat";
 }
 
@@ -58,7 +57,6 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	showStatusBar: true,
 	showRibbonIcon: true,
 	showFileExplorerIndicators: true,
-	showEditorGutter: true,
 	uiLayout: "tree",
 };
 

@@ -2,6 +2,7 @@ import { MarkdownView, Notice } from "obsidian";
 
 import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import { confirmRemoteReset } from "../ui/reset-modal";
 import { openDiffView, openSourceControlView } from "../ui/source-control-view";
 
 export function registerCommands(plugin: ObsyncPlugin): void {
@@ -33,6 +34,12 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		id: "refresh",
 		name: "Refresh sync status",
 		callback: () => void plugin.controller.refresh(),
+	});
+
+	plugin.addCommand({
+		id: "reset-remote-storage",
+		name: "Reset remote storage",
+		callback: () => void runResetRemoteStorage(plugin),
 	});
 
 	plugin.addCommand({
@@ -103,6 +110,22 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 	} catch (err) {
 		notifyError(err);
 	}
+}
+
+async function runResetRemoteStorage(plugin: ObsyncPlugin): Promise<void> {
+	const confirmed = await confirmRemoteReset(plugin.app, {
+		bucket: plugin.settings.bucket,
+		prefix: plugin.settings.prefix,
+	});
+	if (!confirmed) return;
+	const ok = await plugin.controller.resetRemoteStorage();
+	if (!ok) {
+		const message = plugin.controller.getSnapshot().error ?? "Unknown reset error";
+		new Notice(`Obsync error: ${message}`, 8000);
+		return;
+	}
+	new Notice("Obsync: remote storage reset.");
+	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 }
 
 function notifyError(err: unknown): void {

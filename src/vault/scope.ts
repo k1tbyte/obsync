@@ -16,6 +16,7 @@ import type { IgnoreMatcher } from "./ignore";
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
+	canDescend(dir: string): boolean;
 	classify(path: string): FileKind;
 }
 
@@ -62,6 +63,20 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (ignoreMatcher && ignoreMatcher.ignores(path)) return false;
 			return true;
 		},
+		canDescend(rawDir) {
+			const dir = normalize(rawDir);
+			if (!dir) return true;
+			const dirPath = `${dir}/`;
+			if (isInVaultDenylist(dirPath)) return false;
+			if (dirPath.startsWith(ownPluginPrefix)) return false;
+			if (ignoreMatcher && (ignoreMatcher.ignores(dir) || ignoreMatcher.ignores(dirPath))) {
+				return false;
+			}
+
+			if (dir === configDir) return hasConfigDescendants();
+			if (dirPath.startsWith(configPrefix)) return canDescendConfigDir(dirPath);
+			return !hasDotSegment(dir);
+		},
 		classify(rawPath) {
 			const path = normalize(rawPath);
 			if (path.startsWith(pluginsDir)) return "plugin";
@@ -83,6 +98,21 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		}
 		if (sync.snippets && path.startsWith(snippetsDir)) return true;
 		if (sync.themes && path.startsWith(themesDir)) return true;
+		return false;
+	}
+
+	function hasConfigDescendants(): boolean {
+		return Object.values(sync).some((enabled) => enabled);
+	}
+
+	function canDescendConfigDir(dirPath: string): boolean {
+		if (deniedConfigDirs.some((d) => dirPath === d || dirPath.startsWith(d))) return false;
+		if (dirPath.startsWith(pluginsDir)) {
+			if (!sync.pluginConfigs) return false;
+			return !deviceLocalPluginPrefixes.some((p) => dirPath === p || dirPath.startsWith(p));
+		}
+		if (dirPath.startsWith(snippetsDir)) return sync.snippets;
+		if (dirPath.startsWith(themesDir)) return sync.themes;
 		return false;
 	}
 }

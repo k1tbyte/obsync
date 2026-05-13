@@ -1,7 +1,7 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
 
 import { registerCommands } from "./commands";
-import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "./constants";
+import { DIFF_VIEW_TYPE, IGNORE_FILE_NAME, SOURCE_CONTROL_VIEW_TYPE } from "./constants";
 import type { EncryptionKey } from "./crypto";
 import {
     bindingSignature,
@@ -9,8 +9,6 @@ import {
     loadCachedPassphrase,
     saveCachedPassphrase,
 } from "./crypto/passphrase-cache";
-import { obsyncGutterExtension } from "./editor/gutter";
-import { registerEditorBinding } from "./editor/binding";
 import {
     appendSyncLog,
     createSyncLogEntry,
@@ -27,6 +25,12 @@ import {
     type ObsyncSettings,
 } from "./settings/model";
 import { ObsyncSettingTab } from "./settings/tab";
+import {
+    createSettingsTransferUrl,
+    readSettingsTransfer,
+    settingsTransferAction,
+    type ObsyncTransferSettings,
+} from "./settings/transfer";
 import { SyncController } from "./sync/controller";
 import type { EngineDependencies } from "./sync/engine";
 import { registerScheduler } from "./sync/scheduler";
@@ -38,10 +42,13 @@ import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
 import { askPassphrase } from "./ui/passphrase-modal";
 import { registerRibbon } from "./ui/ribbon";
+import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
 import { SourceControlView } from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
 import { loadIgnoreMatcher } from "./vault/ignore";
 import { createScopePolicy } from "./vault/scope";
+
+const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 
 export default class ObsyncPlugin extends Plugin {
     settings: ObsyncSettings = DEFAULT_SETTINGS;
@@ -50,6 +57,7 @@ export default class ObsyncPlugin extends Plugin {
     private passphrase: string | null = null;
     private cachedKey: { key: EncryptionKey; signature: string } | null = null;
     private syncLogs: SyncLogEntry[] = [];
+    private scopeRefreshTimer: number | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -79,18 +87,54 @@ export default class ObsyncPlugin extends Plugin {
         if (this.settings.showFileExplorerIndicators) {
             registerFileExplorerIndicators(this, this.controller);
         }
-        if (this.settings.showEditorGutter) {
-            this.registerEditorExtension(obsyncGutterExtension());
-            registerEditorBinding(this, this.controller);
-        }
 
         registerCommands(this);
         registerScheduler(this, this.controller);
+
+        this.registerIgnoreFileEvents();
+        this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
+            void this.handleSettingsTransferProtocol(params);
+        });
     }
 
     onunload(): void {
+        if (this.scopeRefreshTimer !== null) {
+            window.clearTimeout(this.scopeRefreshTimer);
+            this.scopeRefreshTimer = null;
+        }
         this.passphrase = null;
         this.cachedKey = null;
+    }
+
+    scheduleScopeRefresh(reason = "Sync scope changed."): void {
+        const snapshot = this.controller.getSnapshot();
+        if (!snapshot.result && snapshot.lastCompareAt === null) return;
+        this.controller.invalidate(reason);
+        if (!isStorageConfigured(this.settings)) return;
+        if (this.scopeRefreshTimer !== null) {
+            window.clearTimeout(this.scopeRefreshTimer);
+        }
+        this.scopeRefreshTimer = window.setTimeout(() => {
+            this.scopeRefreshTimer = null;
+            void this.controller.refresh();
+        }, SCOPE_REFRESH_DEBOUNCE_MS);
+    }
+
+    async createSettingsTransferUrl(): Promise<string | null> {
+        const passphrase = await this.requireTransferPassphrase();
+        if (!passphrase) return null;
+        return createSettingsTransferUrl(this.settings, passphrase);
+    }
+
+    async importSettingsTransfer(input: string): Promise<boolean> {
+        const passphrase = await this.requireTransferPassphrase();
+        if (!passphrase) return false;
+        const imported = await readSettingsTransfer(input, passphrase);
+        const settings = mergeSettings({ ...this.settings, ...imported });
+        const confirmed = await confirmSettingsTransferImport(this.app, settings);
+        if (!confirmed) return false;
+        await this.applyImportedSettings(imported);
+        return true;
     }
 
     async loadSettings(): Promise<void> {
@@ -156,6 +200,36 @@ export default class ObsyncPlugin extends Plugin {
         return true;
     }
 
+    private async requireTransferPassphrase(): Promise<string | null> {
+        if (!(await this.promptPassphrase(false))) return null;
+        return this.passphrase;
+    }
+
+    private async applyImportedSettings(settings: ObsyncTransferSettings): Promise<void> {
+        const nextSettings = mergeSettings({ ...this.settings, ...settings });
+        Object.assign(this.settings, nextSettings);
+        this.cachedKey = null;
+        await this.saveSettings();
+        await this.persistPassphraseIfEnabled();
+        this.scheduleScopeRefresh("Settings imported.");
+    }
+
+    private async handleSettingsTransferProtocol(params: ObsidianProtocolData): Promise<void> {
+        const data = params.d ?? params.data;
+        if (typeof data !== "string") {
+            new Notice("Obsync: settings transfer data is missing.");
+            return;
+        }
+        try {
+            const imported = await this.importSettingsTransfer(data);
+            if (imported) new Notice("Obsync: settings imported.");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            new Notice(`Obsync error: ${message}`, 8000);
+            console.error("[obsync] settings transfer failed", err);
+        }
+    }
+
     applyState(state: LocalState): void {
         this.state = state;
     }
@@ -211,6 +285,20 @@ export default class ObsyncPlugin extends Plugin {
             maxFileBytes: this.settings.maxFileBytes,
             concurrency: this.settings.concurrency,
         };
+    }
+
+    private registerIgnoreFileEvents(): void {
+        const refreshIfIgnoreFile = (file: TAbstractFile, oldPath?: string): void => {
+            if (file.path !== IGNORE_FILE_NAME && oldPath !== IGNORE_FILE_NAME) return;
+            this.scheduleScopeRefresh("Ignore rules changed.");
+        };
+
+        this.registerEvent(this.app.vault.on("create", (file) => refreshIfIgnoreFile(file)));
+        this.registerEvent(this.app.vault.on("modify", (file) => refreshIfIgnoreFile(file)));
+        this.registerEvent(this.app.vault.on("delete", (file) => refreshIfIgnoreFile(file)));
+        this.registerEvent(
+            this.app.vault.on("rename", (file, oldPath) => refreshIfIgnoreFile(file, oldPath)),
+        );
     }
 
     private async tryLoadCachedPassphrase(): Promise<boolean> {

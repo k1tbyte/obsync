@@ -17,6 +17,7 @@ export enum ESyncLogOperation {
 	Compare = "compare",
 	Push = "push",
 	Pull = "pull",
+	Reset = "reset",
 	Session = "session",
 }
 

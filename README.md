@@ -1,90 +1,98 @@
-# Obsidian Sample Plugin
+# Obsync
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Obsync is an Obsidian community plugin for manual encrypted vault sync to an S3-compatible bucket. It compares local files with an encrypted remote manifest, then lets you push local changes, pull remote changes, and resolve conflicts from a source-control style view.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## Features
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+- Manual compare, push, and pull commands.
+- Source control view with local changes, remote changes, conflicts, per-file diff, and hunk actions for text files.
+- S3-compatible storage with encrypted manifests and encrypted file blobs.
+- Optional sync of selected Obsidian configuration categories.
+- `.syncignore` and settings-based ignore patterns.
+- Encrypted setup transfer by Obsidian URL, copyable link, or QR code.
+- Local-only diagnostics stored under the plugin folder in the current vault config directory.
 
-## First time developing plugins?
+## Storage layout
 
-Quick starting guide for new plugin devs:
+Obsync writes only inside the configured bucket and prefix:
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
-
-## Releasing new releases
-
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
-
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+```text
+<prefix>/manifest.json.enc
+<prefix>/salt.bin
+<prefix>/objects/<sha256>.enc
 ```
 
-If you have multiple URLs, you can also do:
+The manifest and object contents are encrypted with a key derived from your passphrase. The passphrase is not uploaded.
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+## Setup
+
+1. Install the plugin files into `<Vault>/.obsidian/plugins/obsync/`.
+2. Enable the plugin in Obsidian.
+3. Open **Settings → Obsync**.
+4. Enter the S3 endpoint, region, bucket, optional prefix, and credentials.
+5. Run **Obsync: Compare with remote** and enter a passphrase when prompted.
+6. Use **Push all local changes** for the first upload, or pull from an existing remote manifest.
+
+Use a separate bucket prefix per vault. Reusing a prefix for another vault is rejected after the remote vault id is established.
+
+## Ignore patterns
+
+Obsync merges patterns from the vault root `.syncignore` file and the **Ignore patterns** setting. Patterns use gitignore-style syntax.
+
+Examples:
+
+```gitignore
+README.md
+drafts/
+*.tmp
+.obsidian/plugins/example-plugin/cache/
 ```
 
-## API Documentation
+Changing `.syncignore` or the ignore settings marks the current compare result as stale and schedules a refresh when a compare has already been run.
 
-See https://docs.obsidian.md
+## Commands
+
+- **Obsync: Compare with remote** - refresh sync status and open the source control view.
+- **Obsync: Push all local changes** - push all local changes after compare preflight.
+- **Obsync: Pull all remote changes** - pull all remote changes after compare preflight.
+- **Obsync: Open source control** - open the sync panel.
+- **Obsync: Refresh sync status** - run compare only.
+- **Obsync: Reset remote storage** - delete the remote Obsync manifest and file objects for the configured bucket prefix, then compare local files as new additions.
+- **Obsync: Open diff for active file** - open the diff for the active file when it has changes.
+- **Obsync: Forget cached passphrase** - clear the locally cached passphrase.
+
+## Remote reset
+
+Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc` and everything under `objects/` for the configured bucket prefix. It keeps `salt.bin`, so the same passphrase-derived key remains valid.
+
+After reset, local vault files are preserved, the local baseline is cleared, and the next source control view shows local files as additions ready to push.
+
+## Device transfer
+
+Use **Settings → Obsync → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, ignore patterns, file size limit, concurrency, and auto-pull settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
+
+The transfer link is encrypted with a key derived from the current Obsync passphrase and a random transfer salt. Before encryption, the payload is minified to short keys and compressed when that actually makes the token smaller. The final URL uses the `obsidian://obsync?d=...` format. The receiving device must use the same passphrase and explicitly confirm import before the transferred settings are applied.
+
+## Development
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run lint
+```
+
+Source code lives in `src/`. The bundled release artifact is `main.js` at the plugin root.
+
+## Release checklist
+
+1. Update `manifest.json` `minAppVersion` if the release needs a newer Obsidian API.
+2. Run `npm version patch`, `npm version minor`, or `npm version major`.
+3. Confirm `package.json`, `manifest.json`, and `versions.json` contain the new version.
+4. Run `npm run build`.
+5. Create a GitHub release whose tag exactly matches `manifest.json` `version` without a leading `v`.
+6. Attach `manifest.json`, `main.js`, and `styles.css` as individual release assets.
+
+## Privacy and security
+
+Obsync has no telemetry. Sync logs are local to the current device and are excluded from sync. Vault files and filenames are sent only to the S3-compatible storage that you configure. Plugin settings are transferred between devices only when you explicitly export an encrypted setup link or QR code.

@@ -2,9 +2,12 @@ import {
 	DeleteObjectCommand,
 	GetObjectCommand,
 	HeadObjectCommand,
+	ListObjectsV2Command,
 	PutObjectCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
+
+import { S3_TIMEOUT_MS } from "../constants";
 
 export interface ObjectStorageConfig {
 	endpoint: string;
@@ -21,6 +24,7 @@ export interface ObjectStorage {
 	get(key: string): Promise<Uint8Array | null>;
 	put(key: string, body: Uint8Array, contentType?: string): Promise<void>;
 	delete(key: string): Promise<void>;
+	list(prefix: string): Promise<string[]>;
 }
 
 export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
@@ -40,7 +44,9 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 	return {
 		async exists(key) {
 			try {
-				await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: fullKey(key) }));
+				await withTimeout(
+					client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+				);
 				return true;
 			} catch (err) {
 				if (isNotFound(err)) return false;
@@ -49,8 +55,8 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 		},
 		async get(key) {
 			try {
-				const out = await client.send(
-					new GetObjectCommand({ Bucket: config.bucket, Key: fullKey(key) }),
+				const out = await withTimeout(
+					client.send(new GetObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
 				);
 				const body = out.Body;
 				if (!body) return new Uint8Array(0);
@@ -61,17 +67,41 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 			}
 		},
 		async put(key, body, contentType) {
-			await client.send(
-				new PutObjectCommand({
-					Bucket: config.bucket,
-					Key: fullKey(key),
-					Body: body,
-					ContentType: contentType ?? "application/octet-stream",
-				}),
+			await withTimeout(
+				client.send(
+					new PutObjectCommand({
+						Bucket: config.bucket,
+						Key: fullKey(key),
+						Body: body,
+						ContentType: contentType ?? "application/octet-stream",
+					}),
+				),
 			);
 		},
 		async delete(key) {
-			await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: fullKey(key) }));
+			await withTimeout(
+				client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+			);
+		},
+		async list(keyPrefix) {
+			const keys: string[] = [];
+			let token: string | undefined;
+			do {
+				const out = await withTimeout(
+					client.send(
+						new ListObjectsV2Command({
+							Bucket: config.bucket,
+							Prefix: fullKey(keyPrefix),
+							ContinuationToken: token,
+						}),
+					),
+				);
+				for (const item of out.Contents ?? []) {
+					if (item.Key) keys.push(relativeKey(item.Key, prefix));
+				}
+				token = out.NextContinuationToken;
+			} while (token);
+			return keys;
 		},
 	};
 }
@@ -87,6 +117,11 @@ function normalizePrefix(prefix: string): string {
 	if (!prefix) return "";
 	const trimmed = prefix.replace(/^\/+|\/+$/g, "");
 	return trimmed ? `${trimmed}/` : "";
+}
+
+function relativeKey(key: string, prefix: string): string {
+	if (!prefix) return key;
+	return key.startsWith(prefix) ? key.slice(prefix.length) : key;
 }
 
 function isNotFound(err: unknown): boolean {
@@ -109,6 +144,19 @@ async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
 		return readStream(stream);
 	}
 	throw new Error("Unsupported S3 response body type");
+}
+
+function withTimeout<T>(promise: Promise<T>, ms = S3_TIMEOUT_MS): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const id = window.setTimeout(
+			() => reject(new Error(`S3 operation timed out after ${ms}ms`)),
+			ms,
+		);
+		promise.then(
+			(value) => { window.clearTimeout(id); resolve(value); },
+			(err: unknown) => { window.clearTimeout(id); reject(err); },
+		);
+	});
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {

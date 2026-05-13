@@ -72,22 +72,26 @@ export async function pushPaths(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
 	paths: ReadonlyArray<string>,
+	onProgress?: (done: number, total: number) => void,
 ): Promise<Manifest> {
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
 	const pathSet = new Set(paths);
 	const localChanges = compareResult.diff.localChanges.filter((c) => pathSet.has(c.path));
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
+	let done = 0;
 	await runWithConcurrency(uploads, concurrency, async (entry) => {
 		const exists = await deps.storage.exists(objectKey(entry.hash));
-		if (exists) return;
-		const plaintext = await readBinary(deps.adapter, entry.path);
-		const verifyHash = await sha256Hex(plaintext);
-		if (verifyHash !== entry.hash) {
-			throw new Error(`Hash mismatch while uploading ${entry.path}`);
+		if (!exists) {
+			const plaintext = await readBinary(deps.adapter, entry.path);
+			const verifyHash = await sha256Hex(plaintext);
+			if (verifyHash !== entry.hash) {
+				throw new Error(`Hash mismatch while uploading ${entry.path}`);
+			}
+			const blob = await encryptBytes(deps.key, plaintext);
+			await deps.storage.put(objectKey(entry.hash), blob);
 		}
-		const blob = await encryptBytes(deps.key, plaintext);
-		await deps.storage.put(objectKey(entry.hash), blob);
+		onProgress?.(++done, uploads.length);
 	});
 
 	const nextFiles = buildPartialFileMap({
@@ -110,6 +114,7 @@ export async function pullPaths(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
 	paths: ReadonlyArray<string>,
+	onProgress?: (done: number, total: number) => void,
 ): Promise<Manifest> {
 	if (!compareResult.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
@@ -121,6 +126,8 @@ export async function pullPaths(
 
 	const downloads = changes.filter((c) => c.type !== "remote-delete");
 	const deletions = changes.filter((c) => c.type === "remote-delete");
+	const total = downloads.length + deletions.length;
+	let done = 0;
 
 	await runWithConcurrency(downloads, concurrency, async (change) => {
 		const entry = remote.files[change.path];
@@ -133,10 +140,12 @@ export async function pullPaths(
 			throw new Error(`Hash mismatch while downloading ${change.path}`);
 		}
 		await writeBinary(deps.adapter, change.path, plaintext);
+		onProgress?.(++done, total);
 	});
 
 	for (const change of deletions) {
 		await deletePath(deps.adapter, change.path);
+		onProgress?.(++done, total);
 	}
 
 	const remoteFolders = remote.folders ?? [];

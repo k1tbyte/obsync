@@ -93,6 +93,8 @@ npm run build
 - Persist settings using `this.loadData()` / `this.saveData()`.
 - Use stable command IDs; avoid renaming once released.
 - Current Obsync sync flow is manual via the `compare`, `push`, and `pull` commands; push/pull run a compare preflight and must surface conflicts instead of choosing a side silently.
+- The `reset-remote-storage` command is destructive and must remain confirmation-gated. It deletes only `manifest.json.enc` and `objects/` in the configured remote prefix, preserves local vault files, clears local `baseline`/`vaultId`, and keeps `salt.bin` by default so the current passphrase-derived key remains valid.
+- Device transfer exports only the main sync settings as a compact `obsidian://obsync?d=...` URL/QR. The payload should use short field names, omit default-valued fields, and may compress before encryption when that makes the token smaller. Never include the cached passphrase, passphrase cache settings, or local-only display preferences. Import must require the same passphrase and explicit confirmation.
 - Local diagnostics are stored only on the current device in `<configDir>/plugins/obsync/logs.json` and surfaced in the second tab of the plugin settings. They must stay excluded from sync.
 
 ## Versioning & releases
@@ -129,6 +131,7 @@ Follow Obsidian's **Developer Policies** and **Plugin Guidelines**. In particula
 - Avoid long-running tasks during `onload`; use lazy initialization.
 - Batch disk access and avoid excessive vault scans.
 - Debounce/throttle expensive operations in response to file system events.
+- Vault scanning uses `ScopePolicy.canDescend()` to prune denied, ignored, and disabled config directories before listing descendants. Keep this pruning path in sync with `ScopePolicy.includes()` when changing sync scope rules.
 
 ## Coding conventions
 

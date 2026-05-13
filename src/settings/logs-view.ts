@@ -23,6 +23,7 @@ const OPERATION_LABELS: Record<ESyncLogOperation, string> = {
 	[ESyncLogOperation.Compare]: "Compare",
 	[ESyncLogOperation.Push]: "Push",
 	[ESyncLogOperation.Pull]: "Pull",
+	[ESyncLogOperation.Reset]: "Reset",
 	[ESyncLogOperation.Session]: "Session",
 };
 
@@ -34,7 +35,7 @@ export function renderLogsView(
 	new Setting(parent).setName("Logs").setHeading();
 	parent.createEl("p", {
 		text:
-			"Compare, push, pull and sync errors are recorded locally on this device. " +
+			"Compare, push, pull, reset and sync errors are recorded locally on this device. " +
 			"Use Compare with remote from the command palette to inspect the current diff.",
 	});
 

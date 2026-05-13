@@ -1,0 +1,29 @@
+import { DEFAULT_CONCURRENCY, REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "../constants";
+import type { ObjectStorage } from "../storage/s3";
+import { runWithConcurrency } from "./concurrency";
+
+export interface RemoteResetResult {
+	deletedKeys: string[];
+}
+
+export async function resetRemoteStorage(
+	storage: ObjectStorage,
+	concurrency = DEFAULT_CONCURRENCY,
+	onProgress?: (done: number, total: number) => void,
+): Promise<RemoteResetResult> {
+	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
+	const keys = uniqueKeys([
+		REMOTE_MANIFEST_KEY,
+		...objectKeys.filter((key) => key.startsWith(REMOTE_OBJECTS_PREFIX)),
+	]);
+	let done = 0;
+	await runWithConcurrency(keys, concurrency, async (key) => {
+		await storage.delete(key);
+		onProgress?.(++done, keys.length);
+	});
+	return { deletedKeys: keys };
+}
+
+function uniqueKeys(keys: readonly string[]): string[] {
+	return Array.from(new Set(keys));
+}
