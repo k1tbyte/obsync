@@ -4,6 +4,7 @@ import { decryptBytes, encryptBytes, type EncryptionKey, sha256Hex } from "../cr
 import type { ObjectStorage } from "../storage/s3";
 import type {
 	DiffResult,
+	FileKind,
 	HashCacheEntry,
 	LocalSnapshot,
 	LocalState,
@@ -54,11 +55,29 @@ export async function push(deps: EngineDependencies, compareResult: CompareResul
 	if (compareResult.diff.remoteChanges.length > 0) {
 		throw new Error("Cannot push: remote has changes; pull first");
 	}
+	return pushPaths(deps, compareResult, compareResult.diff.localChanges.map((c) => c.path));
+}
 
-	const vaultId = deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+export async function pull(deps: EngineDependencies, compareResult: CompareResult): Promise<Manifest> {
+	if (compareResult.diff.conflicts.length > 0) {
+		throw new Error("Cannot pull: conflicts must be resolved first");
+	}
+	if (!compareResult.remote) {
+		throw new Error("Cannot pull: remote manifest is missing");
+	}
+	return pullPaths(deps, compareResult, compareResult.diff.remoteChanges.map((c) => c.path));
+}
+
+export async function pushPaths(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+	paths: ReadonlyArray<string>,
+): Promise<Manifest> {
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
+	const pathSet = new Set(paths);
+	const localChanges = compareResult.diff.localChanges.filter((c) => pathSet.has(c.path));
 
-	const uploads = collectUploads(compareResult.diff, compareResult.snapshot);
+	const uploads = collectUploads(localChanges, compareResult.snapshot);
 	await runWithConcurrency(uploads, concurrency, async (entry) => {
 		const exists = await deps.storage.exists(objectKey(entry.hash));
 		if (exists) return;
@@ -71,24 +90,37 @@ export async function push(deps: EngineDependencies, compareResult: CompareResul
 		await deps.storage.put(objectKey(entry.hash), blob);
 	});
 
-	const manifest = buildManifest(deps.state.deviceId, vaultId, compareResult.remote, compareResult.snapshot);
+	const nextFiles = buildPartialFileMap({
+		base: compareResult.remote,
+		snapshot: compareResult.snapshot,
+		localChanges,
+	});
+	const folders = mergeFolderState(compareResult.remote, compareResult.snapshot);
+	const vaultId = deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+	const manifest = buildManifest(deps.state.deviceId, vaultId, compareResult.remote, {
+		files: nextFiles,
+		skipped: [],
+		emptyFolders: folders,
+	});
 	await publishManifest(deps.storage, deps.key, manifest);
 	return manifest;
 }
 
-export async function pull(deps: EngineDependencies, compareResult: CompareResult): Promise<Manifest> {
-	if (compareResult.diff.conflicts.length > 0) {
-		throw new Error("Cannot pull: conflicts must be resolved first");
-	}
+export async function pullPaths(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+	paths: ReadonlyArray<string>,
+): Promise<Manifest> {
 	if (!compareResult.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
 	}
-
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
+	const pathSet = new Set(paths);
 	const remote = compareResult.remote;
+	const changes = compareResult.diff.remoteChanges.filter((c) => pathSet.has(c.path));
 
-	const downloads = compareResult.diff.remoteChanges.filter((c) => c.type !== "remote-delete");
-	const deletions = compareResult.diff.remoteChanges.filter((c) => c.type === "remote-delete");
+	const downloads = changes.filter((c) => c.type !== "remote-delete");
+	const deletions = changes.filter((c) => c.type === "remote-delete");
 
 	await runWithConcurrency(downloads, concurrency, async (change) => {
 		const entry = remote.files[change.path];
@@ -114,22 +146,115 @@ export async function pull(deps: EngineDependencies, compareResult: CompareResul
 	for (const dir of remoteFolders) {
 		await ensureDir(deps.adapter, dir);
 	}
-
 	for (const dir of baselineFolders) {
 		if (!remoteFolderSet.has(dir)) {
 			await removeEmptyDir(deps.adapter, dir);
 		}
 	}
 
-	return remote;
+	return buildAdvancedBaseline({
+		previousBaseline: deps.state.baseline,
+		remote,
+		pulledPaths: pathSet,
+	});
+}
+
+export interface SingleFilePushInput {
+	path: string;
+	bytes: Uint8Array;
+	mtime?: number;
+}
+
+export async function pushSingleFile(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+	input: SingleFilePushInput,
+): Promise<{ manifest: Manifest; entry: ManifestEntry }> {
+	const hash = await sha256Hex(input.bytes);
+	const exists = await deps.storage.exists(objectKey(hash));
+	if (!exists) {
+		const blob = await encryptBytes(deps.key, input.bytes);
+		await deps.storage.put(objectKey(hash), blob);
+	}
+	const kind: FileKind = deps.scope.classify(input.path);
+	const entry: ManifestEntry = {
+		hash,
+		size: input.bytes.length,
+		mtime: input.mtime ?? Date.now(),
+		kind,
+	};
+	const baseFiles = compareResult.remote?.files ?? {};
+	const nextFiles: Record<string, ManifestEntry> = { ...baseFiles, [input.path]: entry };
+	const folders = mergeFolderState(compareResult.remote, compareResult.snapshot);
+	const vaultId = deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+	const manifest = buildManifest(deps.state.deviceId, vaultId, compareResult.remote, {
+		files: nextFiles,
+		skipped: [],
+		emptyFolders: folders,
+	});
+	await publishManifest(deps.storage, deps.key, manifest);
+	return { manifest, entry };
+}
+
+function buildPartialFileMap(input: {
+	base: Manifest | null;
+	snapshot: LocalSnapshot;
+	localChanges: ReadonlyArray<{ path: string; type: string }>;
+}): Record<string, ManifestEntry> {
+	const next: Record<string, ManifestEntry> = { ...(input.base?.files ?? {}) };
+	for (const change of input.localChanges) {
+		if (change.type === "local-delete") {
+			delete next[change.path];
+			continue;
+		}
+		const entry = input.snapshot.files[change.path];
+		if (entry) next[change.path] = entry;
+	}
+	return next;
+}
+
+function mergeFolderState(remote: Manifest | null, snapshot: LocalSnapshot): string[] {
+	if (remote?.folders && remote.folders.length > 0) {
+		const merged = new Set<string>(remote.folders);
+		for (const dir of snapshot.emptyFolders) merged.add(dir);
+		return Array.from(merged);
+	}
+	return snapshot.emptyFolders;
+}
+
+function buildAdvancedBaseline(input: {
+	previousBaseline: Manifest | null;
+	remote: Manifest;
+	pulledPaths: Set<string>;
+}): Manifest {
+	const baseline = input.previousBaseline;
+	const files: Record<string, ManifestEntry> = baseline ? { ...baseline.files } : {};
+	for (const path of input.pulledPaths) {
+		const remoteEntry = input.remote.files[path];
+		if (remoteEntry) {
+			files[path] = remoteEntry;
+		} else {
+			delete files[path];
+		}
+	}
+	return {
+		version: input.remote.version,
+		vaultId: input.remote.vaultId,
+		snapshotId: input.remote.snapshotId,
+		parentSnapshotId: baseline?.snapshotId ?? null,
+		createdAt: input.remote.createdAt,
+		deviceId: input.remote.deviceId,
+		files,
+		folders: input.remote.folders,
+	};
 }
 
 function collectUploads(
-	result: DiffResult,
+	changes: ReadonlyArray<{ path: string; type: string }>,
 	snapshot: LocalSnapshot,
 ): Array<{ path: string; hash: string }> {
 	const uploads: Array<{ path: string; hash: string }> = [];
-	for (const change of result.localChanges) {
+	for (const change of changes) {
 		if (change.type === "local-delete") continue;
 		const entry: ManifestEntry | undefined = snapshot.files[change.path];
 		if (!entry) continue;

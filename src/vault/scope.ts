@@ -1,12 +1,18 @@
 import {
-	CONFIG_FILE_ALLOWLIST,
+	CONFIG_CORE_FILES,
 	CONFIG_FILE_DENYLIST,
-	CONFIG_SUBDIR_ALLOWLIST,
+	CONFIG_HOTKEYS_FILE,
+	CONFIG_PLUGINS_DIR,
+	CONFIG_SNIPPETS_DIR,
 	CONFIG_SUBDIR_DENYLIST,
+	CONFIG_THEMES_DIR,
+	DEVICE_LOCAL_PLUGIN_IDS,
 	PLUGIN_ID,
 	VAULT_SUBDIR_DENYLIST,
 } from "../constants";
+import type { SettingsSyncCategories } from "../settings/model";
 import type { FileKind } from "../types";
+import type { IgnoreMatcher } from "./ignore";
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
@@ -14,18 +20,31 @@ export interface ScopePolicy {
 }
 
 export interface ScopeOptions {
-	syncObsidianSettings: boolean;
+	settingsSync: SettingsSyncCategories;
 	configDir: string;
+	ignore?: IgnoreMatcher;
 }
 
 export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	const configDir = stripTrailingSlash(options.configDir);
 	const configPrefix = `${configDir}/`;
 	const ownPluginPrefix = `${configDir}/plugins/${PLUGIN_ID}/`;
-	const allowedFiles = CONFIG_FILE_ALLOWLIST.map((f) => `${configDir}/${f}`);
-	const allowedDirs = CONFIG_SUBDIR_ALLOWLIST.map((d) => `${configDir}/${d}`);
+
+	const coreFiles = CONFIG_CORE_FILES.map((f) => `${configDir}/${f}`);
+	const hotkeysFile = `${configDir}/${CONFIG_HOTKEYS_FILE}`;
+	const communityPluginsFile = `${configDir}/community-plugins.json`;
+	const pluginsDir = `${configDir}/${CONFIG_PLUGINS_DIR}`;
+	const snippetsDir = `${configDir}/${CONFIG_SNIPPETS_DIR}`;
+	const themesDir = `${configDir}/${CONFIG_THEMES_DIR}`;
+
 	const deniedConfigFiles = CONFIG_FILE_DENYLIST.map((f) => `${configDir}/${f}`);
 	const deniedConfigDirs = CONFIG_SUBDIR_DENYLIST.map((d) => `${configDir}/${d}`);
+	const deviceLocalPluginPrefixes = DEVICE_LOCAL_PLUGIN_IDS.map(
+		(id) => `${pluginsDir}${id}/`,
+	);
+
+	const sync = options.settingsSync;
+	const ignoreMatcher = options.ignore;
 
 	return {
 		includes(rawPath) {
@@ -33,22 +52,39 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (!path) return false;
 			if (isInVaultDenylist(path)) return false;
 			if (path.startsWith(ownPluginPrefix)) return false;
+
 			if (path.startsWith(configPrefix)) {
-				if (!options.syncObsidianSettings) return false;
-				if (deniedConfigFiles.includes(path)) return false;
-				if (deniedConfigDirs.some((d) => path.startsWith(d))) return false;
-				return allowedFiles.includes(path) || allowedDirs.some((d) => path.startsWith(d));
+				if (!isConfigAllowed(path)) return false;
+			} else if (hasDotSegment(path)) {
+				return false;
 			}
-			if (hasDotSegment(path)) return false;
+
+			if (ignoreMatcher && ignoreMatcher.ignores(path)) return false;
 			return true;
 		},
 		classify(rawPath) {
 			const path = normalize(rawPath);
-			if (path.startsWith(`${configDir}/plugins/`)) return "plugin";
+			if (path.startsWith(pluginsDir)) return "plugin";
 			if (path.startsWith(configPrefix)) return "config";
 			return "vault";
 		},
 	};
+
+	function isConfigAllowed(path: string): boolean {
+		if (deniedConfigFiles.includes(path)) return false;
+		if (deniedConfigDirs.some((d) => path.startsWith(d))) return false;
+
+		if (sync.coreSettings && coreFiles.includes(path)) return true;
+		if (sync.hotkeys && path === hotkeysFile) return true;
+		if (sync.pluginList && path === communityPluginsFile) return true;
+		if (sync.pluginConfigs && path.startsWith(pluginsDir)) {
+			if (deviceLocalPluginPrefixes.some((p) => path.startsWith(p))) return false;
+			return true;
+		}
+		if (sync.snippets && path.startsWith(snippetsDir)) return true;
+		if (sync.themes && path.startsWith(themesDir)) return true;
+		return false;
+	}
 }
 
 function isInVaultDenylist(path: string): boolean {
