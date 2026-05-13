@@ -26,6 +26,7 @@ export interface EngineDependencies {
 	state: LocalState;
 	maxFileBytes: number;
 	concurrency?: number;
+	onScanProgress?: (scanned: number) => void;
 }
 
 export interface CompareResult {
@@ -39,7 +40,7 @@ export async function compare(deps: EngineDependencies): Promise<CompareResult> 
 	const { snapshot, updatedCache } = await scanVault(
 		deps.adapter,
 		deps.scope,
-		{ maxFileBytes: deps.maxFileBytes },
+		{ maxFileBytes: deps.maxFileBytes, onProgress: deps.onScanProgress },
 		deps.state.hashCache,
 	);
 	const remote = await fetchRemoteManifest(deps.storage, deps.key);
@@ -105,6 +106,7 @@ export async function pushPaths(
 		files: nextFiles,
 		skipped: [],
 		emptyFolders: folders,
+		ignoredPaths: [],
 	});
 	await publishManifest(deps.storage, deps.key, manifest);
 	return manifest;
@@ -200,6 +202,7 @@ export async function pushSingleFile(
 		files: nextFiles,
 		skipped: [],
 		emptyFolders: folders,
+		ignoredPaths: [],
 	});
 	await publishManifest(deps.storage, deps.key, manifest);
 	return { manifest, entry };

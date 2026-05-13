@@ -28,6 +28,8 @@ export interface SyncLogEntry {
 	operation: ESyncLogOperation;
 	message: string;
 	details: string[];
+	bytesUploaded?: number;
+	bytesDownloaded?: number;
 }
 
 export function logFilePath(configDir: string): string {
@@ -68,7 +70,7 @@ export async function saveSyncLogs(
 ): Promise<void> {
 	const path = logFilePath(configDir);
 	await ensureParent(adapter, path);
-	await adapter.write(path, JSON.stringify(entries, null, 2));
+	await writeAtomic(adapter, path, JSON.stringify(entries, null, 2));
 }
 
 export function createSyncLogEntry(
@@ -126,4 +128,11 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 	if (!(await adapter.exists(dir))) {
 		await adapter.mkdir(dir);
 	}
+}
+
+async function writeAtomic(adapter: DataAdapter, path: string, data: string): Promise<void> {
+	const tmp = `${path}.tmp`;
+	await adapter.write(tmp, data);
+	if (await adapter.exists(path)) await adapter.remove(path);
+	await adapter.rename(tmp, path);
 }

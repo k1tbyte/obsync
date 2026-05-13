@@ -265,6 +265,17 @@ export class ObsyncSettingTab extends PluginSettingTab {
 						this.update({ autoPullIntervalMinutes: safe });
 					}),
 			);
+
+		new Setting(parent)
+			.setName("Auto-push on save")
+			.setDesc(
+				"Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
+			)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.autoPushOnSave)
+					.onChange((v) => this.update({ autoPushOnSave: v })),
+			);
 	}
 
 	private renderUiSection(parent: HTMLElement): void {

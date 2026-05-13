@@ -18,6 +18,7 @@ export interface ScopePolicy {
 	includes(path: string): boolean;
 	canDescend(dir: string): boolean;
 	classify(path: string): FileKind;
+	isIgnoredByPattern(path: string): boolean;
 }
 
 export interface ScopeOptions {
@@ -82,6 +83,15 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (path.startsWith(pluginsDir)) return "plugin";
 			if (path.startsWith(configPrefix)) return "config";
 			return "vault";
+		},
+		isIgnoredByPattern(rawPath) {
+			const path = normalize(rawPath);
+			if (!path) return false;
+			if (isInVaultDenylist(path)) return false;
+			if (path.startsWith(ownPluginPrefix)) return false;
+			if (path.startsWith(configPrefix)) return false;
+			if (hasDotSegment(path)) return false;
+			return Boolean(ignoreMatcher && ignoreMatcher.ignores(path));
 		},
 	};
 

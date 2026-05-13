@@ -1,6 +1,6 @@
 # Obsync
 
-Obsync is an Obsidian community plugin for manual encrypted vault sync to an S3-compatible bucket. It compares local files with an encrypted remote manifest, then lets you push local changes, pull remote changes, and resolve conflicts from a source-control style view.
+Obsync is a plugin for my personal Obsidian vault developed to manually sync an encrypted storage repository with an S3-compatible bucket. It compares local files with an encrypted remote manifest, then lets you push local changes, pull remote changes, and resolve conflicts from a source-control style view.
 
 ## Features
 

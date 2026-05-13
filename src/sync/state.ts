@@ -28,7 +28,7 @@ export async function saveState(
 ): Promise<void> {
 	const path = stateFilePath(configDir);
 	await ensureParent(adapter, path);
-	await adapter.write(path, JSON.stringify(state, null, 2));
+	await writeAtomic(adapter, path, JSON.stringify(state, null, 2));
 }
 
 function createEmptyState(): LocalState {
@@ -49,4 +49,11 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 	if (slash <= 0) return;
 	const dir = path.slice(0, slash);
 	if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+}
+
+async function writeAtomic(adapter: DataAdapter, path: string, data: string): Promise<void> {
+	const tmp = `${path}.tmp`;
+	await adapter.write(tmp, data);
+	if (await adapter.exists(path)) await adapter.remove(path);
+	await adapter.rename(tmp, path);
 }

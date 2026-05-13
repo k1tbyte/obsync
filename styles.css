@@ -433,29 +433,29 @@
 }
 
 .obsync-unified-line {
-	display: block;
+    display: block;
 }
 
 .obsync-line-prefix {
-	display: inline-block;
-	width: 1.5em;
-	text-align: center;
-	user-select: none;
-	opacity: 0.6;
+    display: inline-block;
+    width: 1.5em;
+    text-align: center;
+    user-select: none;
+    opacity: 0.6;
 }
 
 .obsync-line-content {
-	white-space: pre;
+    white-space: pre;
 }
 
 .obsync-unified-line.is-add {
-	background-color: rgba(0, 255, 0, 0.08);
-	color: var(--color-green);
+    background-color: rgba(0, 255, 0, 0.08);
+    color: var(--color-green);
 }
 
 .obsync-unified-line.is-del {
-	background-color: rgba(255, 0, 0, 0.08);
-	color: var(--color-red);
+    background-color: rgba(255, 0, 0, 0.08);
+    color: var(--color-red);
 }
 
 .obsync-transfer-url {

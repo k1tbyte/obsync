@@ -76,3 +76,10 @@ export const QR_ERROR_CORRECTION = "L" as const;
 
 export const S3_TIMEOUT_MS = 30_000;
 export const VAULT_EVENT_DEBOUNCE_MS = 1_500;
+
+export const SCHEDULER_BACKOFF_THRESHOLD = 3;
+export const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;
+export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
+
+export const S3_RETRY_ATTEMPTS = 3;
+export const S3_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];

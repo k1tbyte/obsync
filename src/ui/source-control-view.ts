@@ -2,6 +2,7 @@ import {
 	type App,
 	ItemView,
 	Menu,
+	Modal,
 	Notice,
 	Platform,
 	type View,
@@ -10,7 +11,8 @@ import {
 
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE, STATUS_EVENT } from "../constants";
 import type ObsyncPlugin from "../main";
-import type { SyncStatusSnapshot } from "../sync/controller";
+import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
+import type { FileDiffModel } from "../sync/projection";
 import type { Conflict, FileChange } from "../types";
 
 enum ESection {
@@ -80,6 +82,9 @@ export class SourceControlView extends ItemView {
 	private root: HTMLElement | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private lastSignature = "";
+	private readonly previewCache = new Map<string, FileDiffModel | null>();
+	private readonly loadingPreviews = new Set<string>();
+	private readonly expandedPreviews = new Set<string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
 		super(leaf);
@@ -132,6 +137,8 @@ export class SourceControlView extends ItemView {
 		this.lastSignature = signature;
 		const root = this.root;
 		root.empty();
+		this.previewCache.clear();
+		this.loadingPreviews.clear();
 		this.renderToolbar(root, snapshot);
 		this.renderStatusLine(root, snapshot);
 
@@ -241,6 +248,14 @@ export class SourceControlView extends ItemView {
 		line.setText(
 			`Last compared: ${last} · ↑ ${snapshot.pendingLocal} · ↓ ${snapshot.pendingRemote} · ⚠ ${snapshot.conflicts}`,
 		);
+		const ignoredPaths = snapshot.result?.snapshot.ignoredPaths ?? [];
+		if (ignoredPaths.length > 0) {
+			const ignoredBtn = line.createEl("button", {
+				cls: "obsync-ignored-count",
+				text: ` · ${ignoredPaths.length} ignored`,
+			});
+			ignoredBtn.addEventListener("click", () => showIgnoredFiles(this.app, ignoredPaths));
+		}
 	}
 
 	private renderSection(
@@ -366,6 +381,47 @@ export class SourceControlView extends ItemView {
 
 		item.createSpan({ cls: `obsync-file-status ${row.statusClass}`, text: row.statusLetter });
 		item.createSpan({ cls: "obsync-file-name", text: row.path });
+
+		if (row.isConflict) {
+			const expanded = this.expandedPreviews.has(row.path);
+			const expandBtn = item.createEl("button", {
+				cls: "obsync-expand-btn",
+				text: expanded ? "▾" : "▸",
+			});
+			expandBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				if (this.expandedPreviews.has(row.path)) {
+					this.expandedPreviews.delete(row.path);
+				} else {
+					this.expandedPreviews.add(row.path);
+				}
+				this.lastSignature = "";
+				this.render(this.plugin.controller.getSnapshot(), true);
+			});
+
+			if (expanded) {
+				const previewEl = parent.createDiv({ cls: "obsync-conflict-preview" });
+				const cached = this.previewCache.get(row.path);
+				if (cached === undefined && !this.loadingPreviews.has(row.path)) {
+					this.loadingPreviews.add(row.path);
+					previewEl.setText("Loading diff…");
+					void this.plugin.controller.getFileDiff(row.path).then((model) => {
+						this.previewCache.set(row.path, model);
+						this.loadingPreviews.delete(row.path);
+						this.lastSignature = "";
+						this.render(this.plugin.controller.getSnapshot(), true);
+					});
+				} else if (cached === null) {
+					previewEl.setText("No diff available.");
+				} else if (cached?.isBinary) {
+					previewEl.setText("Binary file — cannot preview diff.");
+				} else if (cached) {
+					renderConflictPreview(previewEl, cached, this.plugin.controller, row.path);
+				} else {
+					previewEl.setText("Loading diff…");
+				}
+			}
+		}
 
 		item.addEventListener("click", () => {
 			void openDiffView(this.plugin, row.path);
@@ -684,4 +740,61 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
+}
+
+function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
+	const modal = new Modal(app);
+	modal.titleEl.setText(`Ignored files (${paths.length})`);
+	modal.contentEl.createEl("p", {
+		text: "These files are excluded by .syncignore patterns or settings-level ignore rules.",
+	});
+	const list = modal.contentEl.createEl("ul", { cls: "obsync-ignored-list" });
+	for (const p of paths) {
+		list.createEl("li", { cls: "obsync-file-name", text: p });
+	}
+	modal.open();
+}
+
+const CONFLICT_PREVIEW_LINES = 10;
+
+function renderConflictPreview(
+	parent: HTMLElement,
+	model: FileDiffModel,
+	controller: SyncController,
+	path: string,
+): void {
+	const actions = parent.createDiv({ cls: "obsync-conflict-preview-actions" });
+	actions.createEl("button", { text: "Keep local" }).addEventListener("click", () => {
+		void controller.resolveConflictKeepLocal(path);
+	});
+	actions.createEl("button", { text: "Accept remote" }).addEventListener("click", () => {
+		void controller.resolveConflictAcceptRemote(path);
+	});
+
+	const hunks = model.hunks.hunks;
+	if (hunks.length === 0) {
+		parent.createEl("p", { cls: "obsync-conflict-preview-empty", text: "No textual differences." });
+		return;
+	}
+
+	const pre = parent.createEl("pre", { cls: "obsync-conflict-preview-diff" });
+	let linesShown = 0;
+	outer: for (const hunk of hunks) {
+		for (const line of hunk.lines) {
+			const span = pre.createSpan({
+				cls: `obsync-unified-line ${line.startsWith("+") ? "is-add" : line.startsWith("-") ? "is-del" : ""}`,
+			});
+			span.createSpan({ cls: "obsync-line-prefix", text: line[0] ?? " " });
+			span.createSpan({ text: line.slice(1) });
+			linesShown++;
+			if (linesShown >= CONFLICT_PREVIEW_LINES) break outer;
+		}
+	}
+	const remaining = hunks.reduce((n, h) => n + h.lines.length, 0) - linesShown;
+	if (remaining > 0) {
+		parent.createEl("p", {
+			cls: "obsync-conflict-preview-more",
+			text: `… ${remaining} more line(s) — open diff view for full details`,
+		});
+	}
 }

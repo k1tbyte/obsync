@@ -7,7 +7,7 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 
-import { S3_TIMEOUT_MS } from "../constants";
+import { S3_RETRY_DELAYS_MS, S3_TIMEOUT_MS } from "../constants";
 
 export interface ObjectStorageConfig {
 	endpoint: string;
@@ -43,44 +43,52 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 
 	return {
 		async exists(key) {
-			try {
-				await withTimeout(
-					client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
-				);
-				return true;
-			} catch (err) {
-				if (isNotFound(err)) return false;
-				throw err;
-			}
+			return withRetry(async () => {
+				try {
+					await withTimeout(
+						client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+					);
+					return true;
+				} catch (err) {
+					if (isNotFound(err)) return false;
+					throw err;
+				}
+			});
 		},
 		async get(key) {
-			try {
-				const out = await withTimeout(
-					client.send(new GetObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
-				);
-				const body = out.Body;
-				if (!body) return new Uint8Array(0);
-				return await readBodyToBytes(body);
-			} catch (err) {
-				if (isNotFound(err)) return null;
-				throw err;
-			}
+			return withRetry(async () => {
+				try {
+					const out = await withTimeout(
+						client.send(new GetObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+					);
+					const body = out.Body;
+					if (!body) return new Uint8Array(0);
+					return await readBodyToBytes(body);
+				} catch (err) {
+					if (isNotFound(err)) return null;
+					throw err;
+				}
+			});
 		},
 		async put(key, body, contentType) {
-			await withTimeout(
-				client.send(
-					new PutObjectCommand({
-						Bucket: config.bucket,
-						Key: fullKey(key),
-						Body: body,
-						ContentType: contentType ?? "application/octet-stream",
-					}),
+			await withRetry(() =>
+				withTimeout(
+					client.send(
+						new PutObjectCommand({
+							Bucket: config.bucket,
+							Key: fullKey(key),
+							Body: body,
+							ContentType: contentType ?? "application/octet-stream",
+						}),
+					),
 				),
 			);
 		},
 		async delete(key) {
-			await withTimeout(
-				client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+			await withRetry(() =>
+				withTimeout(
+					client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+				),
 			);
 		},
 		async list(keyPrefix) {
@@ -144,6 +152,32 @@ async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
 		return readStream(stream);
 	}
 	throw new Error("Unsupported S3 response body type");
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+	let lastErr: unknown;
+	for (let i = 0; i <= S3_RETRY_DELAYS_MS.length; i++) {
+		try {
+			return await fn();
+		} catch (err) {
+			lastErr = err;
+			if (!isRetryable(err) || i === S3_RETRY_DELAYS_MS.length) break;
+			await delay(S3_RETRY_DELAYS_MS[i] as number);
+		}
+	}
+	throw lastErr;
+}
+
+function isRetryable(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+	if (e.name === "TimeoutError" || e.name === "NetworkingError" || e.name === "RequestTimeout") return true;
+	const status = e.$metadata?.httpStatusCode;
+	return status !== undefined && status >= 500;
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function withTimeout<T>(promise: Promise<T>, ms = S3_TIMEOUT_MS): Promise<T> {

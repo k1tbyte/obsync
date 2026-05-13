@@ -32,6 +32,7 @@ export interface ObsyncSettings {
 	concurrency: number;
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
+	autoPushOnSave: boolean;
 	cachePassphrase: boolean;
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
@@ -53,6 +54,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	concurrency: DEFAULT_CONCURRENCY,
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
+	autoPushOnSave: false,
 	cachePassphrase: true,
 	showStatusBar: true,
 	showRibbonIcon: true,

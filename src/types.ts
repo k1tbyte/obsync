@@ -36,6 +36,7 @@ export interface LocalSnapshot {
 	files: Record<string, ManifestEntry>;
 	skipped: SkippedFile[];
 	emptyFolders: string[];
+	ignoredPaths: string[];
 }
 
 export interface SkippedFile {

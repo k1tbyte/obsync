@@ -47,7 +47,18 @@ function formatStatus(snapshot: SyncStatusSnapshot): string {
 function buildTooltip(snapshot: SyncStatusSnapshot): string {
 	if (snapshot.error) return `Obsync error: ${snapshot.error}`;
 	const last = snapshot.lastCompareAt
-		? `Last compared ${new Date(snapshot.lastCompareAt).toLocaleTimeString()}`
+		? `Last compared ${relativeTime(snapshot.lastCompareAt)}`
 		: "Not compared yet";
 	return `${last} — click to open source control`;
+}
+
+function relativeTime(ts: number): string {
+	const secs = Math.floor((Date.now() - ts) / 1000);
+	if (secs < 10) return "just now";
+	if (secs < 60) return `${secs}s ago`;
+	const mins = Math.floor(secs / 60);
+	if (mins < 60) return `${mins} min ago`;
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) return `${hrs} hr ago`;
+	return `${Math.floor(hrs / 24)} day(s) ago`;
 }

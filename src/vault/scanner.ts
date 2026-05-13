@@ -1,4 +1,5 @@
 import type { DataAdapter } from "obsidian";
+import { Platform } from "obsidian";
 import { sha256Hex } from "../crypto";
 import type { HashCacheEntry, LocalSnapshot, ManifestEntry, SkippedFile } from "../types";
 import type { ScopePolicy } from "./scope";
@@ -7,6 +8,7 @@ const ROOT = "";
 
 export interface ScannerOptions {
 	maxFileBytes: number;
+	onProgress?: (scanned: number) => void;
 }
 
 export interface ScanContext {
@@ -22,11 +24,16 @@ export async function scanVault(
 ): Promise<{ snapshot: LocalSnapshot; updatedCache: Record<string, HashCacheEntry> }> {
 	const files: Record<string, ManifestEntry> = {};
 	const skipped: SkippedFile[] = [];
+	const ignoredPaths: string[] = [];
 	const updatedCache: Record<string, HashCacheEntry> = {};
 
 	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(adapter, scope, ROOT);
+	let scanned = 0;
 	for (const path of paths) {
-		if (!scope.includes(path)) continue;
+		if (!scope.includes(path)) {
+			if (scope.isIgnoredByPattern(path)) ignoredPaths.push(path);
+			continue;
+		}
 		const stat = await adapter.stat(path);
 		if (!stat || stat.type !== "file") continue;
 		if (stat.size > options.maxFileBytes) {
@@ -37,10 +44,26 @@ export async function scanVault(
 		const entry = await buildEntry(adapter, path, stat.size, stat.mtime, scope.classify(path), cached);
 		files[path] = entry;
 		updatedCache[path] = { mtime: stat.mtime, size: stat.size, hash: entry.hash };
+		scanned++;
+		if (options.onProgress && scanned % 500 === 0) options.onProgress(scanned);
+	}
+
+	if (Platform.isWin) {
+		const lower = new Map<string, string>();
+		for (const path of Object.keys(files)) {
+			const lc = path.toLowerCase();
+			const existing = lower.get(lc);
+			if (existing) {
+				skipped.push({ path, reason: `Case-insensitive collision with "${existing}"` });
+				delete files[path];
+			} else {
+				lower.set(lc, path);
+			}
+		}
 	}
 
 	const emptyFolders = rawEmptyFolders.filter((dir) => scope.includes(`${dir}/x`));
-	return { snapshot: { files, skipped, emptyFolders }, updatedCache };
+	return { snapshot: { files, skipped, emptyFolders, ignoredPaths }, updatedCache };
 }
 
 async function buildEntry(

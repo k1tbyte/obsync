@@ -207,6 +207,7 @@ export class SyncController {
 			if (blockedByRemote) {
 				throw new Error("Cannot push: some of the selected files have remote changes; pull first");
 			}
+			const bytesUploaded = sumBytes(paths, result.snapshot.files);
 			const manifest = await pushPaths(deps, result, paths, (done, total) => {
 				this.progressText = `Pushing ${done}/${total}…`;
 				this.broadcast();
@@ -216,7 +217,7 @@ export class SyncController {
 			await this.host.persistState(state);
 			await this.host.logInfo(
 				ESyncLogOperation.Push,
-				`Pushed ${pushSet.size} file(s).`,
+				`Pushed ${pushSet.size} file(s) (${formatBytes(bytesUploaded)}).`,
 				Array.from(pushSet).slice(0, 50),
 			);
 		});
@@ -230,6 +231,7 @@ export class SyncController {
 			if (result.diff.conflicts.length > 0) {
 				throw new Error("Cannot pull: conflicts must be resolved first");
 			}
+			const bytesDownloaded = sumBytes(paths, result.remote.files);
 			const baseline = await pullPaths(deps, result, paths, (done, total) => {
 				this.progressText = `Pulling ${done}/${total}…`;
 				this.broadcast();
@@ -245,7 +247,7 @@ export class SyncController {
 			await this.host.persistState(state);
 			await this.host.logInfo(
 				ESyncLogOperation.Pull,
-				`Pulled ${pullSet.size} file(s).`,
+				`Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
 				Array.from(pullSet).slice(0, 50),
 			);
 		});
@@ -496,7 +498,14 @@ export class SyncController {
 		try {
 			const deps = await this.host.openSession();
 			if (!deps) return;
-			const result = await compare(deps);
+			const depsWithProgress: EngineDependencies = {
+				...deps,
+				onScanProgress: (scanned) => {
+					this.progressText = `Scanning… ${scanned} files`;
+					this.broadcast();
+				},
+			};
+			const result = await compare(depsWithProgress);
 			this.result = result;
 			this.resultAt = Date.now();
 			this.diffCache.clear();
@@ -598,4 +607,21 @@ function updateBaselineEntry(
 		...baseline,
 		files: { ...baseline.files, [path]: entry },
 	};
+}
+
+function sumBytes(
+	paths: ReadonlyArray<string>,
+	fileMap: Record<string, ManifestEntry>,
+): number {
+	let total = 0;
+	for (const p of paths) {
+		total += fileMap[p]?.size ?? 0;
+	}
+	return total;
+}
+
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
