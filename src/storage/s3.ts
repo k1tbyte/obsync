@@ -188,7 +188,7 @@ function withTimeout<T>(promise: Promise<T>, ms = S3_TIMEOUT_MS): Promise<T> {
 		);
 		promise.then(
 			(value) => { window.clearTimeout(id); resolve(value); },
-			(err: unknown) => { window.clearTimeout(id); reject(err); },
+			(err: unknown) => { window.clearTimeout(id); reject(err instanceof Error ? err : new Error(String(err))); },
 		);
 	});
 }
