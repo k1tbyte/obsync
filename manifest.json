@@ -1,0 +1,11 @@
+{
+	"id": "obsync",
+	"name": "Obsync",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Simple S3 sync for Obsidian.",
+	"author": "kitbyte",
+	"authorUrl": "",
+	"fundingUrl": "",
+	"isDesktopOnly": false
+}
