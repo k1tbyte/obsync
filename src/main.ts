@@ -1,3 +1,4 @@
+import "./polyfills";
 import { Notice, Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
 
 import { registerCommands } from "./commands";
@@ -69,6 +70,7 @@ export default class ObsyncPlugin extends Plugin {
             settings: this.settings,
             openSession: () => this.openSession(),
             persistState: (state) => this.persistState(state),
+            getState: () => this.state,
             logInfo: (op, msg, details) => this.logInfo(op, msg, details),
             logWarn: (op, msg, details) => this.logWarn(op, msg, details),
             logError: (op, msg, details) => this.logError(op, msg, details),

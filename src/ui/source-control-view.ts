@@ -11,7 +11,7 @@ import {
 
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE, STATUS_EVENT } from "../constants";
 import type ObsyncPlugin from "../main";
-import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
+import type { SyncStatusSnapshot } from "../sync/controller";
 import type { FileDiffModel } from "../sync/projection";
 import type { Conflict, FileChange } from "../types";
 
@@ -134,11 +134,14 @@ export class SourceControlView extends ItemView {
 			this.updateSelectionState();
 			return;
 		}
+		const signatureChanged = signature !== this.lastSignature;
 		this.lastSignature = signature;
 		const root = this.root;
 		root.empty();
-		this.previewCache.clear();
-		this.loadingPreviews.clear();
+		if (signatureChanged) {
+			this.previewCache.clear();
+			this.loadingPreviews.clear();
+		}
 		this.renderToolbar(root, snapshot);
 		this.renderStatusLine(root, snapshot);
 
@@ -222,7 +225,6 @@ export class SourceControlView extends ItemView {
 			this.layout = this.layout === "tree" ? "flat" : "tree";
 			this.plugin.settings.uiLayout = this.layout;
 			void this.plugin.saveSettings();
-			this.lastSignature = "";
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
 	}
@@ -306,14 +308,12 @@ export class SourceControlView extends ItemView {
 		selectAll.addEventListener("click", () => {
 			for (const row of rows) state.selected.add(row.path);
 			this.afterSelectionChange(section, rows.length);
-			this.lastSignature = "";
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
 		const selectNone = actions.createEl("button", { text: "Clear" });
 		selectNone.addEventListener("click", () => {
 			state.selected.clear();
 			this.afterSelectionChange(section, rows.length);
-			this.lastSignature = "";
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
 
@@ -395,7 +395,6 @@ export class SourceControlView extends ItemView {
 				} else {
 					this.expandedPreviews.add(row.path);
 				}
-				this.lastSignature = "";
 				this.render(this.plugin.controller.getSnapshot(), true);
 			});
 
@@ -408,7 +407,6 @@ export class SourceControlView extends ItemView {
 					void this.plugin.controller.getFileDiff(row.path).then((model) => {
 						this.previewCache.set(row.path, model);
 						this.loadingPreviews.delete(row.path);
-						this.lastSignature = "";
 						this.render(this.plugin.controller.getSnapshot(), true);
 					});
 				} else if (cached === null) {
@@ -416,7 +414,10 @@ export class SourceControlView extends ItemView {
 				} else if (cached?.isBinary) {
 					previewEl.setText("Binary file — cannot preview diff.");
 				} else if (cached) {
-					renderConflictPreview(previewEl, cached, this.plugin.controller, row.path);
+					renderConflictPreview(previewEl, cached, row.path, {
+						keepLocal: (p) => this.handleResolveKeepLocal(p),
+						acceptRemote: (p) => this.handleResolveAcceptRemote(p),
+					});
 				} else {
 					previewEl.setText("Loading diff…");
 				}
@@ -757,18 +758,27 @@ function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
 
 const CONFLICT_PREVIEW_LINES = 10;
 
+interface ConflictPreviewHandlers {
+	keepLocal: (path: string) => Promise<void>;
+	acceptRemote: (path: string) => Promise<void>;
+}
+
 function renderConflictPreview(
 	parent: HTMLElement,
 	model: FileDiffModel,
-	controller: SyncController,
 	path: string,
+	handlers: ConflictPreviewHandlers,
 ): void {
 	const actions = parent.createDiv({ cls: "obsync-conflict-preview-actions" });
-	actions.createEl("button", { text: "Keep local" }).addEventListener("click", () => {
-		void controller.resolveConflictKeepLocal(path);
+	const keepBtn = actions.createEl("button", { text: "Keep local" });
+	keepBtn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		void handlers.keepLocal(path);
 	});
-	actions.createEl("button", { text: "Accept remote" }).addEventListener("click", () => {
-		void controller.resolveConflictAcceptRemote(path);
+	const acceptBtn = actions.createEl("button", { text: "Accept remote" });
+	acceptBtn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		void handlers.acceptRemote(path);
 	});
 
 	const hunks = model.hunks.hunks;

@@ -45,6 +45,7 @@ export interface SyncControllerHost {
 	settings: ObsyncSettings;
 	openSession(): Promise<EngineDependencies | null>;
 	persistState(state: LocalState): Promise<void>;
+	getState(): LocalState | null;
 	logInfo(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
 	logWarn(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
 	logError(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
@@ -510,7 +511,8 @@ export class SyncController {
 			this.resultAt = Date.now();
 			this.diffCache.clear();
 			this.staleReason = null;
-			const state: LocalState = { ...deps.state, hashCache: result.updatedCache };
+			const freshState = this.host.getState() ?? deps.state;
+			const state: LocalState = { ...freshState, hashCache: result.updatedCache };
 			await this.host.persistState(state);
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : String(err);
@@ -536,12 +538,14 @@ export class SyncController {
 					this.resultAt = Date.now();
 				}
 				await fn(deps, result);
-				const refreshed = await compare(deps);
+				const freshState = this.host.getState() ?? deps.state;
+				const freshDeps: EngineDependencies = { ...deps, state: freshState };
+				const refreshed = await compare(freshDeps);
 				this.result = refreshed;
 				this.resultAt = Date.now();
 				this.diffCache.clear();
 				this.staleReason = null;
-				const state: LocalState = { ...deps.state, hashCache: refreshed.updatedCache };
+				const state: LocalState = { ...freshState, hashCache: refreshed.updatedCache };
 				await this.host.persistState(state);
 			} catch (err) {
 				this.error = err instanceof Error ? err.message : String(err);
