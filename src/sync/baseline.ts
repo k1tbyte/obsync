@@ -11,6 +11,7 @@ export function buildLocalState(
 		deviceId: previous.deviceId || randomId(),
 		vaultId: baseline.vaultId,
 		baseline,
+		baselines: previous.baselines,
 		hashCache,
 	};
 }
@@ -24,6 +25,7 @@ export function advanceStateAfterPush(
 		deviceId: state.deviceId || randomId(),
 		vaultId: manifest.vaultId,
 		baseline: manifest,
+		baselines: state.baselines,
 		hashCache: result.updatedCache,
 	};
 }
@@ -44,6 +46,7 @@ export function resetLocalState(state: LocalState): LocalState {
 		deviceId: state.deviceId || randomId(),
 		vaultId: null,
 		baseline: null,
+		baselines: state.baselines,
 		hashCache: state.hashCache,
 	};
 }

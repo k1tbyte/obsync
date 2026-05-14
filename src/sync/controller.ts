@@ -251,7 +251,7 @@ export class SyncController {
 		this.diffCache.clear();
 	}
 
-	private buildContext(): OperationContext {
+	private buildContext(deps: EngineDependencies): OperationContext {
 		return {
 			setProgress: (text) => {
 				this.progressText = text;
@@ -261,7 +261,16 @@ export class SyncController {
 				this.progressText = text;
 				this.broadcaster.broadcastSoon();
 			},
-			persistState: (state) => this.host.persistState(state),
+			persistState: (state) => {
+				const baselines = { ...(state.baselines ?? {}) };
+				if (state.baseline) {
+					baselines[deps.storage.identity()] = state.baseline;
+				} else {
+					delete baselines[deps.storage.identity()];
+				}
+				const finalState = { ...state, baselines };
+				return this.host.persistState(finalState);
+			},
 			getFreshState: () => this.host.getState(),
 			logInfo: (op, msg, details) => this.host.logInfo(op, msg, details),
 		};
@@ -323,7 +332,7 @@ export class SyncController {
 			try {
 				const deps = await this.host.openSession();
 				if (!deps) return false;
-				const ctx = this.buildContext();
+				const ctx = this.buildContext(deps);
 				const { compareResult } = await flow(deps, ctx);
 				this.result = compareResult;
 				this.resultAt = Date.now();
@@ -359,7 +368,7 @@ export class SyncController {
 					this.result = result;
 					this.resultAt = Date.now();
 				}
-				const ctx = this.buildContext();
+				const ctx = this.buildContext(deps);
 				const outcome = await fn(deps, result, ctx);
 				const freshState = this.host.getState() ?? deps.state;
 				const recomputed = recomputeAfterWrite(

@@ -33,6 +33,7 @@ export interface LocalState {
 	deviceId: string;
 	vaultId: string | null;
 	baseline: Manifest | null;
+	baselines?: Record<string, Manifest>;
 	hashCache: Record<string, HashCacheEntry>;
 }
 

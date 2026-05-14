@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS_SYNC: SettingsSyncCategories = {
 
 export interface ObsyncSettings {
 	storage: StorageAdapterConfig;
+	storageConfigs: Record<string, StorageAdapterConfig>;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
 	maxFileBytes: number;
@@ -39,6 +40,7 @@ export interface ObsyncSettings {
 
 export const DEFAULT_SETTINGS: ObsyncSettings = {
 	storage: defaultS3Config(),
+	storageConfigs: {},
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
@@ -58,10 +60,16 @@ export function isStorageConfigured(settings: ObsyncSettings): boolean {
 }
 
 export function mergeSettings(stored: Partial<ObsyncSettings> | null | undefined): ObsyncSettings {
+	const storage = stored?.storage ?? defaultS3Config();
+	const storageConfigs = stored?.storageConfigs ?? {};
+	if (!storageConfigs[storage.kind]) {
+		storageConfigs[storage.kind] = storage;
+	}
 	return {
 		...DEFAULT_SETTINGS,
 		...(stored ?? {}),
-		storage: stored?.storage ?? defaultS3Config(),
+		storage,
+		storageConfigs,
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
 			...((stored?.settingsSync as Partial<SettingsSyncCategories> | undefined) ?? {}),

@@ -42,6 +42,7 @@ function normalizeState(parsed: Partial<LocalState>): LocalState {
 		deviceId: parsed.deviceId ?? randomId(),
 		vaultId: parsed.vaultId ?? null,
 		baseline: parsed.baseline ?? null,
+		baselines: parsed.baselines ?? {},
 		hashCache: parsed.hashCache ?? {},
 	};
 }

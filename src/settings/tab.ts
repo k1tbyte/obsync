@@ -173,8 +173,11 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				dropdown.onChange((value) => {
 					const nextKind = value as EStorageBackend;
 					if (nextKind === current.kind) return;
+					
+					this.plugin.settings.storageConfigs[current.kind] = current;
 					const descriptor = getDescriptor(nextKind);
-					this.plugin.settings.storage = descriptor.defaults();
+					this.plugin.settings.storage = this.plugin.settings.storageConfigs[nextKind] ?? descriptor.defaults();
+					
 					void this.plugin.saveSettings().then(() => {
 						this.plugin.scheduleScopeRefresh(BACKEND_SETTINGS_CHANGED);
 						this.display();
@@ -212,10 +215,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private updateStorage(patch: Record<string, unknown>): void {
-		this.plugin.settings.storage = {
+		const nextStorage = {
 			...this.plugin.settings.storage,
 			...patch,
 		} as StorageAdapterConfig;
+		this.plugin.settings.storage = nextStorage;
+		this.plugin.settings.storageConfigs[nextStorage.kind] = nextStorage;
 		void this.plugin.saveSettings();
 	}
 

@@ -75,7 +75,10 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
 			ignore,
 		}),
 		key,
-		state: currentState,
+		state: {
+			...currentState,
+			baseline: currentState.baselines?.[storage.identity()] ?? currentState.baseline ?? null,
+		},
 		maxFileBytes: settings.maxFileBytes,
 		concurrency: settings.concurrency,
 	};
