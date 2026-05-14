@@ -1,6 +1,6 @@
 import { MANIFEST_VERSION, REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "../constants";
 import { decryptJson, encryptJson, type EncryptionKey, randomId } from "../crypto";
-import type { ObjectStorage } from "../storage/s3";
+import type { ObjectStorage } from "../storage/types";
 import type { LocalSnapshot, Manifest } from "../types";
 
 export async function fetchRemoteManifest(

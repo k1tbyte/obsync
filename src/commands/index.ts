@@ -2,6 +2,7 @@ import { MarkdownView, Notice } from "obsidian";
 
 import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import { describeStorageTarget } from "../storage/registry";
 import { confirmRemoteReset } from "../ui/reset-modal";
 import { openDiffView, openSourceControlView } from "../ui/source-control-view";
 
@@ -114,8 +115,7 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 
 async function runResetRemoteStorage(plugin: ObsyncPlugin): Promise<void> {
 	const confirmed = await confirmRemoteReset(plugin.app, {
-		bucket: plugin.settings.bucket,
-		prefix: plugin.settings.prefix,
+		description: describeStorageTarget(plugin.settings.storage),
 	});
 	if (!confirmed) return;
 	const ok = await plugin.controller.resetRemoteStorage();

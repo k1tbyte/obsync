@@ -1,6 +1,6 @@
 import { REMOTE_SALT_KEY, SALT_BYTES } from "../constants";
 import { deriveKey, type EncryptionKey, randomBytes } from "../crypto";
-import type { ObjectStorage } from "../storage/s3";
+import type { ObjectStorage } from "../storage/types";
 
 export async function loadOrCreateSalt(storage: ObjectStorage): Promise<Uint8Array> {
 	const existing = await storage.get(REMOTE_SALT_KEY);

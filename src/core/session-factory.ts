@@ -5,7 +5,8 @@ import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
 import type { EngineDependencies } from "../sync/engine";
 import { fetchRemoteManifest } from "../sync/manifest";
 import { loadState, saveState } from "../sync/state";
-import { createS3Storage, type ObjectStorage } from "../storage/s3";
+import { createStorageAdapter } from "../storage/registry";
+import type { ObjectStorage } from "../storage/types";
 import type { LocalState } from "../types";
 import { confirmVaultAdoption } from "../ui/vault-adoption-modal";
 import { loadIgnoreMatcher } from "../vault/ignore";
@@ -35,7 +36,7 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
 			ESyncLogOperation.Session,
 			"Session blocked because storage is not configured.",
 		);
-		new Notice("Obsync: configure S3 bucket and credentials first.");
+		new Notice("Obsync: configure storage backend first.");
 		return null;
 	}
 	if (!(await passphrase.prompt(false))) {
@@ -47,15 +48,7 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
 		return null;
 	}
 	const adapter = app.vault.adapter;
-	const storage = createS3Storage({
-		endpoint: settings.endpoint,
-		region: settings.region,
-		bucket: settings.bucket,
-		prefix: settings.prefix,
-		accessKeyId: settings.accessKeyId,
-		secretAccessKey: settings.secretAccessKey,
-		forcePathStyle: settings.forcePathStyle,
-	});
+	const storage = createStorageAdapter(settings.storage);
 	const key = await passphrase.resolveKey(storage);
 	const currentState = state.state ?? (await loadState(adapter, app.vault.configDir));
 	state.setInitial(currentState);

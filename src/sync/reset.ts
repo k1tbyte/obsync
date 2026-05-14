@@ -1,5 +1,5 @@
 import { DEFAULT_CONCURRENCY, REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "../constants";
-import type { ObjectStorage } from "../storage/s3";
+import type { StorageAdapter } from "../storage/types";
 import { runWithConcurrency } from "./concurrency";
 
 export interface RemoteResetResult {
@@ -7,10 +7,15 @@ export interface RemoteResetResult {
 }
 
 export async function resetRemoteStorage(
-	storage: ObjectStorage,
+	storage: StorageAdapter,
 	concurrency = DEFAULT_CONCURRENCY,
 	onProgress?: (done: number, total: number) => void,
 ): Promise<RemoteResetResult> {
+	if (!storage.capabilities.canList) {
+		throw new Error(
+			"This storage backend does not support listing; reset is unavailable until manifest-based fallback ships.",
+		);
+	}
 	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
 	const keys = uniqueKeys([
 		REMOTE_MANIFEST_KEY,

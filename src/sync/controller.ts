@@ -14,7 +14,7 @@ import type {
 } from "../types";
 import { DiffCache } from "./diff-cache";
 import { diff } from "./diff";
-import { compare, type CompareResult, type EngineDependencies } from "./engine";
+import { compare, type CompareResult, type EngineDependencies, filterManifestForDiff } from "./engine";
 import { ConcurrentPushError } from "./manifest";
 import {
 	batchAcceptRemoteOp,
@@ -367,6 +367,7 @@ export class SyncController {
 					freshState,
 					outcome.newRemote,
 					outcome.touchedPaths,
+					deps.scope,
 				);
 				this.result = recomputed;
 				this.resultAt = Date.now();
@@ -402,6 +403,7 @@ function recomputeAfterWrite(
 	freshState: LocalState,
 	newRemote: Manifest | null,
 	touchedPaths: ReadonlySet<string>,
+	scope: EngineDependencies["scope"],
 ): CompareResult {
 	const baseline = freshState.baseline;
 	const baselineFiles = baseline?.files ?? {};
@@ -419,7 +421,11 @@ function recomputeAfterWrite(
 		...prevResult.snapshot,
 		files,
 	};
-	const result = diff({ local: snapshot, remote: newRemote, baseline });
+	const result = diff({
+		local: snapshot,
+		remote: filterManifestForDiff(newRemote, scope),
+		baseline: filterManifestForDiff(baseline, scope),
+	});
 	return {
 		snapshot,
 		remote: newRemote,

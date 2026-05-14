@@ -2,14 +2,14 @@ import type { App, DataAdapter } from "obsidian";
 
 import type { EncryptionKey } from "../crypto";
 import {
-	bindingSignature,
 	clearCachedPassphrase,
 	loadCachedPassphrase,
 	saveCachedPassphrase,
 } from "../crypto/passphrase-cache";
 import type { ObsyncSettings } from "../settings/model";
+import { storageIdentity } from "../storage/registry";
+import type { ObjectStorage } from "../storage/types";
 import { deriveSessionKey } from "../sync/session";
-import type { ObjectStorage } from "../storage/s3";
 import { askPassphrase } from "../ui/passphrase-modal";
 
 interface CachedKey {
@@ -86,13 +86,8 @@ export class PassphraseManager {
 		return key;
 	}
 
-	bindingSignature(): string {
-		return bindingSignature({
-			endpoint: this.settings.endpoint,
-			region: this.settings.region,
-			bucket: this.settings.bucket,
-			prefix: this.settings.prefix,
-		});
+	private bindingSignature(): string {
+		return storageIdentity(this.settings.storage);
 	}
 
 	private async tryLoadCached(): Promise<boolean> {

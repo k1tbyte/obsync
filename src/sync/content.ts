@@ -2,7 +2,7 @@ import type { DataAdapter } from "obsidian";
 
 import { HUNK_TEXT_MAX_BYTES, TEXT_SNIFF_BYTES } from "../constants";
 import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
-import type { ObjectStorage } from "../storage/s3";
+import type { ObjectStorage } from "../storage/types";
 import type { Manifest } from "../types";
 import { readBinary } from "../vault/io";
 import { objectKey } from "./manifest";

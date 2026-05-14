@@ -3,8 +3,7 @@ import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 import { RESET_CONFIRMATION_TEXT as CONFIRMATION_TEXT } from "../constants";
 
 export interface RemoteResetTarget {
-	bucket: string;
-	prefix: string;
+	description: string;
 }
 
 export class RemoteResetModal extends Modal {
@@ -28,10 +27,9 @@ export class RemoteResetModal extends Modal {
 		titleEl.setText("Reset remote storage");
 		contentEl.createEl("p", {
 			text:
-				"This deletes the remote Obsync manifest and file objects for the configured bucket prefix. Local vault files are not deleted.",
+				"This deletes the remote Obsync manifest and file objects on the configured backend. Local vault files are not deleted.",
 		});
-		contentEl.createEl("p", { text: `Bucket: ${this.target.bucket || "not configured"}` });
-		contentEl.createEl("p", { text: `Prefix: ${this.target.prefix || "(bucket root)"}` });
+		contentEl.createEl("p", { text: this.target.description });
 		contentEl.createEl("p", { text: `Type ${CONFIRMATION_TEXT} to continue.` });
 
 		let resetButton: ButtonComponent | null = null;

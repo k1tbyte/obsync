@@ -1,4 +1,7 @@
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_FILE_BYTES } from "../constants";
+import { defaultS3Config } from "../storage/adapters/s3";
+import type { StorageAdapterConfig } from "../storage/config";
+import { isAdapterConfigured } from "../storage/registry";
 
 export interface SettingsSyncCategories {
 	coreSettings: boolean;
@@ -19,13 +22,7 @@ export const DEFAULT_SETTINGS_SYNC: SettingsSyncCategories = {
 };
 
 export interface ObsyncSettings {
-	endpoint: string;
-	region: string;
-	bucket: string;
-	prefix: string;
-	accessKeyId: string;
-	secretAccessKey: string;
-	forcePathStyle: boolean;
+	storage: StorageAdapterConfig;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
 	maxFileBytes: number;
@@ -41,13 +38,7 @@ export interface ObsyncSettings {
 }
 
 export const DEFAULT_SETTINGS: ObsyncSettings = {
-	endpoint: "",
-	region: "auto",
-	bucket: "",
-	prefix: "",
-	accessKeyId: "",
-	secretAccessKey: "",
-	forcePathStyle: true,
+	storage: defaultS3Config(),
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
@@ -63,36 +54,17 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 };
 
 export function isStorageConfigured(settings: ObsyncSettings): boolean {
-	return Boolean(settings.bucket && settings.accessKeyId && settings.secretAccessKey);
+	return isAdapterConfigured(settings.storage);
 }
 
 export function mergeSettings(stored: Partial<ObsyncSettings> | null | undefined): ObsyncSettings {
-	const base: ObsyncSettings = {
+	return {
 		...DEFAULT_SETTINGS,
 		...(stored ?? {}),
+		storage: stored?.storage ?? defaultS3Config(),
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
 			...((stored?.settingsSync as Partial<SettingsSyncCategories> | undefined) ?? {}),
 		},
 	};
-	return migrateLegacyFields(base, stored);
-}
-
-function migrateLegacyFields(
-	base: ObsyncSettings,
-	stored: Partial<ObsyncSettings> | null | undefined,
-): ObsyncSettings {
-	if (!stored) return base;
-	const legacy = (stored as { syncObsidianSettings?: boolean }).syncObsidianSettings;
-	if (typeof legacy !== "boolean") return base;
-	if (stored.settingsSync) return base;
-	const everything: SettingsSyncCategories = {
-		coreSettings: legacy,
-		hotkeys: legacy,
-		pluginList: legacy,
-		pluginConfigs: legacy,
-		snippets: legacy,
-		themes: legacy,
-	};
-	return { ...base, settingsSync: everything };
 }

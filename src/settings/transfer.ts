@@ -1,4 +1,5 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
+import type { StorageAdapterConfig } from "../storage/config";
 import {
 	DEFAULT_SETTINGS,
 	DEFAULT_SETTINGS_SYNC,
@@ -6,7 +7,7 @@ import {
 	type SettingsSyncCategories,
 } from "./model";
 
-const TRANSFER_VERSION = 2;
+const TRANSFER_VERSION = 3;
 const TRANSFER_SALT_BYTES = 16;
 const TRANSFER_PARTS = 4;
 const TRANSFER_ACTION = "obsync";
@@ -26,30 +27,19 @@ const DEFAULT_SYNC_MASK = encodeSyncMask(DEFAULT_SETTINGS_SYNC);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export interface ObsyncTransferSettings {
-	endpoint: string;
-	region: string;
-	bucket: string;
-	prefix: string;
-	accessKeyId: string;
-	secretAccessKey: string;
-	forcePathStyle: boolean;
-	settingsSync: SettingsSyncCategories;
-	ignorePatterns: string;
-	maxFileBytes: number;
-	concurrency: number;
-	autoPullOnStartup: boolean;
-	autoPullIntervalMinutes: number;
-}
+export type ObsyncTransferSettings = Pick<
+	ObsyncSettings,
+	| "storage"
+	| "settingsSync"
+	| "ignorePatterns"
+	| "maxFileBytes"
+	| "concurrency"
+	| "autoPullOnStartup"
+	| "autoPullIntervalMinutes"
+>;
 
 interface SettingsTransferPayload {
-	e?: string;
-	r?: string;
-	b?: string;
-	p?: string;
-	a?: string;
-	s?: string;
-	f?: 0;
+	o: StorageAdapterConfig;
 	y?: number;
 	i?: string;
 	m?: number;
@@ -111,16 +101,7 @@ export async function readSettingsTransfer(
 }
 
 function createTransferPayload(settings: ObsyncSettings): SettingsTransferPayload {
-	const payload: SettingsTransferPayload = {};
-	if (settings.endpoint !== DEFAULT_SETTINGS.endpoint) payload.e = settings.endpoint;
-	if (settings.region !== DEFAULT_SETTINGS.region) payload.r = settings.region;
-	if (settings.bucket !== DEFAULT_SETTINGS.bucket) payload.b = settings.bucket;
-	if (settings.prefix !== DEFAULT_SETTINGS.prefix) payload.p = settings.prefix;
-	if (settings.accessKeyId !== DEFAULT_SETTINGS.accessKeyId) payload.a = settings.accessKeyId;
-	if (settings.secretAccessKey !== DEFAULT_SETTINGS.secretAccessKey) {
-		payload.s = settings.secretAccessKey;
-	}
-	if (settings.forcePathStyle !== DEFAULT_SETTINGS.forcePathStyle) payload.f = 0;
+	const payload: SettingsTransferPayload = { o: settings.storage };
 	const syncMask = encodeSyncMask(settings.settingsSync);
 	if (syncMask !== DEFAULT_SYNC_MASK) payload.y = syncMask;
 	if (settings.ignorePatterns !== DEFAULT_SETTINGS.ignorePatterns) {
@@ -139,13 +120,7 @@ function createTransferPayload(settings: ObsyncSettings): SettingsTransferPayloa
 
 function expandTransferPayload(payload: SettingsTransferPayload): ObsyncTransferSettings {
 	return {
-		endpoint: payload.e ?? DEFAULT_SETTINGS.endpoint,
-		region: payload.r ?? DEFAULT_SETTINGS.region,
-		bucket: payload.b ?? DEFAULT_SETTINGS.bucket,
-		prefix: payload.p ?? DEFAULT_SETTINGS.prefix,
-		accessKeyId: payload.a ?? DEFAULT_SETTINGS.accessKeyId,
-		secretAccessKey: payload.s ?? DEFAULT_SETTINGS.secretAccessKey,
-		forcePathStyle: payload.f === 0 ? false : DEFAULT_SETTINGS.forcePathStyle,
+		storage: payload.o,
 		settingsSync: decodeSyncMask(payload.y ?? DEFAULT_SYNC_MASK),
 		ignorePatterns: payload.i ?? DEFAULT_SETTINGS.ignorePatterns,
 		maxFileBytes: payload.m ?? DEFAULT_SETTINGS.maxFileBytes,
@@ -259,14 +234,9 @@ function decodeSyncMask(mask: number): SettingsSyncCategories {
 function isTransferPayload(value: unknown): value is SettingsTransferPayload {
 	if (!value || typeof value !== "object") return false;
 	const payload = value as Partial<SettingsTransferPayload>;
+	if (!payload.o || typeof payload.o !== "object") return false;
+	if (typeof (payload.o as { kind?: unknown }).kind !== "string") return false;
 	return (
-		isOptionalString(payload.e) &&
-		isOptionalString(payload.r) &&
-		isOptionalString(payload.b) &&
-		isOptionalString(payload.p) &&
-		isOptionalString(payload.a) &&
-		isOptionalString(payload.s) &&
-		isOptionalZero(payload.f) &&
 		isOptionalSyncMask(payload.y) &&
 		isOptionalString(payload.i) &&
 		isOptionalNumber(payload.m) &&

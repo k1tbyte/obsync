@@ -13,7 +13,7 @@ export class PassphraseModal extends Modal {
 		const { contentEl, titleEl } = this;
 		titleEl.setText("Obsync passphrase");
 		contentEl.createEl("p", {
-			text: "Enter the encryption passphrase for this vault. It is never sent to S3.",
+			text: "Enter the encryption passphrase for this vault. It is never sent to the remote storage.",
 		});
 
 		new Setting(contentEl).setName("Passphrase").addText((t) => {

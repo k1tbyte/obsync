@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 
 import type { EncryptionKey } from "../crypto";
-import type { ObjectStorage } from "../storage/s3";
+import type { ObjectStorage } from "../storage/types";
 import type { Conflict, EChangeType, FileChange, Manifest } from "../types";
 import {
 	bytesToText,

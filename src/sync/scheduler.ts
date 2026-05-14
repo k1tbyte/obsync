@@ -51,33 +51,30 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 		host.registerInterval(window.setInterval(() => void tick(), intervalMs));
 	}
 
-	const triggerRefresh = debounce(
+	const triggerVaultSync = debounce(
 		() => {
-			if (!controller.getSnapshot().busy) void controller.refresh();
+			void runVaultSync(host, controller);
 		},
 		VAULT_EVENT_DEBOUNCE_MS,
 		true,
 	);
-	host.registerEvent(host.app.vault.on("modify", triggerRefresh));
-	host.registerEvent(host.app.vault.on("create", triggerRefresh));
-	host.registerEvent(host.app.vault.on("delete", triggerRefresh));
-	host.registerEvent(host.app.vault.on("rename", triggerRefresh));
+	host.registerEvent(host.app.vault.on("modify", triggerVaultSync));
+	host.registerEvent(host.app.vault.on("create", triggerVaultSync));
+	host.registerEvent(host.app.vault.on("delete", triggerVaultSync));
+	host.registerEvent(host.app.vault.on("rename", triggerVaultSync));
+}
 
-	const triggerAutoPush = debounce(
-		() => {
-			if (!host.settings.autoPushOnSave) return;
-			const snap = controller.getSnapshot();
-			if (snap.busy || !snap.result) return;
-			const { localChanges, conflicts, remoteChanges } = snap.result.diff;
-			if (conflicts.length > 0) return;
-			const remoteChangedPaths = new Set(remoteChanges.map((c) => c.path));
-			const pushable = localChanges.filter((c) => !remoteChangedPaths.has(c.path)).map((c) => c.path);
-			if (pushable.length === 0) return;
-			void controller.pushPaths(pushable);
-		},
-		800,
-		true,
-	);
-	host.registerEvent(host.app.vault.on("modify", triggerAutoPush));
-	host.registerEvent(host.app.vault.on("create", triggerAutoPush));
+async function runVaultSync(host: SchedulerHost, controller: SyncController): Promise<void> {
+	await controller.refresh();
+	if (!host.settings.autoPushOnSave) return;
+	const snap = controller.getSnapshot();
+	if (!snap.result || snap.error) return;
+	const { localChanges, conflicts, remoteChanges } = snap.result.diff;
+	if (conflicts.length > 0) return;
+	const remoteChangedPaths = new Set(remoteChanges.map((c) => c.path));
+	const pushable = localChanges
+		.filter((c) => !remoteChangedPaths.has(c.path))
+		.map((c) => c.path);
+	if (pushable.length === 0) return;
+	await controller.pushPaths(pushable);
 }

@@ -28,7 +28,7 @@ export function confirmVaultAdoption(app: App, info: VaultAdoptionInfo): Promise
 		});
 		modal.contentEl.createEl("p", {
 			text:
-				"If you did not expect this remote, cancel and double-check your S3 bucket, prefix, and credentials.",
+				"If you did not expect this remote, cancel and double-check your storage, prefix, and credentials.",
 		});
 		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
 		const cancelBtn = buttons.createEl("button", { text: "Cancel" });

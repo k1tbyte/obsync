@@ -7,27 +7,68 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 
-import { S3_RETRY_DELAYS_MS, S3_TIMEOUT_MS } from "../constants";
+import { EStorageBackend, type S3StorageConfig } from "../config";
+import { EFieldKind, type SettingsFieldSpec } from "../field-spec";
+import type { StorageAdapter } from "../types";
 
-export interface ObjectStorageConfig {
-	endpoint: string;
-	region: string;
-	bucket: string;
-	prefix: string;
-	accessKeyId: string;
-	secretAccessKey: string;
-	forcePathStyle: boolean;
+const S3_TIMEOUT_MS = 30_000;
+const S3_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
+
+export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
+	{
+		kind: EFieldKind.Text,
+		key: "endpoint",
+		name: "Endpoint",
+		desc: "Base URL of the S3-compatible service. Leave empty for AWS S3.",
+		placeholder: "https://s3.example.com",
+	},
+	{ kind: EFieldKind.Text, key: "region", name: "Region" },
+	{ kind: EFieldKind.Text, key: "bucket", name: "Bucket" },
+	{
+		kind: EFieldKind.Text,
+		key: "prefix",
+		name: "Prefix",
+		desc: "Optional path prefix inside the bucket. Use a separate prefix per vault.",
+		placeholder: "vaults/my-vault",
+	},
+	{ kind: EFieldKind.Text, key: "accessKeyId", name: "Access key ID" },
+	{ kind: EFieldKind.Password, key: "secretAccessKey", name: "Secret access key" },
+	{
+		kind: EFieldKind.Toggle,
+		key: "forcePathStyle",
+		name: "Force path-style URLs",
+		desc: "Required for most non-AWS S3 backends.",
+	},
+];
+
+export function defaultS3Config(): S3StorageConfig {
+	return {
+		kind: EStorageBackend.S3,
+		endpoint: "",
+		region: "auto",
+		bucket: "",
+		prefix: "",
+		accessKeyId: "",
+		secretAccessKey: "",
+		forcePathStyle: true,
+	};
 }
 
-export interface ObjectStorage {
-	exists(key: string): Promise<boolean>;
-	get(key: string): Promise<Uint8Array | null>;
-	put(key: string, body: Uint8Array, contentType?: string): Promise<void>;
-	delete(key: string): Promise<void>;
-	list(prefix: string): Promise<string[]>;
+export function isS3Configured(config: S3StorageConfig): boolean {
+	return Boolean(config.bucket && config.accessKeyId && config.secretAccessKey);
 }
 
-export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
+export function s3Identity(config: S3StorageConfig): string {
+	return `s3|${config.endpoint}|${config.region}|${config.bucket}|${config.prefix}`;
+}
+
+export function describeS3Target(config: S3StorageConfig): string {
+	const bucket = config.bucket || "(not configured)";
+	const prefix = config.prefix || "(bucket root)";
+	return `S3 bucket: ${bucket} / prefix: ${prefix}`;
+}
+
+export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	assertConfig(config);
 	const client = new S3Client({
 		region: config.region || "auto",
@@ -39,9 +80,13 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 		},
 	});
 	const prefix = normalizePrefix(config.prefix);
-	const fullKey = (key: string) => `${prefix}${key}`;
+	const fullKey = (key: string): string => `${prefix}${key}`;
 
 	return {
+		capabilities: { canList: true, hasConditionalWrites: false },
+		identity() {
+			return s3Identity(config);
+		},
 		async exists(key) {
 			return withRetry(async () => {
 				try {
@@ -62,7 +107,7 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 						client.send(new GetObjectCommand({
 							Bucket: config.bucket,
 							Key: fullKey(key),
-							ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`
+							ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`,
 						})),
 					);
 					const body = out.Body;
@@ -119,7 +164,7 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 	};
 }
 
-function assertConfig(config: ObjectStorageConfig): void {
+function assertConfig(config: S3StorageConfig): void {
 	if (!config.bucket) throw new Error("S3 bucket is not configured");
 	if (!config.accessKeyId || !config.secretAccessKey) {
 		throw new Error("S3 credentials are not configured");

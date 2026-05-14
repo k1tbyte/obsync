@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
 import { decryptBytes, encryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
-import type { ObjectStorage } from "../storage/s3";
+import type { StorageAdapter } from "../storage/types";
 import {
 	EChangeType,
 	type DiffResult,
@@ -27,7 +27,7 @@ import {
 
 export interface EngineDependencies {
 	adapter: DataAdapter;
-	storage: ObjectStorage;
+	storage: StorageAdapter;
 	scope: ScopePolicy;
 	key: EncryptionKey;
 	state: LocalState;
@@ -59,8 +59,24 @@ export async function compare(deps: EngineDependencies): Promise<CompareResult> 
 			{ fetched: fetched.snapshotId, baseline: deps.state.baseline?.snapshotId },
 		);
 	}
-	const result = diff({ local: snapshot, remote, baseline: deps.state.baseline });
+	const result = diff({
+		local: snapshot,
+		remote: filterManifestForDiff(remote, deps.scope),
+		baseline: remote ? filterManifestForDiff(deps.state.baseline, deps.scope) : null,
+	});
 	return { snapshot, remote, diff: result, updatedCache };
+}
+
+export function filterManifestForDiff(
+	manifest: Manifest | null,
+	scope: ScopePolicy,
+): Manifest | null {
+	if (!manifest) return null;
+	const files: Record<string, ManifestEntry> = {};
+	for (const [path, entry] of Object.entries(manifest.files)) {
+		if (scope.includes(path)) files[path] = entry;
+	}
+	return { ...manifest, files };
 }
 
 export async function push(deps: EngineDependencies, compareResult: CompareResult): Promise<Manifest> {

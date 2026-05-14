@@ -20,15 +20,6 @@ export interface PassphraseCacheRecord {
 	binding: string;
 }
 
-export function bindingSignature(parts: {
-	endpoint: string;
-	region: string;
-	bucket: string;
-	prefix: string;
-}): string {
-	return [parts.endpoint, parts.region, parts.bucket, parts.prefix].join("|");
-}
-
 export async function loadCachedPassphrase(
 	adapter: DataAdapter,
 	configDir: string,

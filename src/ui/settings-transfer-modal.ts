@@ -3,6 +3,7 @@ import * as QRCode from "qrcode";
 
 import { IMPORT_CONFIRMATION_TEXT, QR_ERROR_CORRECTION, QR_SIZE } from "../constants";
 import type { ObsyncSettings } from "../settings/model";
+import { describeStorageTarget } from "../storage/registry";
 
 export class SettingsTransferExportModal extends Modal {
 	private readonly transferUrl: string;
@@ -143,9 +144,7 @@ export class SettingsTransferConfirmModal extends Modal {
 		contentEl.createEl("p", {
 			text: "Local-only display preferences and passphrase cache settings stay unchanged.",
 		});
-		contentEl.createEl("p", { text: `Endpoint: ${this.settings.endpoint || "AWS S3"}` });
-		contentEl.createEl("p", { text: `Bucket: ${this.settings.bucket || "not configured"}` });
-		contentEl.createEl("p", { text: `Prefix: ${this.settings.prefix || "(bucket root)"}` });
+		contentEl.createEl("p", { text: describeStorageTarget(this.settings.storage) });
 		contentEl.createEl("p", { text: `Type ${IMPORT_CONFIRMATION_TEXT} to continue.` });
 
 		let importButton: ButtonComponent | null = null;

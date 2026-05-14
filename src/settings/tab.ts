@@ -3,6 +3,9 @@ import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { AUTO_PULL_MAX_MINUTES, AUTO_PULL_MIN_MINUTES } from "../constants";
 import { clearCachedPassphrase } from "../crypto/passphrase-cache";
 import type ObsyncPlugin from "../main";
+import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
+import { EFieldKind, type SettingsFieldSpec } from "../storage/field-spec";
+import { describeStorageTarget, getDescriptor, listBackends } from "../storage/registry";
 import { confirmRemoteReset } from "../ui/reset-modal";
 import {
 	askSettingsTransferInput,
@@ -45,22 +48,13 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 ];
 
 const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
+const BACKEND_SETTINGS_CHANGED = "Storage backend changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MAX_CONCURRENCY = 16;
 const MIN_CONCURRENCY = 1;
 const MIN_MAX_FILE_MB = 1;
 
 interface UpdateOptions {
-	refreshScope?: boolean;
-}
-
-interface TextFieldConfig {
-	name: string;
-	desc?: string;
-	placeholder?: string;
-	password?: boolean;
-	get: (s: ObsyncSettings) => string;
-	set: (value: string, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
 	refreshScope?: boolean;
 }
 
@@ -80,47 +74,6 @@ interface NumberFieldConfig {
 	set: (value: number) => Partial<ObsyncSettings>;
 	refreshScope?: boolean;
 }
-
-const STORAGE_FIELDS: ReadonlyArray<TextFieldConfig> = [
-	{
-		name: "Endpoint",
-		desc: "Base URL of the S3-compatible service. Leave empty for AWS S3.",
-		placeholder: "https://s3.example.com",
-		get: (s) => s.endpoint,
-		set: (v) => ({ endpoint: v.trim() }),
-	},
-	{
-		name: "Region",
-		get: (s) => s.region,
-		set: (v) => ({ region: v.trim() || "auto" }),
-	},
-	{
-		name: "Bucket",
-		get: (s) => s.bucket,
-		set: (v) => ({ bucket: v.trim() }),
-	},
-	{
-		name: "Prefix",
-		desc: "Optional path prefix inside the bucket. Use a separate prefix per vault.",
-		placeholder: "vaults/my-vault",
-		get: (s) => s.prefix,
-		set: (v) => ({ prefix: v.trim() }),
-	},
-];
-
-const CREDENTIAL_FIELDS: ReadonlyArray<TextFieldConfig> = [
-	{
-		name: "Access key ID",
-		get: (s) => s.accessKeyId,
-		set: (v) => ({ accessKeyId: v.trim() }),
-	},
-	{
-		name: "Secret access key",
-		password: true,
-		get: (s) => s.secretAccessKey,
-		set: (v) => ({ secretAccessKey: v.trim() }),
-	},
-];
 
 const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 	{
@@ -169,8 +122,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		this.renderStorageSection(containerEl);
-		this.renderCredentialsSection(containerEl);
+		this.renderBackendSection(containerEl);
 		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
 		this.renderIgnoreSection(containerEl);
@@ -203,23 +155,68 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private renderStorageSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Storage").setHeading();
-		for (const field of STORAGE_FIELDS) this.renderTextField(parent, field);
-		this.renderToggleField(parent, {
-			name: "Force path-style URLs",
-			desc: "Required for most non-AWS S3 backends.",
-			get: (s) => s.forcePathStyle,
-			set: (v) => ({ forcePathStyle: v }),
+	private renderBackendSection(parent: HTMLElement): void {
+		new Setting(parent).setName("Backend").setHeading();
+		new Setting(parent).setDesc(
+			"Credentials are stored locally on this device and never uploaded.",
+		);
+
+		const current = this.plugin.settings.storage;
+		new Setting(parent)
+			.setName("Storage backend")
+			.setDesc("Select the remote that holds the encrypted manifest and objects.")
+			.addDropdown((dropdown) => {
+				for (const entry of listBackends()) {
+					dropdown.addOption(entry.kind, entry.label);
+				}
+				dropdown.setValue(current.kind);
+				dropdown.onChange((value) => {
+					const nextKind = value as EStorageBackend;
+					if (nextKind === current.kind) return;
+					const descriptor = getDescriptor(nextKind);
+					this.plugin.settings.storage = descriptor.defaults();
+					void this.plugin.saveSettings().then(() => {
+						this.plugin.scheduleScopeRefresh(BACKEND_SETTINGS_CHANGED);
+						this.display();
+					});
+				});
+			});
+
+		const descriptor = getDescriptor(current.kind);
+		for (const field of descriptor.fields) {
+			this.renderBackendField(parent, field);
+		}
+	}
+
+	private renderBackendField(parent: HTMLElement, field: SettingsFieldSpec): void {
+		const setting = new Setting(parent).setName(field.name);
+		if (field.desc) setting.setDesc(field.desc);
+		const storage = this.plugin.settings.storage as unknown as Record<string, unknown>;
+		if (field.kind === EFieldKind.Toggle) {
+			setting.addToggle((t) =>
+				t.setValue(Boolean(storage[field.key])).onChange((v) => {
+					this.updateStorage({ [field.key]: v });
+				}),
+			);
+			return;
+		}
+		setting.addText((t) => {
+			if (field.kind === EFieldKind.Password) t.inputEl.type = "password";
+			if (field.placeholder) t.setPlaceholder(field.placeholder);
+			const raw = storage[field.key];
+			const text = typeof raw === "string" ? raw : "";
+			t.setValue(text).onChange((v) => {
+				this.updateStorage({ [field.key]: v.trim() });
+			});
 		});
 	}
 
-	private renderCredentialsSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Credentials").setHeading();
-		new Setting(parent).setDesc(
-			"Stored locally in this device's plugin data. They are never uploaded.",
-		);
-		for (const field of CREDENTIAL_FIELDS) this.renderTextField(parent, field);
+	private updateStorage(patch: Record<string, unknown>): void {
+		this.plugin.settings.storage = {
+			...this.plugin.settings.storage,
+			...patch,
+		} as StorageAdapterConfig;
+		void this.plugin.saveSettings();
 	}
 
 	private renderTransferSection(parent: HTMLElement): void {
@@ -342,7 +339,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 		new Setting(parent)
 			.setName("Reset remote storage")
-			.setDesc("Delete the remote Obsync manifest and objects for the configured bucket prefix.")
+			.setDesc("Delete the remote Obsync manifest and objects on the configured backend.")
 			.addButton((button) =>
 				button
 					.setButtonText("Reset remote")
@@ -400,18 +397,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private renderTextField(parent: HTMLElement, field: TextFieldConfig): void {
-		const setting = new Setting(parent).setName(field.name);
-		if (field.desc) setting.setDesc(field.desc);
-		setting.addText((t) => {
-			if (field.password) t.inputEl.type = "password";
-			if (field.placeholder) t.setPlaceholder(field.placeholder);
-			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
-				this.update(field.set(v, this.plugin), { refreshScope: field.refreshScope }),
-			);
-		});
-	}
-
 	private renderToggleField(parent: HTMLElement, field: ToggleFieldConfig): void {
 		const setting = new Setting(parent).setName(field.name);
 		if (field.desc) setting.setDesc(field.desc);
@@ -467,8 +452,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private async handleResetRemote(): Promise<void> {
 		const confirmed = await confirmRemoteReset(this.app, {
-			bucket: this.plugin.settings.bucket,
-			prefix: this.plugin.settings.prefix,
+			description: describeStorageTarget(this.plugin.settings.storage),
 		});
 		if (!confirmed) return;
 		const ok = await this.plugin.controller.resetRemoteStorage();
