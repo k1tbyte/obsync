@@ -1,6 +1,7 @@
 export enum EStorageBackend {
 	S3 = "s3",
 	WebDAV = "webdav",
+	GoogleDrive = "google-drive",
 }
 
 export interface S3StorageConfig {
@@ -22,4 +23,13 @@ export interface WebDAVStorageConfig {
 	password: string;
 }
 
-export type StorageAdapterConfig = S3StorageConfig | WebDAVStorageConfig;
+export interface GoogleDriveStorageConfig {
+	kind: EStorageBackend.GoogleDrive;
+	folderId: string;
+	clientId: string;
+	accessToken: string;
+	refreshToken: string;
+	expiresAt: number;
+}
+
+export type StorageAdapterConfig = S3StorageConfig | WebDAVStorageConfig | GoogleDriveStorageConfig;

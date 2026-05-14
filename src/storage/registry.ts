@@ -1,4 +1,12 @@
 import {
+	createGoogleDriveAdapter,
+	defaultGoogleDriveConfig,
+	describeGoogleDriveTarget,
+	GOOGLE_DRIVE_FIELDS,
+	googleDriveIdentity,
+	isGoogleDriveConfigured,
+} from "./adapters/google-drive";
+import {
 	createS3Adapter,
 	defaultS3Config,
 	describeS3Target,
@@ -46,6 +54,15 @@ const STORAGE_REGISTRY: { [K in EStorageBackend]: StorageDescriptor<Extract<Stor
 		describeTarget: describeWebDAVTarget,
 		identity: webdavIdentity,
 		fields: WEBDAV_FIELDS,
+	},
+	[EStorageBackend.GoogleDrive]: {
+		label: "Google Drive",
+		defaults: defaultGoogleDriveConfig,
+		create: createGoogleDriveAdapter,
+		isConfigured: isGoogleDriveConfigured,
+		describeTarget: describeGoogleDriveTarget,
+		identity: googleDriveIdentity,
+		fields: GOOGLE_DRIVE_FIELDS,
 	},
 };
 

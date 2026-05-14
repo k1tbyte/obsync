@@ -1,0 +1,7 @@
+name = "obsync-auth"
+main = "src/index.ts"
+compatibility_date = "2024-05-14"
+
+# Secrets (Do NOT hardcode values here, configure them via Cloudflare Dashboard or Wrangler CLI):
+# - GDRIVE_CLIENT_ID
+# - GDRIVE_CLIENT_SECRET
