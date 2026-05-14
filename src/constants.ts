@@ -83,3 +83,9 @@ export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
 
 export const S3_RETRY_ATTEMPTS = 3;
 export const S3_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
+
+export const BATCH_RESOLVE_CONFIRM_THRESHOLD = 5;
+
+export const RACY_INDEX_WINDOW_MS = 2_000;
+
+export const PERSIST_STATE_DEBOUNCE_MS = 500;

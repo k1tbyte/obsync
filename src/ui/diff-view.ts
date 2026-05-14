@@ -9,10 +9,11 @@ import {
 	type WorkspaceLeaf,
 } from "obsidian";
 
-import { DIFF_VIEW_TYPE } from "../constants";
+import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
 import { EDiffDirection, type FileDiffModel } from "../sync/projection";
 import type { SyncHunk } from "../sync/hunks";
+import { openSourceControlView } from "./source-control-view";
 
 interface DiffViewState {
 	path?: string;
@@ -377,10 +378,11 @@ export class DiffView extends ItemView {
 
 	private async resolveKeepLocal(): Promise<void> {
 		if (!this.path) return;
+		const resolved = this.path;
 		try {
-			await this.plugin.controller.resolveConflictKeepLocal(this.path);
+			await this.plugin.controller.resolveConflictKeepLocal(resolved);
 			new Notice("Obsync: kept local version");
-			await this.refreshModel();
+			await this.advanceAfterResolve(resolved);
 		} catch (err) {
 			this.notifyError(err);
 		}
@@ -388,13 +390,36 @@ export class DiffView extends ItemView {
 
 	private async resolveAcceptRemote(): Promise<void> {
 		if (!this.path) return;
+		const resolved = this.path;
 		try {
-			await this.plugin.controller.resolveConflictAcceptRemote(this.path);
+			await this.plugin.controller.resolveConflictAcceptRemote(resolved);
 			new Notice("Obsync: accepted remote version");
-			await this.refreshModel();
+			await this.advanceAfterResolve(resolved);
 		} catch (err) {
 			this.notifyError(err);
 		}
+	}
+
+	private async advanceAfterResolve(resolvedPath: string): Promise<void> {
+		const next = this.getNextConflictPath(resolvedPath);
+		if (next) {
+			this.path = next;
+			this.currentHunkIndex = -1;
+			await this.refreshModel();
+			return;
+		}
+		await openSourceControlView(this.app, SOURCE_CONTROL_VIEW_TYPE);
+		this.leaf.detach();
+	}
+
+	private getNextConflictPath(resolvedPath: string): string | null {
+		const diff = this.plugin.controller.getSnapshot().result?.diff;
+		if (!diff) return null;
+		const conflicts = diff.conflicts
+			.map((c) => c.path)
+			.filter((p) => p !== resolvedPath);
+		if (conflicts.length === 0) return null;
+		return conflicts[0] ?? null;
 	}
 
 	private getAdjacentPath(delta: number): string | null {

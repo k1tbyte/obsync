@@ -2,7 +2,12 @@ import "./polyfills";
 import { Notice, Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
 
 import { registerCommands } from "./commands";
-import { DIFF_VIEW_TYPE, IGNORE_FILE_NAME, SOURCE_CONTROL_VIEW_TYPE } from "./constants";
+import {
+    DIFF_VIEW_TYPE,
+    IGNORE_FILE_NAME,
+    PERSIST_STATE_DEBOUNCE_MS,
+    SOURCE_CONTROL_VIEW_TYPE,
+} from "./constants";
 import type { EncryptionKey } from "./crypto";
 import {
     bindingSignature,
@@ -34,6 +39,7 @@ import {
 } from "./settings/transfer";
 import { SyncController } from "./sync/controller";
 import type { EngineDependencies } from "./sync/engine";
+import { fetchRemoteManifest } from "./sync/manifest";
 import { registerScheduler } from "./sync/scheduler";
 import { deriveSessionKey } from "./sync/session";
 import { loadState, saveState } from "./sync/state";
@@ -46,6 +52,7 @@ import { registerRibbon } from "./ui/ribbon";
 import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
 import { SourceControlView } from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
+import { confirmVaultAdoption } from "./ui/vault-adoption-modal";
 import { loadIgnoreMatcher } from "./vault/ignore";
 import { createScopePolicy } from "./vault/scope";
 
@@ -59,6 +66,8 @@ export default class ObsyncPlugin extends Plugin {
     private cachedKey: { key: EncryptionKey; signature: string } | null = null;
     private syncLogs: SyncLogEntry[] = [];
     private scopeRefreshTimer: number | null = null;
+    private hashCacheFlushTimer: number | null = null;
+    private pendingHashCacheState: LocalState | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -103,6 +112,15 @@ export default class ObsyncPlugin extends Plugin {
         if (this.scopeRefreshTimer !== null) {
             window.clearTimeout(this.scopeRefreshTimer);
             this.scopeRefreshTimer = null;
+        }
+        if (this.hashCacheFlushTimer !== null) {
+            window.clearTimeout(this.hashCacheFlushTimer);
+            this.hashCacheFlushTimer = null;
+            const pending = this.pendingHashCacheState;
+            if (pending) {
+                void saveState(this.app.vault.adapter, this.app.vault.configDir, pending);
+            }
+            this.pendingHashCacheState = null;
         }
         this.passphrase = null;
         this.cachedKey = null;
@@ -237,8 +255,41 @@ export default class ObsyncPlugin extends Plugin {
     }
 
     async persistState(state: LocalState): Promise<void> {
+        const prev = this.state;
         this.state = state;
+        if (this.canDebouncePersist(prev, state)) {
+            this.scheduleHashCacheFlush(state);
+            return;
+        }
+        await this.flushHashCachePending();
         await saveState(this.app.vault.adapter, this.app.vault.configDir, state);
+    }
+
+    private canDebouncePersist(prev: LocalState | null, next: LocalState): boolean {
+        if (!prev) return false;
+        if (prev.deviceId !== next.deviceId) return false;
+        if (prev.vaultId !== next.vaultId) return false;
+        if (prev.baseline !== next.baseline) return false;
+        return true;
+    }
+
+    private scheduleHashCacheFlush(state: LocalState): void {
+        this.pendingHashCacheState = state;
+        if (this.hashCacheFlushTimer !== null) return;
+        this.hashCacheFlushTimer = window.setTimeout(() => {
+            this.hashCacheFlushTimer = null;
+            const pending = this.pendingHashCacheState;
+            this.pendingHashCacheState = null;
+            if (!pending) return;
+            void saveState(this.app.vault.adapter, this.app.vault.configDir, pending);
+        }, PERSIST_STATE_DEBOUNCE_MS);
+    }
+
+    private async flushHashCachePending(): Promise<void> {
+        if (this.hashCacheFlushTimer === null) return;
+        window.clearTimeout(this.hashCacheFlushTimer);
+        this.hashCacheFlushTimer = null;
+        this.pendingHashCacheState = null;
     }
 
     async openSession(): Promise<EngineDependencies | null> {
@@ -273,6 +324,17 @@ export default class ObsyncPlugin extends Plugin {
         this.state = state;
         await this.persistDeviceIdIfNew(state);
 
+        if (state.vaultId === null) {
+            const adopted = await this.confirmAdoptionIfNeeded(storage, key);
+            if (!adopted) {
+                await this.logWarn(
+                    ESyncLogOperation.Session,
+                    "Session cancelled: user declined to adopt remote vault.",
+                );
+                return null;
+            }
+        }
+
         const ignore = await loadIgnoreMatcher(adapter, this.settings.ignorePatterns);
         return {
             adapter,
@@ -287,6 +349,26 @@ export default class ObsyncPlugin extends Plugin {
             maxFileBytes: this.settings.maxFileBytes,
             concurrency: this.settings.concurrency,
         };
+    }
+
+    private async confirmAdoptionIfNeeded(
+        storage: ObjectStorage,
+        key: EncryptionKey,
+    ): Promise<boolean> {
+        const localFileCount = this.app.vault.getFiles().length;
+        if (localFileCount === 0) return true;
+        let remote;
+        try {
+            remote = await fetchRemoteManifest(storage, key);
+        } catch (err) {
+            console.warn("[obsync] adoption peek failed", err);
+            return true;
+        }
+        if (!remote) return true;
+        return confirmVaultAdoption(this.app, {
+            remoteVaultId: remote.vaultId,
+            localFileCount,
+        });
     }
 
     private registerIgnoreFileEvents(): void {

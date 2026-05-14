@@ -16,7 +16,13 @@ import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
 import { runWithConcurrency } from "./concurrency";
 import { diff } from "./diff";
-import { buildManifest, fetchRemoteManifest, objectKey, publishManifest } from "./manifest";
+import {
+	buildManifest,
+	fetchRemoteManifest,
+	objectKey,
+	publishManifestWithGuard,
+	reconcileRemoteAgainstBaseline,
+} from "./manifest";
 
 export interface EngineDependencies {
 	adapter: DataAdapter;
@@ -43,8 +49,15 @@ export async function compare(deps: EngineDependencies): Promise<CompareResult> 
 		{ maxFileBytes: deps.maxFileBytes, onProgress: deps.onScanProgress },
 		deps.state.hashCache,
 	);
-	const remote = await fetchRemoteManifest(deps.storage, deps.key);
-	assertVaultCompatibility(deps.state, remote);
+	const fetched = await fetchRemoteManifest(deps.storage, deps.key);
+	assertVaultCompatibility(deps.state, fetched);
+	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
+	if (fetched && remote !== fetched) {
+		console.warn(
+			"[obsync] storage returned stale manifest",
+			{ fetched: fetched.snapshotId, baseline: deps.state.baseline?.snapshotId },
+		);
+	}
 	const result = diff({ local: snapshot, remote, baseline: deps.state.baseline });
 	return { snapshot, remote, diff: result, updatedCache };
 }
@@ -108,7 +121,12 @@ export async function pushPaths(
 		emptyFolders: folders,
 		ignoredPaths: [],
 	});
-	await publishManifest(deps.storage, deps.key, manifest);
+	await publishManifestWithGuard(
+		deps.storage,
+		deps.key,
+		manifest,
+		compareResult.remote?.snapshotId ?? null,
+	);
 	return manifest;
 }
 
@@ -204,7 +222,12 @@ export async function pushSingleFile(
 		emptyFolders: folders,
 		ignoredPaths: [],
 	});
-	await publishManifest(deps.storage, deps.key, manifest);
+	await publishManifestWithGuard(
+		deps.storage,
+		deps.key,
+		manifest,
+		compareResult.remote?.snapshotId ?? null,
+	);
 	return { manifest, entry };
 }
 

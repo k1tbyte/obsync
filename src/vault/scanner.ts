@@ -1,5 +1,6 @@
 import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
+import { RACY_INDEX_WINDOW_MS } from "../constants";
 import { sha256Hex } from "../crypto";
 import type { HashCacheEntry, LocalSnapshot, ManifestEntry, SkippedFile } from "../types";
 import type { ScopePolicy } from "./scope";
@@ -74,12 +75,16 @@ async function buildEntry(
 	kind: ManifestEntry["kind"],
 	cached: HashCacheEntry | undefined,
 ): Promise<ManifestEntry> {
-	if (cached && cached.mtime === mtime && cached.size === size) {
+	if (cached && cached.mtime === mtime && cached.size === size && !isRacy(mtime)) {
 		return { hash: cached.hash, size, mtime, kind };
 	}
 	const buffer = await adapter.readBinary(path);
 	const hash = await sha256Hex(new Uint8Array(buffer));
 	return { hash, size, mtime, kind };
+}
+
+function isRacy(mtime: number): boolean {
+	return Date.now() - mtime < RACY_INDEX_WINDOW_MS;
 }
 
 async function listAllFiles(

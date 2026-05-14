@@ -543,3 +543,40 @@
 .obsync-ribbon-icon.is-conflict::after {
     background-color: var(--color-red);
 }
+
+.obsync-row-action {
+    padding: 2px var(--size-4-2);
+    font-size: var(--font-ui-smaller);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.obsync-row-keep {
+    color: var(--color-green);
+}
+
+.obsync-row-accept {
+    color: var(--color-orange);
+}
+
+.obsync-modal-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--size-4-2);
+    margin-top: var(--size-4-3);
+}
+
+@media (max-width: 600px) {
+    .obsync-row-action {
+        padding: var(--size-4-1) var(--size-4-2);
+        min-height: 32px;
+    }
+    .obsync-file-row {
+        flex-wrap: wrap;
+        padding: var(--size-4-1) var(--size-4-2);
+}
+
+.obsync-adopt-new-vault-btn {
+    margin-left: var(--size-4-2);
+}

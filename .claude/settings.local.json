@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"E:\\\\Repositories\\\\pet\\\\obsync\" -Recurse -Filter \"*.ts\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 30 FullName)"
+    ]
+  }
+}

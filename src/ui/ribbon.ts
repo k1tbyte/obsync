@@ -1,6 +1,6 @@
 import type { Plugin } from "obsidian";
 
-import { SOURCE_CONTROL_VIEW_TYPE, STATUS_EVENT } from "../constants";
+import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
 import { openSourceControlView } from "./source-control-view";
 
@@ -21,13 +21,6 @@ export function registerRibbon(plugin: Plugin, controller: SyncController): void
 	apply(controller.getSnapshot());
 	const unsubscribe = controller.subscribe(apply);
 	plugin.register(unsubscribe);
-
-	plugin.registerEvent(
-		plugin.app.workspace.on(
-			STATUS_EVENT as unknown as "file-open",
-			(snapshot: unknown) => apply(snapshot as SyncStatusSnapshot),
-		),
-	);
 }
 
 function buildLabel(snapshot: SyncStatusSnapshot): string {

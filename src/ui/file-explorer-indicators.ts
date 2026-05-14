@@ -1,6 +1,5 @@
 import type { Plugin, View, Workspace } from "obsidian";
 
-import { STATUS_EVENT } from "../constants";
 import type { SyncController } from "../sync/controller";
 import type { ChangeType } from "../types";
 
@@ -69,10 +68,6 @@ export function registerFileExplorerIndicators(
 
 	const unsub = controller.subscribe(() => schedule());
 	plugin.register(unsub);
-
-	plugin.registerEvent(
-		plugin.app.workspace.on(STATUS_EVENT as unknown as "file-open", () => schedule()),
-	);
 
 	plugin.app.workspace.onLayoutReady(() => schedule());
 }

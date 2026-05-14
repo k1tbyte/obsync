@@ -9,9 +9,13 @@ import {
 	type WorkspaceLeaf,
 } from "obsidian";
 
-import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE, STATUS_EVENT } from "../constants";
+import {
+	BATCH_RESOLVE_CONFIRM_THRESHOLD,
+	DIFF_VIEW_TYPE,
+	SOURCE_CONTROL_VIEW_TYPE,
+} from "../constants";
 import type ObsyncPlugin from "../main";
-import type { SyncStatusSnapshot } from "../sync/controller";
+import { EConflictStrategy, type SyncStatusSnapshot } from "../sync/controller";
 import type { FileDiffModel } from "../sync/projection";
 import type { Conflict, FileChange } from "../types";
 
@@ -110,12 +114,6 @@ export class SourceControlView extends ItemView {
 		this.root.addClass("obsync-source-control");
 		this.render(this.plugin.controller.getSnapshot(), true);
 		this.unsubscribe = this.plugin.controller.subscribe((snapshot) => this.render(snapshot));
-		this.registerEvent(
-			this.app.workspace.on(
-				STATUS_EVENT as unknown as "file-open",
-				(snapshot: unknown) => this.render(snapshot as SyncStatusSnapshot),
-			),
-		);
 		if (!this.plugin.controller.getSnapshot().result) {
 			void this.plugin.controller.refresh();
 		}
@@ -234,6 +232,10 @@ export class SourceControlView extends ItemView {
 		if (snapshot.error) {
 			line.addClass("is-error");
 			line.setText(`Error: ${snapshot.error}`);
+			if (snapshot.error.includes("Remote vault id does not match local")) {
+				const adoptBtn = line.createEl("button", { text: "Adopt new vault", cls: ["mod-warning", "obsync-adopt-new-vault-btn"] });
+				adoptBtn.addEventListener("click", () => void this.handleAdoptNewVault());
+			}
 			return;
 		}
 		if (snapshot.busy) {
@@ -302,6 +304,21 @@ export class SourceControlView extends ItemView {
 			revertBtn.addClass("is-warning");
 			this.refs[section].revertButton = revertBtn;
 			revertBtn.addEventListener("click", () => void this.handleRevertSelected(section));
+		}
+
+		if (section === ESection.Conflicts) {
+			const keepAll = actions.createEl("button", { text: "Keep all local" });
+			keepAll.addClass("is-warning");
+			keepAll.disabled = snapshot.busy || rows.length === 0;
+			keepAll.addEventListener("click", () =>
+				void this.handleBatchResolve(EConflictStrategy.KeepLocal),
+			);
+			const acceptAll = actions.createEl("button", { text: "Accept all remote" });
+			acceptAll.addClass("is-warning");
+			acceptAll.disabled = snapshot.busy || rows.length === 0;
+			acceptAll.addEventListener("click", () =>
+				void this.handleBatchResolve(EConflictStrategy.AcceptRemote),
+			);
 		}
 
 		const selectAll = actions.createEl("button", { text: "Select all" });
@@ -383,6 +400,28 @@ export class SourceControlView extends ItemView {
 		item.createSpan({ cls: "obsync-file-name", text: row.path });
 
 		if (row.isConflict) {
+			const keepBtn = item.createEl("button", {
+				cls: "obsync-row-action obsync-row-keep",
+				text: "Keep local",
+			});
+			keepBtn.setAttr("aria-label", "Keep local version");
+			keepBtn.setAttr("title", "Keep local version");
+			keepBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				void this.handleResolveKeepLocal(row.path);
+			});
+
+			const acceptBtn = item.createEl("button", {
+				cls: "obsync-row-action obsync-row-accept",
+				text: "Accept remote",
+			});
+			acceptBtn.setAttr("aria-label", "Accept remote version");
+			acceptBtn.setAttr("title", "Accept remote version");
+			acceptBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				void this.handleResolveAcceptRemote(row.path);
+			});
+
 			const expanded = this.expandedPreviews.has(row.path);
 			const expandBtn = item.createEl("button", {
 				cls: "obsync-expand-btn",
@@ -407,7 +446,7 @@ export class SourceControlView extends ItemView {
 					void this.plugin.controller.getFileDiff(row.path).then((model) => {
 						this.previewCache.set(row.path, model);
 						this.loadingPreviews.delete(row.path);
-						this.render(this.plugin.controller.getSnapshot(), true);
+						this.renderPreviewInto(previewEl, model, row.path);
 					});
 				} else if (cached === null) {
 					previewEl.setText("No diff available.");
@@ -430,6 +469,27 @@ export class SourceControlView extends ItemView {
 		item.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			this.showContextMenu(e, row.path, section);
+		});
+	}
+
+	private renderPreviewInto(
+		previewEl: HTMLElement,
+		model: FileDiffModel | null,
+		path: string,
+	): void {
+		if (!previewEl.isConnected) return;
+		previewEl.empty();
+		if (model === null) {
+			previewEl.setText("No diff available.");
+			return;
+		}
+		if (model.isBinary) {
+			previewEl.setText("Binary file — cannot preview diff.");
+			return;
+		}
+		renderConflictPreview(previewEl, model, path, {
+			keepLocal: (p) => this.handleResolveKeepLocal(p),
+			acceptRemote: (p) => this.handleResolveAcceptRemote(p),
 		});
 	}
 
@@ -496,6 +556,7 @@ export class SourceControlView extends ItemView {
 	}
 
 	private async handleResolveKeepLocal(path: string): Promise<void> {
+		this.expandedPreviews.delete(path);
 		try {
 			await this.plugin.controller.resolveConflictKeepLocal(path);
 			new Notice(`Obsync: kept local version of ${path}`);
@@ -505,9 +566,27 @@ export class SourceControlView extends ItemView {
 	}
 
 	private async handleResolveAcceptRemote(path: string): Promise<void> {
+		this.expandedPreviews.delete(path);
 		try {
 			await this.plugin.controller.resolveConflictAcceptRemote(path);
 			new Notice(`Obsync: accepted remote version of ${path}`);
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleBatchResolve(strategy: EConflictStrategy): Promise<void> {
+		const diff = this.plugin.controller.getSnapshot().result?.diff;
+		if (!diff || diff.conflicts.length === 0) return;
+		const paths = diff.conflicts.map((c) => c.path);
+		if (paths.length > BATCH_RESOLVE_CONFIRM_THRESHOLD) {
+			const ok = await confirmBatchResolve(this.app, paths.length, strategy);
+			if (!ok) return;
+		}
+		for (const p of paths) this.expandedPreviews.delete(p);
+		try {
+			await this.plugin.controller.resolveConflicts(paths, strategy);
+			new Notice(`Obsync: resolved ${paths.length} conflict(s)`);
 		} catch (err) {
 			this.notifyError(err);
 		}
@@ -542,6 +621,17 @@ export class SourceControlView extends ItemView {
 				await this.plugin.controller.pullPaths(paths);
 				new Notice(`Obsync: pulled ${paths.length} file(s)`);
 			}
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleAdoptNewVault(): Promise<void> {
+		const ok = await confirmAdoptNewVault(this.plugin.app);
+		if (!ok) return;
+		try {
+			await this.plugin.controller.adoptNewVault();
+			new Notice("Obsync: adopted new remote vault.");
 		} catch (err) {
 			this.notifyError(err);
 		}
@@ -741,6 +831,67 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
+}
+
+function confirmBatchResolve(
+	app: App,
+	count: number,
+	strategy: EConflictStrategy,
+): Promise<boolean> {
+	const action = strategy === EConflictStrategy.KeepLocal ? "Keep local" : "Accept remote";
+	const description =
+		strategy === EConflictStrategy.KeepLocal
+			? "All local versions will be pushed and overwrite remote."
+			: "All remote versions will be downloaded and overwrite local.";
+	return new Promise((resolve) => {
+		const modal = new Modal(app);
+		let settled = false;
+		const finish = (confirmed: boolean): void => {
+			if (settled) return;
+			settled = true;
+			modal.close();
+			resolve(confirmed);
+		};
+		modal.titleEl.setText(`${action} for ${count} conflict(s)?`);
+		modal.contentEl.createEl("p", { text: description });
+		modal.contentEl.createEl("p", { text: "This cannot be undone." });
+		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
+		const cancelBtn = buttons.createEl("button", { text: "Cancel" });
+		cancelBtn.addEventListener("click", () => finish(false));
+		const okBtn = buttons.createEl("button", { text: action });
+		okBtn.addClass("mod-cta");
+		okBtn.addEventListener("click", () => finish(true));
+		modal.onClose = (): void => finish(false);
+		modal.open();
+	});
+}
+
+function confirmAdoptNewVault(app: App): Promise<boolean> {
+	return new Promise((resolve) => {
+		const modal = new Modal(app);
+		let settled = false;
+		const finish = (confirmed: boolean): void => {
+			if (settled) return;
+			settled = true;
+			modal.close();
+			resolve(confirmed);
+		};
+		modal.titleEl.setText("Adopt new remote vault?");
+		modal.contentEl.createEl("p", {
+			text: "The remote vault ID has changed, which usually means the remote storage was reset from another device."
+		});
+		modal.contentEl.createEl("p", {
+			text: "Adopting will forget your previous sync baseline. Your local files will be compared against the new remote."
+		});
+		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
+		const cancelBtn = buttons.createEl("button", { text: "Cancel" });
+		cancelBtn.addEventListener("click", () => finish(false));
+		const okBtn = buttons.createEl("button", { text: "Adopt" });
+		okBtn.addClass("mod-cta");
+		okBtn.addEventListener("click", () => finish(true));
+		modal.onClose = (): void => finish(false);
+		modal.open();
+	});
 }
 
 function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {

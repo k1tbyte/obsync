@@ -10,15 +10,17 @@ export function stateFilePath(configDir: string): string {
 
 export async function loadState(adapter: DataAdapter, configDir: string): Promise<LocalState> {
 	const path = stateFilePath(configDir);
-	if (!(await adapter.exists(path))) {
-		return createEmptyState();
+	const candidates = [path, `${path}.new`, `${path}.bak`];
+	for (const candidate of candidates) {
+		if (!(await adapter.exists(candidate))) continue;
+		try {
+			const raw = await adapter.read(candidate);
+			return normalizeState(JSON.parse(raw) as Partial<LocalState>);
+		} catch {
+			continue;
+		}
 	}
-	try {
-		const raw = await adapter.read(path);
-		return normalizeState(JSON.parse(raw) as Partial<LocalState>);
-	} catch {
-		return createEmptyState();
-	}
+	return createEmptyState();
 }
 
 export async function saveState(
@@ -52,8 +54,14 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 }
 
 async function writeAtomic(adapter: DataAdapter, path: string, data: string): Promise<void> {
-	const tmp = `${path}.tmp`;
-	await adapter.write(tmp, data);
-	if (await adapter.exists(path)) await adapter.remove(path);
-	await adapter.rename(tmp, path);
+	const newPath = `${path}.new`;
+	const bakPath = `${path}.bak`;
+	if (await adapter.exists(newPath)) await adapter.remove(newPath);
+	await adapter.write(newPath, data);
+	if (await adapter.exists(path)) {
+		if (await adapter.exists(bakPath)) await adapter.remove(bakPath);
+		await adapter.rename(path, bakPath);
+	}
+	await adapter.rename(newPath, path);
+	if (await adapter.exists(bakPath)) await adapter.remove(bakPath);
 }

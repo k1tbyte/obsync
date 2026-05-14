@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
 
 import { STATUS_EVENT } from "../constants";
-import { decryptBytes, randomId, sha256Hex } from "../crypto";
+import { decryptBytes, encryptBytes, randomId, sha256Hex } from "../crypto";
 import { ESyncLogOperation } from "../logs/store";
 import type { ObsyncSettings } from "../settings/model";
 import type {
@@ -9,6 +9,7 @@ import type {
 	Conflict,
 	FileChange,
 	HashCacheEntry,
+	LocalSnapshot,
 	LocalState,
 	Manifest,
 	ManifestEntry,
@@ -21,6 +22,7 @@ import {
 	loadRemoteBytes,
 	textToBytes,
 } from "./content";
+import { diff } from "./diff";
 import {
 	compare,
 	type CompareResult,
@@ -30,7 +32,7 @@ import {
 	pushSingleFile,
 } from "./engine";
 import { applyHunks, computeHunks } from "./hunks";
-import { objectKey } from "./manifest";
+import { buildManifest, ConcurrentPushError, objectKey, publishManifestWithGuard } from "./manifest";
 import {
 	buildConflictDiff,
 	buildLocalChangeDiff,
@@ -39,6 +41,11 @@ import {
 	type ProjectionDeps,
 } from "./projection";
 import { resetRemoteStorage as resetStorageObjects } from "./reset";
+
+export enum EConflictStrategy {
+	KeepLocal = "keep-local",
+	AcceptRemote = "accept-remote",
+}
 
 export interface SyncControllerHost {
 	app: App;
@@ -70,6 +77,11 @@ interface PathStatus {
 	conflict?: Conflict;
 }
 
+interface OperationOutcome {
+	newRemote: Manifest | null;
+	touchedPaths: ReadonlySet<string>;
+}
+
 export class SyncController {
 	private readonly host: SyncControllerHost;
 	private result: CompareResult | null = null;
@@ -81,17 +93,18 @@ export class SyncController {
 	private readonly listeners = new Set<SyncStatusListener>();
 	private readonly diffCache = new Map<string, FileDiffModel>();
 	private chain: Promise<void> = Promise.resolve();
+	private broadcastFrame: number | null = null;
 
 	constructor(host: SyncControllerHost) {
 		this.host = host;
 	}
 
 	getSnapshot(): SyncStatusSnapshot {
-		const diff = this.result?.diff;
+		const d = this.result?.diff;
 		return {
-			pendingLocal: diff?.localChanges.length ?? 0,
-			pendingRemote: diff?.remoteChanges.length ?? 0,
-			conflicts: diff?.conflicts.length ?? 0,
+			pendingLocal: d?.localChanges.length ?? 0,
+			pendingRemote: d?.remoteChanges.length ?? 0,
+			conflicts: d?.conflicts.length ?? 0,
 			lastCompareAt: this.resultAt,
 			busy: this.pendingOps > 0,
 			error: this.error,
@@ -110,23 +123,23 @@ export class SyncController {
 	}
 
 	getStatusForPath(path: string): PathStatus | null {
-		const diff = this.result?.diff;
-		if (!diff) return null;
+		const d = this.result?.diff;
+		if (!d) return null;
 		const change =
-			diff.localChanges.find((c) => c.path === path) ??
-			diff.remoteChanges.find((c) => c.path === path);
-		const conflict = diff.conflicts.find((c) => c.path === path);
+			d.localChanges.find((c) => c.path === path) ??
+			d.remoteChanges.find((c) => c.path === path);
+		const conflict = d.conflicts.find((c) => c.path === path);
 		if (!change && !conflict) return null;
 		return { change, conflict };
 	}
 
 	getChangedPathStatuses(): Map<string, ChangeType | "conflict"> {
 		const out = new Map<string, ChangeType | "conflict">();
-		const diff = this.result?.diff;
-		if (!diff) return out;
-		for (const c of diff.localChanges) out.set(c.path, c.type);
-		for (const c of diff.remoteChanges) out.set(c.path, c.type);
-		for (const c of diff.conflicts) out.set(c.path, "conflict");
+		const d = this.result?.diff;
+		if (!d) return out;
+		for (const c of d.localChanges) out.set(c.path, c.type);
+		for (const c of d.remoteChanges) out.set(c.path, c.type);
+		for (const c of d.conflicts) out.set(c.path, "conflict");
 		return out;
 	}
 
@@ -168,7 +181,7 @@ export class SyncController {
 					deps.concurrency,
 					(done, total) => {
 						this.progressText = `Deleting remote sync data ${done}/${total}…`;
-						this.broadcast();
+						this.broadcastSoon();
 					},
 				);
 				const resetState = resetLocalState(deps.state);
@@ -197,6 +210,37 @@ export class SyncController {
 		});
 	}
 
+	async adoptNewVault(): Promise<boolean> {
+		return this.enqueue(async () => {
+			this.error = null;
+			this.progressText = "Adopting new vault…";
+			this.broadcast();
+			try {
+				const deps = await this.host.openSession();
+				if (!deps) return false;
+				const resetState = resetLocalState(deps.state);
+				await this.host.persistState(resetState);
+				
+				this.progressText = "Refreshing…";
+				this.broadcast();
+				const refreshed = await compare({ ...deps, state: resetState });
+				this.result = refreshed;
+				this.resultAt = Date.now();
+				this.diffCache.clear();
+				this.staleReason = null;
+				await this.host.persistState({ ...resetState, hashCache: refreshed.updatedCache });
+				await this.host.logInfo(ESyncLogOperation.Compare, "Adopted new remote vault.");
+				return true;
+			} catch (err) {
+				this.error = err instanceof Error ? err.message : String(err);
+				await this.host.logError(ESyncLogOperation.Compare, this.error);
+				return false;
+			} finally {
+				this.progressText = null;
+			}
+		});
+	}
+
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {
 		const pushSet = new Set(paths);
 		if (pushSet.size === 0) return;
@@ -211,7 +255,7 @@ export class SyncController {
 			const bytesUploaded = sumBytes(paths, result.snapshot.files);
 			const manifest = await pushPaths(deps, result, paths, (done, total) => {
 				this.progressText = `Pushing ${done}/${total}…`;
-				this.broadcast();
+				this.broadcastSoon();
 			});
 			this.progressText = null;
 			const state = advanceStateAfterPush(deps.state, result, manifest);
@@ -221,6 +265,7 @@ export class SyncController {
 				`Pushed ${pushSet.size} file(s) (${formatBytes(bytesUploaded)}).`,
 				Array.from(pushSet).slice(0, 50),
 			);
+			return { newRemote: manifest, touchedPaths: pushSet };
 		});
 	}
 
@@ -235,7 +280,7 @@ export class SyncController {
 			const bytesDownloaded = sumBytes(paths, result.remote.files);
 			const baseline = await pullPaths(deps, result, paths, (done, total) => {
 				this.progressText = `Pulling ${done}/${total}…`;
-				this.broadcast();
+				this.broadcastSoon();
 			});
 			this.progressText = null;
 			const hashCache = mergeBaselineIntoCache(baseline, result.updatedCache);
@@ -251,6 +296,7 @@ export class SyncController {
 				`Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
 				Array.from(pullSet).slice(0, 50),
 			);
+			return { newRemote: result.remote, touchedPaths: pullSet };
 		});
 	}
 
@@ -281,6 +327,7 @@ export class SyncController {
 				ESyncLogOperation.Push,
 				`Pushed ${selected.size} hunk(s) of ${path}.`,
 			);
+			return { newRemote: manifest, touchedPaths: new Set([path]) };
 		});
 	}
 
@@ -310,22 +357,27 @@ export class SyncController {
 				ESyncLogOperation.Pull,
 				`Pulled ${selected.size} hunk(s) of ${path}.`,
 			);
+			return { newRemote: result.remote, touchedPaths: new Set([path]) };
 		});
 	}
 
 	async revertPaths(paths: ReadonlyArray<string>): Promise<void> {
 		if (paths.length === 0) return;
+		const touched = new Set(paths);
 		await this.runOperation(ESyncLogOperation.Compare, async (deps, result) => {
+			const nextHashCache = { ...result.updatedCache };
 			for (const path of paths) {
 				const change = result.diff.localChanges.find((c) => c.path === path);
 				const baselineEntry = deps.state.baseline?.files[path];
 				if (!change && !baselineEntry) continue;
 				if (change?.type === "local-add") {
 					await deletePath(deps.adapter, path);
+					delete nextHashCache[path];
 					continue;
 				}
 				if (!baselineEntry) {
 					await deletePath(deps.adapter, path);
+					delete nextHashCache[path];
 					continue;
 				}
 				const blob = await deps.storage.get(objectKey(baselineEntry.hash));
@@ -336,18 +388,26 @@ export class SyncController {
 					throw new Error(`Hash mismatch reverting ${path}`);
 				}
 				await writeBinary(deps.adapter, path, plaintext);
+				nextHashCache[path] = {
+					mtime: Date.now(),
+					size: baselineEntry.size,
+					hash: baselineEntry.hash,
+				};
 			}
+			const freshState = this.host.getState() ?? deps.state;
+			await this.host.persistState({ ...freshState, hashCache: nextHashCache });
 			await this.host.logInfo(
 				ESyncLogOperation.Compare,
 				`Reverted ${paths.length} file(s).`,
 				Array.from(paths).slice(0, 50),
 			);
+			return { newRemote: result.remote, touchedPaths: touched };
 		});
 	}
 
 	async revertHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
 		if (selected.size === 0) return;
-		await this.runOperation(ESyncLogOperation.Compare, async (deps) => {
+		await this.runOperation(ESyncLogOperation.Compare, async (deps, result) => {
 			const baselineEntry = deps.state.baseline?.files[path];
 			const baselineText = baselineEntry
 				? ((await this.loadRemoteText(deps, baselineEntry.hash)) ?? "")
@@ -361,10 +421,19 @@ export class SyncController {
 			const merged = applyHunks(baselineText, hunks, keep);
 			const bytes = textToBytes(merged);
 			await writeBinary(deps.adapter, path, bytes);
+			const nextHashCache = { ...result.updatedCache };
+			nextHashCache[path] = {
+				mtime: Date.now(),
+				size: bytes.length,
+				hash: await sha256Hex(bytes),
+			};
+			const freshState = this.host.getState() ?? deps.state;
+			await this.host.persistState({ ...freshState, hashCache: nextHashCache });
 			await this.host.logInfo(
 				ESyncLogOperation.Compare,
 				`Reverted ${selected.size} hunk(s) of ${path}.`,
 			);
+			return { newRemote: result.remote, touchedPaths: new Set([path]) };
 		});
 	}
 
@@ -384,6 +453,7 @@ export class SyncController {
 			};
 			await this.host.persistState(state);
 			await this.host.logInfo(ESyncLogOperation.Push, `Resolved conflict (kept local): ${path}.`);
+			return { newRemote: manifest, touchedPaths: new Set([path]) };
 		});
 	}
 
@@ -410,7 +480,22 @@ export class SyncController {
 			};
 			await this.host.persistState(state);
 			await this.host.logInfo(ESyncLogOperation.Pull, `Resolved conflict (accepted remote): ${path}.`);
+			return { newRemote: result.remote, touchedPaths: new Set([path]) };
 		});
+	}
+
+	async resolveConflicts(
+		paths: ReadonlyArray<string>,
+		strategy: EConflictStrategy,
+	): Promise<void> {
+		const set = new Set(paths);
+		if (set.size === 0) return;
+		const handlers: Record<EConflictStrategy, (deps: EngineDependencies, result: CompareResult) => Promise<OperationOutcome>> = {
+			[EConflictStrategy.KeepLocal]: (deps, result) => this.batchKeepLocal(deps, result, set),
+			[EConflictStrategy.AcceptRemote]: (deps, result) => this.batchAcceptRemote(deps, result, set),
+		};
+		const op = strategy === EConflictStrategy.KeepLocal ? ESyncLogOperation.Push : ESyncLogOperation.Pull;
+		await this.runOperation(op, handlers[strategy]);
 	}
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
@@ -444,6 +529,122 @@ export class SyncController {
 
 	clearDiffCache(): void {
 		this.diffCache.clear();
+	}
+
+	private async batchKeepLocal(
+		deps: EngineDependencies,
+		result: CompareResult,
+		paths: ReadonlySet<string>,
+	): Promise<OperationOutcome> {
+		const conflictPaths = result.diff.conflicts
+			.map((c) => c.path)
+			.filter((p) => paths.has(p));
+		if (conflictPaths.length === 0) {
+			throw new Error("No matching conflicts to resolve");
+		}
+		const baseFiles = { ...(result.remote?.files ?? {}) };
+		const nextHashCache = { ...result.updatedCache };
+		let done = 0;
+		for (const path of conflictPaths) {
+			const localBytes = await loadLocalBytes(deps.adapter, path);
+			if (!localBytes) throw new Error(`Local file missing: ${path}`);
+			const hash = await sha256Hex(localBytes);
+			const exists = await deps.storage.exists(objectKey(hash));
+			if (!exists) {
+				const blob = await encryptBytes(deps.key, localBytes);
+				await deps.storage.put(objectKey(hash), blob);
+			}
+			const kind = deps.scope.classify(path);
+			const entry: ManifestEntry = {
+				hash,
+				size: localBytes.length,
+				mtime: Date.now(),
+				kind,
+			};
+			baseFiles[path] = entry;
+			nextHashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
+			this.progressText = `Resolving ${++done}/${conflictPaths.length}…`;
+			this.broadcastSoon();
+		}
+		const folders = mergeFolderArrays(result.remote?.folders, result.snapshot.emptyFolders);
+		const vaultId = deps.state.vaultId ?? result.remote?.vaultId ?? deps.state.deviceId;
+		const manifest = buildManifest(deps.state.deviceId, vaultId, result.remote, {
+			files: baseFiles,
+			skipped: [],
+			emptyFolders: folders,
+			ignoredPaths: [],
+		});
+		await publishManifestWithGuard(
+			deps.storage,
+			deps.key,
+			manifest,
+			result.remote?.snapshotId ?? null,
+		);
+		const state: LocalState = {
+			deviceId: deps.state.deviceId || randomId(),
+			vaultId: manifest.vaultId,
+			baseline: manifest,
+			hashCache: nextHashCache,
+		};
+		await this.host.persistState(state);
+		await this.host.logInfo(
+			ESyncLogOperation.Push,
+			`Resolved ${conflictPaths.length} conflict(s) by keeping local.`,
+			conflictPaths.slice(0, 50),
+		);
+		this.progressText = null;
+		return { newRemote: manifest, touchedPaths: new Set(conflictPaths) };
+	}
+
+	private async batchAcceptRemote(
+		deps: EngineDependencies,
+		result: CompareResult,
+		paths: ReadonlySet<string>,
+	): Promise<OperationOutcome> {
+		if (!result.remote) throw new Error("Cannot resolve: remote manifest is missing");
+		const remote = result.remote;
+		const conflictPaths = result.diff.conflicts
+			.map((c) => c.path)
+			.filter((p) => paths.has(p));
+		if (conflictPaths.length === 0) {
+			throw new Error("No matching conflicts to resolve");
+		}
+		const baselineFiles: Record<string, ManifestEntry> = { ...(deps.state.baseline?.files ?? remote.files) };
+		const nextHashCache = { ...result.updatedCache };
+		let done = 0;
+		for (const path of conflictPaths) {
+			const remoteEntry = remote.files[path];
+			if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
+			const blob = await deps.storage.get(objectKey(remoteEntry.hash));
+			if (!blob) throw new Error(`Missing remote object for ${path}`);
+			const plaintext = await decryptBytes(deps.key, blob);
+			const verify = await sha256Hex(plaintext);
+			if (verify !== remoteEntry.hash) throw new Error(`Hash mismatch resolving ${path}`);
+			await writeBinary(deps.adapter, path, plaintext);
+			baselineFiles[path] = remoteEntry;
+			nextHashCache[path] = { mtime: Date.now(), size: plaintext.length, hash: remoteEntry.hash };
+			this.progressText = `Resolving ${++done}/${conflictPaths.length}…`;
+			this.broadcastSoon();
+		}
+		const baseline: Manifest = {
+			...remote,
+			files: baselineFiles,
+			parentSnapshotId: deps.state.baseline?.snapshotId ?? null,
+		};
+		const state: LocalState = {
+			deviceId: deps.state.deviceId || randomId(),
+			vaultId: baseline.vaultId,
+			baseline,
+			hashCache: nextHashCache,
+		};
+		await this.host.persistState(state);
+		await this.host.logInfo(
+			ESyncLogOperation.Pull,
+			`Resolved ${conflictPaths.length} conflict(s) by accepting remote.`,
+			conflictPaths.slice(0, 50),
+		);
+		this.progressText = null;
+		return { newRemote: remote, touchedPaths: new Set(conflictPaths) };
 	}
 
 	private cacheKeyForPath(path: string, status: PathStatus): string {
@@ -503,7 +704,7 @@ export class SyncController {
 				...deps,
 				onScanProgress: (scanned) => {
 					this.progressText = `Scanning… ${scanned} files`;
-					this.broadcast();
+					this.broadcastSoon();
 				},
 			};
 			const result = await compare(depsWithProgress);
@@ -524,7 +725,7 @@ export class SyncController {
 
 	private runOperation(
 		operation: ESyncLogOperation,
-		fn: (deps: EngineDependencies, result: CompareResult) => Promise<void>,
+		fn: (deps: EngineDependencies, result: CompareResult) => Promise<OperationOutcome>,
 	): Promise<void> {
 		return this.enqueue(async () => {
 			this.error = null;
@@ -537,17 +738,34 @@ export class SyncController {
 					this.result = result;
 					this.resultAt = Date.now();
 				}
-				await fn(deps, result);
+				const outcome = await fn(deps, result);
 				const freshState = this.host.getState() ?? deps.state;
-				const freshDeps: EngineDependencies = { ...deps, state: freshState };
-				const refreshed = await compare(freshDeps);
-				this.result = refreshed;
+				const recomputed = this.recomputeAfterWrite(
+					result,
+					freshState,
+					outcome.newRemote,
+					outcome.touchedPaths,
+				);
+				this.result = recomputed;
 				this.resultAt = Date.now();
 				this.diffCache.clear();
 				this.staleReason = null;
-				const state: LocalState = { ...freshState, hashCache: refreshed.updatedCache };
-				await this.host.persistState(state);
 			} catch (err) {
+				if (err instanceof ConcurrentPushError) {
+					this.error = null;
+					this.staleReason = "Remote changed concurrently — re-comparing…";
+					this.result = null;
+					this.diffCache.clear();
+					this.broadcast();
+					try {
+						await this.doRefresh();
+					} catch (refreshErr) {
+						this.error =
+							refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+					}
+					await this.host.logWarn(operation, err.message);
+					return;
+				}
 				this.error = err instanceof Error ? err.message : String(err);
 				await this.host.logError(operation, this.error);
 			} finally {
@@ -556,7 +774,65 @@ export class SyncController {
 		});
 	}
 
+	private recomputeAfterWrite(
+		prevResult: CompareResult,
+		freshState: LocalState,
+		newRemote: Manifest | null,
+		touchedPaths: ReadonlySet<string>,
+	): CompareResult {
+		const baseline = freshState.baseline;
+		const baselineFiles = baseline?.files ?? {};
+		const remoteFiles = newRemote?.files ?? {};
+		const files: Record<string, ManifestEntry> = { ...prevResult.snapshot.files };
+		for (const path of touchedPaths) {
+			const next = baselineFiles[path] ?? remoteFiles[path];
+			if (next) {
+				files[path] = next;
+			} else {
+				delete files[path];
+			}
+		}
+		const snapshot: LocalSnapshot = {
+			...prevResult.snapshot,
+			files,
+		};
+		const result = diff({ local: snapshot, remote: newRemote, baseline });
+		return {
+			snapshot,
+			remote: newRemote,
+			diff: result,
+			updatedCache: freshState.hashCache,
+		};
+	}
+
 	private broadcast(): void {
+		this.cancelPendingBroadcast();
+		this.emitSnapshot();
+	}
+
+	private broadcastSoon(): void {
+		if (this.broadcastFrame !== null) return;
+		const schedule =
+			typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
+				? (cb: () => void) => window.requestAnimationFrame(cb)
+				: (cb: () => void) => window.setTimeout(cb, 0) as unknown as number;
+		this.broadcastFrame = schedule(() => {
+			this.broadcastFrame = null;
+			this.emitSnapshot();
+		}) as unknown as number;
+	}
+
+	private cancelPendingBroadcast(): void {
+		if (this.broadcastFrame === null) return;
+		if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+			window.cancelAnimationFrame(this.broadcastFrame);
+		} else {
+			window.clearTimeout(this.broadcastFrame);
+		}
+		this.broadcastFrame = null;
+	}
+
+	private emitSnapshot(): void {
 		const snapshot = this.getSnapshot();
 		for (const listener of this.listeners) {
 			try {
@@ -611,6 +887,18 @@ function updateBaselineEntry(
 		...baseline,
 		files: { ...baseline.files, [path]: entry },
 	};
+}
+
+function mergeFolderArrays(
+	remoteFolders: ReadonlyArray<string> | undefined,
+	localFolders: ReadonlyArray<string>,
+): string[] {
+	if (remoteFolders && remoteFolders.length > 0) {
+		const merged = new Set<string>(remoteFolders);
+		for (const dir of localFolders) merged.add(dir);
+		return Array.from(merged);
+	}
+	return [...localFolders];
 }
 
 function sumBytes(

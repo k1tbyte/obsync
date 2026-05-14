@@ -59,7 +59,11 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 			return withRetry(async () => {
 				try {
 					const out = await withTimeout(
-						client.send(new GetObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+						client.send(new GetObjectCommand({
+							Bucket: config.bucket,
+							Key: fullKey(key),
+							ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`
+						})),
 					);
 					const body = out.Body;
 					if (!body) return new Uint8Array(0);
@@ -79,6 +83,7 @@ export function createS3Storage(config: ObjectStorageConfig): ObjectStorage {
 							Key: fullKey(key),
 							Body: body,
 							ContentType: contentType ?? "application/octet-stream",
+							CacheControl: "no-cache, no-store, must-revalidate",
 						}),
 					),
 				),
