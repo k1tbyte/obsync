@@ -2,14 +2,15 @@ import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
 import { decryptBytes, encryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
 import type { ObjectStorage } from "../storage/s3";
-import type {
-	DiffResult,
-	FileKind,
-	HashCacheEntry,
-	LocalSnapshot,
-	LocalState,
-	Manifest,
-	ManifestEntry,
+import {
+	EChangeType,
+	type DiffResult,
+	type EFileKind,
+	type HashCacheEntry,
+	type LocalSnapshot,
+	type LocalState,
+	type Manifest,
+	type ManifestEntry,
 } from "../types";
 import { deletePath, ensureDir, readBinary, removeEmptyDir, writeBinary } from "../vault/io";
 import { scanVault } from "../vault/scanner";
@@ -144,8 +145,8 @@ export async function pullPaths(
 	const remote = compareResult.remote;
 	const changes = compareResult.diff.remoteChanges.filter((c) => pathSet.has(c.path));
 
-	const downloads = changes.filter((c) => c.type !== "remote-delete");
-	const deletions = changes.filter((c) => c.type === "remote-delete");
+	const downloads = changes.filter((c) => c.type !== EChangeType.RemoteDelete);
+	const deletions = changes.filter((c) => c.type === EChangeType.RemoteDelete);
 	const total = downloads.length + deletions.length;
 	let done = 0;
 
@@ -205,7 +206,7 @@ export async function pushSingleFile(
 		const blob = await encryptBytes(deps.key, input.bytes);
 		await deps.storage.put(objectKey(hash), blob);
 	}
-	const kind: FileKind = deps.scope.classify(input.path);
+	const kind: EFileKind = deps.scope.classify(input.path);
 	const entry: ManifestEntry = {
 		hash,
 		size: input.bytes.length,
@@ -234,11 +235,11 @@ export async function pushSingleFile(
 function buildPartialFileMap(input: {
 	base: Manifest | null;
 	snapshot: LocalSnapshot;
-	localChanges: ReadonlyArray<{ path: string; type: string }>;
+	localChanges: ReadonlyArray<{ path: string; type: EChangeType }>;
 }): Record<string, ManifestEntry> {
 	const next: Record<string, ManifestEntry> = { ...(input.base?.files ?? {}) };
 	for (const change of input.localChanges) {
-		if (change.type === "local-delete") {
+		if (change.type === EChangeType.LocalDelete) {
 			delete next[change.path];
 			continue;
 		}
@@ -285,12 +286,12 @@ function buildAdvancedBaseline(input: {
 }
 
 function collectUploads(
-	changes: ReadonlyArray<{ path: string; type: string }>,
+	changes: ReadonlyArray<{ path: string; type: EChangeType }>,
 	snapshot: LocalSnapshot,
 ): Array<{ path: string; hash: string }> {
 	const uploads: Array<{ path: string; hash: string }> = [];
 	for (const change of changes) {
-		if (change.type === "local-delete") continue;
+		if (change.type === EChangeType.LocalDelete) continue;
 		const entry: ManifestEntry | undefined = snapshot.files[change.path];
 		if (!entry) continue;
 		uploads.push({ path: change.path, hash: entry.hash });

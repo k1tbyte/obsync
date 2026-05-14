@@ -2,7 +2,7 @@ import type { DataAdapter } from "obsidian";
 
 import type { EncryptionKey } from "../crypto";
 import type { ObjectStorage } from "../storage/s3";
-import type { ChangeType, Conflict, FileChange, Manifest } from "../types";
+import type { Conflict, EChangeType, FileChange, Manifest } from "../types";
 import {
 	bytesToText,
 	isLikelyText,
@@ -21,7 +21,7 @@ export enum EDiffDirection {
 export interface FileDiffModel {
 	path: string;
 	direction: EDiffDirection;
-	changeType: ChangeType | "conflict";
+	changeType: EChangeType | "conflict";
 	leftText: string;
 	rightText: string;
 	baseText: string | null;

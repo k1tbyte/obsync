@@ -1,13 +1,13 @@
 {
 	"name": "obsync",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Simple plugin to synchronize files to S3.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json",
+		"version": "node version-bump.mjs",
 		"lint": "eslint \"src/**/*.ts\"",
 		"prepare": "husky"
 	},

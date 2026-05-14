@@ -5,25 +5,13 @@ import { registerCommands } from "./commands";
 import {
     DIFF_VIEW_TYPE,
     IGNORE_FILE_NAME,
-    PERSIST_STATE_DEBOUNCE_MS,
     SOURCE_CONTROL_VIEW_TYPE,
 } from "./constants";
-import type { EncryptionKey } from "./crypto";
-import {
-    bindingSignature,
-    clearCachedPassphrase,
-    loadCachedPassphrase,
-    saveCachedPassphrase,
-} from "./crypto/passphrase-cache";
-import {
-    appendSyncLog,
-    createSyncLogEntry,
-    ESyncLogLevel,
-    ESyncLogOperation,
-    loadSyncLogs,
-    saveSyncLogs,
-    type SyncLogEntry,
-} from "./logs/store";
+import { LogService } from "./core/log-service";
+import { PassphraseManager } from "./core/passphrase-manager";
+import { createSessionOpener } from "./core/session-factory";
+import { StatePersister } from "./core/state-persister";
+import type { SyncLogEntry } from "./logs/store";
 import {
     DEFAULT_SETTINGS,
     isStorageConfigured,
@@ -38,51 +26,54 @@ import {
     type ObsyncTransferSettings,
 } from "./settings/transfer";
 import { SyncController } from "./sync/controller";
-import type { EngineDependencies } from "./sync/engine";
-import { fetchRemoteManifest } from "./sync/manifest";
 import { registerScheduler } from "./sync/scheduler";
-import { deriveSessionKey } from "./sync/session";
-import { loadState, saveState } from "./sync/state";
-import { createS3Storage, type ObjectStorage } from "./storage/s3";
 import type { LocalState } from "./types";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
-import { askPassphrase } from "./ui/passphrase-modal";
 import { registerRibbon } from "./ui/ribbon";
 import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
 import { SourceControlView } from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
-import { confirmVaultAdoption } from "./ui/vault-adoption-modal";
-import { loadIgnoreMatcher } from "./vault/ignore";
-import { createScopePolicy } from "./vault/scope";
 
 const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 
 export default class ObsyncPlugin extends Plugin {
     settings: ObsyncSettings = DEFAULT_SETTINGS;
     controller!: SyncController;
-    private state: LocalState | null = null;
-    private passphrase: string | null = null;
-    private cachedKey: { key: EncryptionKey; signature: string } | null = null;
-    private syncLogs: SyncLogEntry[] = [];
+    private logs!: LogService;
+    private statePersister!: StatePersister;
+    private passphraseManager!: PassphraseManager;
     private scopeRefreshTimer: number | null = null;
-    private hashCacheFlushTimer: number | null = null;
-    private pendingHashCacheState: LocalState | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
-        this.state = await loadState(this.app.vault.adapter, this.app.vault.configDir);
-        this.syncLogs = await loadSyncLogs(this.app.vault.adapter, this.app.vault.configDir);
+        this.logs = new LogService(this.app.vault.adapter, this.app.vault.configDir);
+        await this.logs.load();
+        this.statePersister = new StatePersister(this.app.vault.adapter, this.app.vault.configDir);
+        this.passphraseManager = new PassphraseManager(
+            this.app,
+            this.app.vault.adapter,
+            this.app.vault.configDir,
+            this.settings,
+        );
+
+        const openSession = createSessionOpener({
+            app: this.app,
+            settings: this.settings,
+            passphrase: this.passphraseManager,
+            state: this.statePersister,
+            logs: this.logs,
+        });
 
         this.controller = new SyncController({
             app: this.app,
             settings: this.settings,
-            openSession: () => this.openSession(),
-            persistState: (state) => this.persistState(state),
-            getState: () => this.state,
-            logInfo: (op, msg, details) => this.logInfo(op, msg, details),
-            logWarn: (op, msg, details) => this.logWarn(op, msg, details),
-            logError: (op, msg, details) => this.logError(op, msg, details),
+            openSession,
+            persistState: (state) => this.statePersister.persist(state),
+            getState: () => this.statePersister.state,
+            logInfo: (op, msg, details) => this.logs.info(op, msg, details),
+            logWarn: (op, msg, details) => this.logs.warn(op, msg, details),
+            logError: (op, msg, details) => this.logs.error(op, msg, details),
         });
 
         this.addSettingTab(new ObsyncSettingTab(this.app, this));
@@ -113,17 +104,9 @@ export default class ObsyncPlugin extends Plugin {
             window.clearTimeout(this.scopeRefreshTimer);
             this.scopeRefreshTimer = null;
         }
-        if (this.hashCacheFlushTimer !== null) {
-            window.clearTimeout(this.hashCacheFlushTimer);
-            this.hashCacheFlushTimer = null;
-            const pending = this.pendingHashCacheState;
-            if (pending) {
-                void saveState(this.app.vault.adapter, this.app.vault.configDir, pending);
-            }
-            this.pendingHashCacheState = null;
-        }
-        this.passphrase = null;
-        this.cachedKey = null;
+        this.statePersister?.dispose();
+        this.controller?.dispose();
+        this.passphraseManager?.dispose();
     }
 
     scheduleScopeRefresh(reason = "Sync scope changed."): void {
@@ -167,70 +150,40 @@ export default class ObsyncPlugin extends Plugin {
     }
 
     getLogs(): readonly SyncLogEntry[] {
-        return this.syncLogs;
+        return this.logs.getEntries();
     }
 
     async clearLogs(): Promise<void> {
-        this.syncLogs = [];
-        await saveSyncLogs(this.app.vault.adapter, this.app.vault.configDir, this.syncLogs);
-    }
-
-    async logInfo(
-        operation: ESyncLogOperation,
-        message: string,
-        details: readonly string[] = [],
-    ): Promise<void> {
-        await this.appendLog(ESyncLogLevel.Info, operation, message, details);
-    }
-
-    async logWarn(
-        operation: ESyncLogOperation,
-        message: string,
-        details: readonly string[] = [],
-    ): Promise<void> {
-        await this.appendLog(ESyncLogLevel.Warn, operation, message, details);
-    }
-
-    async logError(
-        operation: ESyncLogOperation,
-        message: string,
-        details: readonly string[] = [],
-    ): Promise<void> {
-        await this.appendLog(ESyncLogLevel.Error, operation, message, details);
+        await this.logs.clear();
     }
 
     hasPassphrase(): boolean {
-        return this.passphrase !== null;
+        return this.passphraseManager.has();
     }
 
     forgetPassphrase(): void {
-        this.passphrase = null;
-        this.cachedKey = null;
-        void clearCachedPassphrase(this.app.vault.adapter, this.app.vault.configDir);
+        this.passphraseManager.forget();
     }
 
     async promptPassphrase(replace: boolean): Promise<boolean> {
-        if (this.passphrase && !replace) return true;
-        if (!replace && (await this.tryLoadCachedPassphrase())) return true;
-        const value = await askPassphrase(this.app);
-        if (!value) return false;
-        this.passphrase = value;
-        this.cachedKey = null;
-        await this.persistPassphraseIfEnabled();
-        return true;
+        return this.passphraseManager.prompt(replace);
+    }
+
+    applyState(state: LocalState): void {
+        this.statePersister.setInitial(state);
     }
 
     private async requireTransferPassphrase(): Promise<string | null> {
-        if (!(await this.promptPassphrase(false))) return null;
-        return this.passphrase;
+        if (!(await this.passphraseManager.prompt(false))) return null;
+        return this.passphraseManager.current();
     }
 
     private async applyImportedSettings(settings: ObsyncTransferSettings): Promise<void> {
         const nextSettings = mergeSettings({ ...this.settings, ...settings });
         Object.assign(this.settings, nextSettings);
-        this.cachedKey = null;
+        this.passphraseManager.invalidateKey();
         await this.saveSettings();
-        await this.persistPassphraseIfEnabled();
+        await this.passphraseManager.persistIfEnabled();
         this.scheduleScopeRefresh("Settings imported.");
     }
 
@@ -250,127 +203,6 @@ export default class ObsyncPlugin extends Plugin {
         }
     }
 
-    applyState(state: LocalState): void {
-        this.state = state;
-    }
-
-    async persistState(state: LocalState): Promise<void> {
-        const prev = this.state;
-        this.state = state;
-        if (this.canDebouncePersist(prev, state)) {
-            this.scheduleHashCacheFlush(state);
-            return;
-        }
-        await this.flushHashCachePending();
-        await saveState(this.app.vault.adapter, this.app.vault.configDir, state);
-    }
-
-    private canDebouncePersist(prev: LocalState | null, next: LocalState): boolean {
-        if (!prev) return false;
-        if (prev.deviceId !== next.deviceId) return false;
-        if (prev.vaultId !== next.vaultId) return false;
-        if (prev.baseline !== next.baseline) return false;
-        return true;
-    }
-
-    private scheduleHashCacheFlush(state: LocalState): void {
-        this.pendingHashCacheState = state;
-        if (this.hashCacheFlushTimer !== null) return;
-        this.hashCacheFlushTimer = window.setTimeout(() => {
-            this.hashCacheFlushTimer = null;
-            const pending = this.pendingHashCacheState;
-            this.pendingHashCacheState = null;
-            if (!pending) return;
-            void saveState(this.app.vault.adapter, this.app.vault.configDir, pending);
-        }, PERSIST_STATE_DEBOUNCE_MS);
-    }
-
-    private async flushHashCachePending(): Promise<void> {
-        if (this.hashCacheFlushTimer === null) return;
-        window.clearTimeout(this.hashCacheFlushTimer);
-        this.hashCacheFlushTimer = null;
-        this.pendingHashCacheState = null;
-    }
-
-    async openSession(): Promise<EngineDependencies | null> {
-        if (!isStorageConfigured(this.settings)) {
-            await this.logWarn(
-                ESyncLogOperation.Session,
-                "Session blocked because storage is not configured.",
-            );
-            new Notice("Obsync: configure S3 bucket and credentials first.");
-            return null;
-        }
-        if (!(await this.promptPassphrase(false))) {
-            await this.logWarn(
-                ESyncLogOperation.Session,
-                "Session blocked because the passphrase is missing.",
-            );
-            new Notice("Obsync: passphrase is required.");
-            return null;
-        }
-        const adapter = this.app.vault.adapter;
-        const storage = createS3Storage({
-            endpoint: this.settings.endpoint,
-            region: this.settings.region,
-            bucket: this.settings.bucket,
-            prefix: this.settings.prefix,
-            accessKeyId: this.settings.accessKeyId,
-            secretAccessKey: this.settings.secretAccessKey,
-            forcePathStyle: this.settings.forcePathStyle,
-        });
-        const key = await this.resolveKey(storage);
-        const state = this.state ?? (await loadState(adapter, this.app.vault.configDir));
-        this.state = state;
-        await this.persistDeviceIdIfNew(state);
-
-        if (state.vaultId === null) {
-            const adopted = await this.confirmAdoptionIfNeeded(storage, key);
-            if (!adopted) {
-                await this.logWarn(
-                    ESyncLogOperation.Session,
-                    "Session cancelled: user declined to adopt remote vault.",
-                );
-                return null;
-            }
-        }
-
-        const ignore = await loadIgnoreMatcher(adapter, this.settings.ignorePatterns);
-        return {
-            adapter,
-            storage,
-            scope: createScopePolicy({
-                settingsSync: this.settings.settingsSync,
-                configDir: this.app.vault.configDir,
-                ignore,
-            }),
-            key,
-            state,
-            maxFileBytes: this.settings.maxFileBytes,
-            concurrency: this.settings.concurrency,
-        };
-    }
-
-    private async confirmAdoptionIfNeeded(
-        storage: ObjectStorage,
-        key: EncryptionKey,
-    ): Promise<boolean> {
-        const localFileCount = this.app.vault.getFiles().length;
-        if (localFileCount === 0) return true;
-        let remote;
-        try {
-            remote = await fetchRemoteManifest(storage, key);
-        } catch (err) {
-            console.warn("[obsync] adoption peek failed", err);
-            return true;
-        }
-        if (!remote) return true;
-        return confirmVaultAdoption(this.app, {
-            remoteVaultId: remote.vaultId,
-            localFileCount,
-        });
-    }
-
     private registerIgnoreFileEvents(): void {
         const refreshIfIgnoreFile = (file: TAbstractFile, oldPath?: string): void => {
             if (file.path !== IGNORE_FILE_NAME && oldPath !== IGNORE_FILE_NAME) return;
@@ -384,68 +216,5 @@ export default class ObsyncPlugin extends Plugin {
             this.app.vault.on("rename", (file, oldPath) => refreshIfIgnoreFile(file, oldPath)),
         );
     }
-
-    private async tryLoadCachedPassphrase(): Promise<boolean> {
-        if (!this.settings.cachePassphrase) return false;
-        const cached = await loadCachedPassphrase(
-            this.app.vault.adapter,
-            this.app.vault.configDir,
-            this.currentBinding(),
-        );
-        if (!cached) return false;
-        this.passphrase = cached;
-        this.cachedKey = null;
-        return true;
-    }
-
-    private async persistPassphraseIfEnabled(): Promise<void> {
-        if (!this.settings.cachePassphrase) return;
-        if (!this.passphrase) return;
-        try {
-            await saveCachedPassphrase(
-                this.app.vault.adapter,
-                this.app.vault.configDir,
-                this.passphrase,
-                this.currentBinding(),
-            );
-        } catch (err) {
-            console.warn("[obsync] failed to cache passphrase", err);
-        }
-    }
-
-    private currentBinding(): string {
-        return bindingSignature({
-            endpoint: this.settings.endpoint,
-            region: this.settings.region,
-            bucket: this.settings.bucket,
-            prefix: this.settings.prefix,
-        });
-    }
-
-    private async resolveKey(storage: ObjectStorage): Promise<EncryptionKey> {
-        if (!this.passphrase) throw new Error("Passphrase is not set");
-        const signature = this.currentBinding();
-        if (this.cachedKey && this.cachedKey.signature === signature) return this.cachedKey.key;
-        const key = await deriveSessionKey(storage, this.passphrase);
-        this.cachedKey = { key, signature };
-        return key;
-    }
-
-    private async persistDeviceIdIfNew(state: LocalState): Promise<void> {
-        if (state.vaultId !== null) return;
-        await saveState(this.app.vault.adapter, this.app.vault.configDir, state);
-    }
-
-    private async appendLog(
-        level: ESyncLogLevel,
-        operation: ESyncLogOperation,
-        message: string,
-        details: readonly string[] = [],
-    ): Promise<void> {
-        this.syncLogs = appendSyncLog(
-            this.syncLogs,
-            createSyncLogEntry(level, operation, message, details),
-        );
-        await saveSyncLogs(this.app.vault.adapter, this.app.vault.configDir, this.syncLogs);
-    }
 }
+

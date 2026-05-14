@@ -2,10 +2,8 @@ import {
 	type App,
 	ItemView,
 	Menu,
-	Modal,
 	Notice,
 	Platform,
-	type View,
 	type WorkspaceLeaf,
 } from "obsidian";
 
@@ -17,43 +15,26 @@ import {
 import type ObsyncPlugin from "../main";
 import { EConflictStrategy, type SyncStatusSnapshot } from "../sync/controller";
 import type { FileDiffModel } from "../sync/projection";
-import type { Conflict, FileChange } from "../types";
+import { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
+import { renderConflictPreview } from "./source-control/conflict-preview";
+import {
+	confirmAdoptNewVault,
+	confirmBatchResolve,
+	showIgnoredFiles,
+} from "./source-control/modals";
+import { rowFromChange, rowFromConflict } from "./source-control/row-formatter";
+import { buildTree } from "./source-control/tree-builder";
+import {
+	emptySectionRefs,
+	emptySectionState,
+	ESection,
+	type FileRow,
+	type SectionRefs,
+	type SectionState,
+	type TreeNode,
+} from "./source-control/types";
 
-enum ESection {
-	Conflicts = "conflicts",
-	Local = "local",
-	Remote = "remote",
-}
-
-interface SectionState {
-	collapsed: boolean;
-	selected: Set<string>;
-	expandedFolders: Set<string>;
-}
-
-interface FileRow {
-	path: string;
-	statusLetter: string;
-	statusClass: string;
-	isConflict: boolean;
-}
-
-interface TreeNode {
-	name: string;
-	fullPath: string;
-	row?: FileRow;
-	children: TreeNode[];
-}
-
-interface MutableTreeNode extends TreeNode {
-	folders: Map<string, MutableTreeNode>;
-}
-
-interface SectionRefs {
-	actionButton: HTMLButtonElement | null;
-	revertButton: HTMLButtonElement | null;
-	counts: HTMLSpanElement | null;
-}
+type SectionActionKind = "push" | "pull" | "none";
 
 export async function openSourceControlView(app: App, viewType: string): Promise<void> {
 	const existing = app.workspace.getLeavesOfType(viewType);
@@ -74,14 +55,14 @@ export class SourceControlView extends ItemView {
 	private readonly plugin: ObsyncPlugin;
 	private layout: "tree" | "flat" = "tree";
 	private readonly sectionState: Record<ESection, SectionState> = {
-		[ESection.Conflicts]: emptyState(),
-		[ESection.Local]: emptyState(),
-		[ESection.Remote]: emptyState(),
+		[ESection.Conflicts]: emptySectionState(),
+		[ESection.Local]: emptySectionState(),
+		[ESection.Remote]: emptySectionState(),
 	};
 	private readonly refs: Record<ESection, SectionRefs> = {
-		[ESection.Conflicts]: { actionButton: null, revertButton: null, counts: null },
-		[ESection.Local]: { actionButton: null, revertButton: null, counts: null },
-		[ESection.Remote]: { actionButton: null, revertButton: null, counts: null },
+		[ESection.Conflicts]: emptySectionRefs(),
+		[ESection.Local]: emptySectionRefs(),
+		[ESection.Remote]: emptySectionRefs(),
 	};
 	private root: HTMLElement | null = null;
 	private unsubscribe: (() => void) | null = null;
@@ -156,7 +137,7 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Conflicts,
 			"Conflicts",
-			diff.conflicts.map(toRowFromConflict),
+			diff.conflicts.map(rowFromConflict),
 			snapshot,
 			"none",
 		);
@@ -164,7 +145,7 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Local,
 			"Local changes (will push)",
-			diff.localChanges.map(toRowFromChange),
+			diff.localChanges.map(rowFromChange),
 			snapshot,
 			"push",
 		);
@@ -172,7 +153,7 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Remote,
 			"Remote changes (will pull)",
-			diff.remoteChanges.map(toRowFromChange),
+			diff.remoteChanges.map(rowFromChange),
 			snapshot,
 			"pull",
 		);
@@ -233,7 +214,10 @@ export class SourceControlView extends ItemView {
 			line.addClass("is-error");
 			line.setText(`Error: ${snapshot.error}`);
 			if (snapshot.error.includes("Remote vault id does not match local")) {
-				const adoptBtn = line.createEl("button", { text: "Adopt new vault", cls: ["mod-warning", "obsync-adopt-new-vault-btn"] });
+				const adoptBtn = line.createEl("button", {
+					text: "Adopt new vault",
+					cls: ["mod-warning", "obsync-adopt-new-vault-btn"],
+				});
 				adoptBtn.addEventListener("click", () => void this.handleAdoptNewVault());
 			}
 			return;
@@ -268,9 +252,9 @@ export class SourceControlView extends ItemView {
 		title: string,
 		rows: ReadonlyArray<FileRow>,
 		snapshot: SyncStatusSnapshot,
-		actionKind: "push" | "pull" | "none",
+		actionKind: SectionActionKind,
 	): void {
-		this.refs[section] = { actionButton: null, revertButton: null, counts: null };
+		this.refs[section] = emptySectionRefs();
 		if (rows.length === 0) return;
 		const state = this.sectionState[section];
 		const sectionEl = parent.createDiv({ cls: "obsync-section" });
@@ -399,69 +383,7 @@ export class SourceControlView extends ItemView {
 		item.createSpan({ cls: `obsync-file-status ${row.statusClass}`, text: row.statusLetter });
 		item.createSpan({ cls: "obsync-file-name", text: row.path });
 
-		if (row.isConflict) {
-			const keepBtn = item.createEl("button", {
-				cls: "obsync-row-action obsync-row-keep",
-				text: "Keep local",
-			});
-			keepBtn.setAttr("aria-label", "Keep local version");
-			keepBtn.setAttr("title", "Keep local version");
-			keepBtn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				void this.handleResolveKeepLocal(row.path);
-			});
-
-			const acceptBtn = item.createEl("button", {
-				cls: "obsync-row-action obsync-row-accept",
-				text: "Accept remote",
-			});
-			acceptBtn.setAttr("aria-label", "Accept remote version");
-			acceptBtn.setAttr("title", "Accept remote version");
-			acceptBtn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				void this.handleResolveAcceptRemote(row.path);
-			});
-
-			const expanded = this.expandedPreviews.has(row.path);
-			const expandBtn = item.createEl("button", {
-				cls: "obsync-expand-btn",
-				text: expanded ? "▾" : "▸",
-			});
-			expandBtn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				if (this.expandedPreviews.has(row.path)) {
-					this.expandedPreviews.delete(row.path);
-				} else {
-					this.expandedPreviews.add(row.path);
-				}
-				this.render(this.plugin.controller.getSnapshot(), true);
-			});
-
-			if (expanded) {
-				const previewEl = parent.createDiv({ cls: "obsync-conflict-preview" });
-				const cached = this.previewCache.get(row.path);
-				if (cached === undefined && !this.loadingPreviews.has(row.path)) {
-					this.loadingPreviews.add(row.path);
-					previewEl.setText("Loading diff…");
-					void this.plugin.controller.getFileDiff(row.path).then((model) => {
-						this.previewCache.set(row.path, model);
-						this.loadingPreviews.delete(row.path);
-						this.renderPreviewInto(previewEl, model, row.path);
-					});
-				} else if (cached === null) {
-					previewEl.setText("No diff available.");
-				} else if (cached?.isBinary) {
-					previewEl.setText("Binary file — cannot preview diff.");
-				} else if (cached) {
-					renderConflictPreview(previewEl, cached, row.path, {
-						keepLocal: (p) => this.handleResolveKeepLocal(p),
-						acceptRemote: (p) => this.handleResolveAcceptRemote(p),
-					});
-				} else {
-					previewEl.setText("Loading diff…");
-				}
-			}
-		}
+		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
 
 		item.addEventListener("click", () => {
 			void openDiffView(this.plugin, row.path);
@@ -470,6 +392,79 @@ export class SourceControlView extends ItemView {
 			e.preventDefault();
 			this.showContextMenu(e, row.path, section);
 		});
+	}
+
+	private renderConflictRowControls(
+		parent: HTMLElement,
+		item: HTMLElement,
+		row: FileRow,
+	): void {
+		const keepBtn = item.createEl("button", {
+			cls: "obsync-row-action obsync-row-keep",
+			text: "Keep local",
+		});
+		keepBtn.setAttr("aria-label", "Keep local version");
+		keepBtn.setAttr("title", "Keep local version");
+		keepBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			void this.handleResolveKeepLocal(row.path);
+		});
+
+		const acceptBtn = item.createEl("button", {
+			cls: "obsync-row-action obsync-row-accept",
+			text: "Accept remote",
+		});
+		acceptBtn.setAttr("aria-label", "Accept remote version");
+		acceptBtn.setAttr("title", "Accept remote version");
+		acceptBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			void this.handleResolveAcceptRemote(row.path);
+		});
+
+		const expanded = this.expandedPreviews.has(row.path);
+		const expandBtn = item.createEl("button", {
+			cls: "obsync-expand-btn",
+			text: expanded ? "▾" : "▸",
+		});
+		expandBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (this.expandedPreviews.has(row.path)) {
+				this.expandedPreviews.delete(row.path);
+			} else {
+				this.expandedPreviews.add(row.path);
+			}
+			this.render(this.plugin.controller.getSnapshot(), true);
+		});
+
+		if (expanded) this.renderInlinePreview(parent, row.path);
+	}
+
+	private renderInlinePreview(parent: HTMLElement, path: string): void {
+		const previewEl = parent.createDiv({ cls: "obsync-conflict-preview" });
+		const cached = this.previewCache.get(path);
+		if (cached === undefined && !this.loadingPreviews.has(path)) {
+			this.loadingPreviews.add(path);
+			previewEl.setText("Loading diff…");
+			void this.plugin.controller.getFileDiff(path).then((model) => {
+				this.previewCache.set(path, model);
+				this.loadingPreviews.delete(path);
+				this.renderPreviewInto(previewEl, model, path);
+			});
+			return;
+		}
+		if (cached === null) {
+			previewEl.setText("No diff available.");
+			return;
+		}
+		if (cached?.isBinary) {
+			previewEl.setText("Binary file — cannot preview diff.");
+			return;
+		}
+		if (cached) {
+			renderConflictPreview(previewEl, cached, path, this.previewHandlers());
+			return;
+		}
+		previewEl.setText("Loading diff…");
 	}
 
 	private renderPreviewInto(
@@ -487,10 +482,17 @@ export class SourceControlView extends ItemView {
 			previewEl.setText("Binary file — cannot preview diff.");
 			return;
 		}
-		renderConflictPreview(previewEl, model, path, {
+		renderConflictPreview(previewEl, model, path, this.previewHandlers());
+	}
+
+	private previewHandlers(): {
+		keepLocal: (p: string) => Promise<void>;
+		acceptRemote: (p: string) => Promise<void>;
+	} {
+		return {
 			keepLocal: (p) => this.handleResolveKeepLocal(p),
 			acceptRemote: (p) => this.handleResolveAcceptRemote(p),
-		});
+		};
 	}
 
 	private showContextMenu(event: MouseEvent, path: string, section: ESection): void {
@@ -720,105 +722,6 @@ export async function openDiffView(plugin: ObsyncPlugin, path: string): Promise<
 	await plugin.app.workspace.revealLeaf(leaf);
 }
 
-interface FileExplorerReveal extends View {
-	revealInFolder?: (file: unknown) => void;
-}
-
-async function openInEditor(app: App, path: string): Promise<void> {
-	const file = app.vault.getAbstractFileByPath(path);
-	if (!file) {
-		new Notice(`Obsync: cannot open ${path} (not in vault)`);
-		return;
-	}
-	const leaf = app.workspace.getLeaf(false);
-	if (leaf && "openFile" in leaf && typeof (leaf as unknown as { openFile?: (f: unknown) => Promise<void> }).openFile === "function") {
-		await (leaf as unknown as { openFile: (f: unknown) => Promise<void> }).openFile(file);
-	}
-}
-
-async function revealInFileExplorer(app: App, path: string): Promise<void> {
-	const file = app.vault.getAbstractFileByPath(path);
-	if (!file) {
-		new Notice(`Obsync: cannot reveal ${path}`);
-		return;
-	}
-	const leaves = app.workspace.getLeavesOfType("file-explorer");
-	const leaf = leaves[0];
-	if (!leaf) return;
-	await app.workspace.revealLeaf(leaf);
-	const view = leaf.view as FileExplorerReveal;
-	if (typeof view.revealInFolder === "function") {
-		view.revealInFolder(file);
-	}
-}
-
-function emptyState(): SectionState {
-	return { collapsed: false, selected: new Set(), expandedFolders: new Set() };
-}
-
-function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
-	const root = createFolderNode("", "");
-	for (const row of rows) {
-		const parts = row.path.split("/");
-		let current = root;
-		let prefix = "";
-		for (let i = 0; i < parts.length - 1; i++) {
-			const name = parts[i] as string;
-			prefix = prefix ? `${prefix}/${name}` : name;
-			let child = current.folders.get(name);
-			if (!child) {
-				child = createFolderNode(name, prefix);
-				current.folders.set(name, child);
-				current.children.push(child);
-			}
-			current = child;
-		}
-		current.children.push({
-			name: parts[parts.length - 1] as string,
-			fullPath: row.path,
-			row,
-			children: [],
-		});
-	}
-	return root;
-}
-
-function createFolderNode(name: string, fullPath: string): MutableTreeNode {
-	return { name, fullPath, children: [], folders: new Map() };
-}
-
-function toRowFromChange(change: FileChange): FileRow {
-	return {
-		path: change.path,
-		statusLetter: changeLetter(change.type),
-		statusClass: changeStatusClass(change.type),
-		isConflict: false,
-	};
-}
-
-function toRowFromConflict(conflict: Conflict): FileRow {
-	return {
-		path: conflict.path,
-		statusLetter: "C",
-		statusClass: "obsync-status-conflict",
-		isConflict: true,
-	};
-}
-
-function changeLetter(type: FileChange["type"]): string {
-	if (type.endsWith("add")) return "A";
-	if (type.endsWith("modify")) return "M";
-	if (type.endsWith("delete")) return "D";
-	return "?";
-}
-
-function changeStatusClass(type: FileChange["type"]): string {
-	if (type.endsWith("add")) return "obsync-status-add";
-	if (type.endsWith("modify")) return "obsync-status-modify";
-	if (type.endsWith("delete")) return "obsync-status-delete";
-	return "";
-}
-
 function canPushAll(snapshot: SyncStatusSnapshot): boolean {
 	if (snapshot.busy) return false;
 	const d = snapshot.result?.diff;
@@ -831,131 +734,4 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
-}
-
-function confirmBatchResolve(
-	app: App,
-	count: number,
-	strategy: EConflictStrategy,
-): Promise<boolean> {
-	const action = strategy === EConflictStrategy.KeepLocal ? "Keep local" : "Accept remote";
-	const description =
-		strategy === EConflictStrategy.KeepLocal
-			? "All local versions will be pushed and overwrite remote."
-			: "All remote versions will be downloaded and overwrite local.";
-	return new Promise((resolve) => {
-		const modal = new Modal(app);
-		let settled = false;
-		const finish = (confirmed: boolean): void => {
-			if (settled) return;
-			settled = true;
-			modal.close();
-			resolve(confirmed);
-		};
-		modal.titleEl.setText(`${action} for ${count} conflict(s)?`);
-		modal.contentEl.createEl("p", { text: description });
-		modal.contentEl.createEl("p", { text: "This cannot be undone." });
-		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
-		const cancelBtn = buttons.createEl("button", { text: "Cancel" });
-		cancelBtn.addEventListener("click", () => finish(false));
-		const okBtn = buttons.createEl("button", { text: action });
-		okBtn.addClass("mod-cta");
-		okBtn.addEventListener("click", () => finish(true));
-		modal.onClose = (): void => finish(false);
-		modal.open();
-	});
-}
-
-function confirmAdoptNewVault(app: App): Promise<boolean> {
-	return new Promise((resolve) => {
-		const modal = new Modal(app);
-		let settled = false;
-		const finish = (confirmed: boolean): void => {
-			if (settled) return;
-			settled = true;
-			modal.close();
-			resolve(confirmed);
-		};
-		modal.titleEl.setText("Adopt new remote vault?");
-		modal.contentEl.createEl("p", {
-			text: "The remote vault ID has changed, which usually means the remote storage was reset from another device."
-		});
-		modal.contentEl.createEl("p", {
-			text: "Adopting will forget your previous sync baseline. Your local files will be compared against the new remote."
-		});
-		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
-		const cancelBtn = buttons.createEl("button", { text: "Cancel" });
-		cancelBtn.addEventListener("click", () => finish(false));
-		const okBtn = buttons.createEl("button", { text: "Adopt" });
-		okBtn.addClass("mod-cta");
-		okBtn.addEventListener("click", () => finish(true));
-		modal.onClose = (): void => finish(false);
-		modal.open();
-	});
-}
-
-function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
-	const modal = new Modal(app);
-	modal.titleEl.setText(`Ignored files (${paths.length})`);
-	modal.contentEl.createEl("p", {
-		text: "These files are excluded by .syncignore patterns or settings-level ignore rules.",
-	});
-	const list = modal.contentEl.createEl("ul", { cls: "obsync-ignored-list" });
-	for (const p of paths) {
-		list.createEl("li", { cls: "obsync-file-name", text: p });
-	}
-	modal.open();
-}
-
-const CONFLICT_PREVIEW_LINES = 10;
-
-interface ConflictPreviewHandlers {
-	keepLocal: (path: string) => Promise<void>;
-	acceptRemote: (path: string) => Promise<void>;
-}
-
-function renderConflictPreview(
-	parent: HTMLElement,
-	model: FileDiffModel,
-	path: string,
-	handlers: ConflictPreviewHandlers,
-): void {
-	const actions = parent.createDiv({ cls: "obsync-conflict-preview-actions" });
-	const keepBtn = actions.createEl("button", { text: "Keep local" });
-	keepBtn.addEventListener("click", (e) => {
-		e.stopPropagation();
-		void handlers.keepLocal(path);
-	});
-	const acceptBtn = actions.createEl("button", { text: "Accept remote" });
-	acceptBtn.addEventListener("click", (e) => {
-		e.stopPropagation();
-		void handlers.acceptRemote(path);
-	});
-
-	const hunks = model.hunks.hunks;
-	if (hunks.length === 0) {
-		parent.createEl("p", { cls: "obsync-conflict-preview-empty", text: "No textual differences." });
-		return;
-	}
-
-	const pre = parent.createEl("pre", { cls: "obsync-conflict-preview-diff" });
-	let linesShown = 0;
-	outer: for (const hunk of hunks) {
-		for (const line of hunk.lines) {
-			const span = pre.createSpan({
-				cls: `obsync-unified-line ${line.startsWith("+") ? "is-add" : line.startsWith("-") ? "is-del" : ""}`,
-			});
-			span.createSpan({ cls: "obsync-line-prefix", text: line[0] ?? " " });
-			span.createSpan({ text: line.slice(1) });
-			linesShown++;
-			if (linesShown >= CONFLICT_PREVIEW_LINES) break outer;
-		}
-	}
-	const remaining = hunks.reduce((n, h) => n + h.lines.length, 0) - linesShown;
-	if (remaining > 0) {
-		parent.createEl("p", {
-			cls: "obsync-conflict-preview-more",
-			text: `… ${remaining} more line(s) — open diff view for full details`,
-		});
-	}
 }

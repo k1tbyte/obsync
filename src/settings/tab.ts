@@ -8,8 +8,8 @@ import {
 	askSettingsTransferInput,
 	showSettingsTransferExport,
 } from "../ui/settings-transfer-modal";
-import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import { renderLogsView } from "./logs-view";
+import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 
 enum ESettingsViewTab {
 	Settings = "settings",
@@ -45,10 +45,110 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 ];
 
 const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
+const BYTES_PER_MB = 1024 * 1024;
+const MAX_CONCURRENCY = 16;
+const MIN_CONCURRENCY = 1;
+const MIN_MAX_FILE_MB = 1;
 
 interface UpdateOptions {
 	refreshScope?: boolean;
 }
+
+interface TextFieldConfig {
+	name: string;
+	desc?: string;
+	placeholder?: string;
+	password?: boolean;
+	get: (s: ObsyncSettings) => string;
+	set: (value: string, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
+	refreshScope?: boolean;
+}
+
+interface ToggleFieldConfig {
+	name: string;
+	desc?: string;
+	get: (s: ObsyncSettings) => boolean;
+	set: (value: boolean, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
+	refreshScope?: boolean;
+}
+
+interface NumberFieldConfig {
+	name: string;
+	desc?: string;
+	get: (s: ObsyncSettings) => string;
+	parse: (raw: string) => number;
+	set: (value: number) => Partial<ObsyncSettings>;
+	refreshScope?: boolean;
+}
+
+const STORAGE_FIELDS: ReadonlyArray<TextFieldConfig> = [
+	{
+		name: "Endpoint",
+		desc: "Base URL of the S3-compatible service. Leave empty for AWS S3.",
+		placeholder: "https://s3.example.com",
+		get: (s) => s.endpoint,
+		set: (v) => ({ endpoint: v.trim() }),
+	},
+	{
+		name: "Region",
+		get: (s) => s.region,
+		set: (v) => ({ region: v.trim() || "auto" }),
+	},
+	{
+		name: "Bucket",
+		get: (s) => s.bucket,
+		set: (v) => ({ bucket: v.trim() }),
+	},
+	{
+		name: "Prefix",
+		desc: "Optional path prefix inside the bucket. Use a separate prefix per vault.",
+		placeholder: "vaults/my-vault",
+		get: (s) => s.prefix,
+		set: (v) => ({ prefix: v.trim() }),
+	},
+];
+
+const CREDENTIAL_FIELDS: ReadonlyArray<TextFieldConfig> = [
+	{
+		name: "Access key ID",
+		get: (s) => s.accessKeyId,
+		set: (v) => ({ accessKeyId: v.trim() }),
+	},
+	{
+		name: "Secret access key",
+		password: true,
+		get: (s) => s.secretAccessKey,
+		set: (v) => ({ secretAccessKey: v.trim() }),
+	},
+];
+
+const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
+	{
+		name: "Status bar indicator",
+		get: (s) => s.showStatusBar,
+		set: (v) => ({ showStatusBar: v }),
+	},
+	{
+		name: "Ribbon icon",
+		get: (s) => s.showRibbonIcon,
+		set: (v) => ({ showRibbonIcon: v }),
+	},
+	{
+		name: "File explorer indicators",
+		desc: "Color file names in the file tree by change status.",
+		get: (s) => s.showFileExplorerIndicators,
+		set: (v) => ({ showFileExplorerIndicators: v }),
+	},
+];
+
+const AUTOMATION_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
+	{
+		name: "Auto-pull on startup",
+		desc: "Compare with remote shortly after Obsidian launches and pull non-conflicting changes.",
+		get: (s) => s.autoPullOnStartup,
+		set: (v) => ({ autoPullOnStartup: v }),
+	},
+];
 
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
@@ -105,49 +205,13 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private renderStorageSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Storage").setHeading();
-
-		new Setting(parent)
-			.setName("Endpoint")
-			.setDesc("Base URL of the S3-compatible service. Leave empty for AWS S3.")
-			.addText((t) =>
-				t
-					.setPlaceholder("https://s3.example.com")
-					.setValue(this.plugin.settings.endpoint)
-					.onChange((v) => this.update({ endpoint: v.trim() })),
-			);
-
-		new Setting(parent)
-			.setName("Region")
-			.addText((t) =>
-				t
-					.setValue(this.plugin.settings.region)
-					.onChange((v) => this.update({ region: v.trim() || "auto" })),
-			);
-
-		new Setting(parent)
-			.setName("Bucket")
-			.addText((t) =>
-				t.setValue(this.plugin.settings.bucket).onChange((v) => this.update({ bucket: v.trim() })),
-			);
-
-		new Setting(parent)
-			.setName("Prefix")
-			.setDesc("Optional path prefix inside the bucket. Use a separate prefix per vault.")
-			.addText((t) =>
-				t
-					.setPlaceholder("vaults/my-vault")
-					.setValue(this.plugin.settings.prefix)
-					.onChange((v) => this.update({ prefix: v.trim() })),
-			);
-
-		new Setting(parent)
-			.setName("Force path-style URLs")
-			.setDesc("Required for most non-AWS S3 backends.")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.forcePathStyle)
-					.onChange((v) => this.update({ forcePathStyle: v })),
-			);
+		for (const field of STORAGE_FIELDS) this.renderTextField(parent, field);
+		this.renderToggleField(parent, {
+			name: "Force path-style URLs",
+			desc: "Required for most non-AWS S3 backends.",
+			get: (s) => s.forcePathStyle,
+			set: (v) => ({ forcePathStyle: v }),
+		});
 	}
 
 	private renderCredentialsSection(parent: HTMLElement): void {
@@ -155,23 +219,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		new Setting(parent).setDesc(
 			"Stored locally in this device's plugin data. They are never uploaded.",
 		);
-
-		new Setting(parent)
-			.setName("Access key ID")
-			.addText((t) =>
-				t
-					.setValue(this.plugin.settings.accessKeyId)
-					.onChange((v) => this.update({ accessKeyId: v.trim() })),
-			);
-
-		new Setting(parent)
-			.setName("Secret access key")
-			.addText((t) => {
-				t.inputEl.type = "password";
-				t.setValue(this.plugin.settings.secretAccessKey).onChange((v) =>
-					this.update({ secretAccessKey: v.trim() }),
-				);
-			});
+		for (const field of CREDENTIAL_FIELDS) this.renderTextField(parent, field);
 	}
 
 	private renderTransferSection(parent: HTMLElement): void {
@@ -184,14 +232,14 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			.setName("Export setup")
 			.setDesc("Create a compact encrypted link and QR code for another device.")
 			.addButton((button) =>
-				button
-					.setButtonText("Export")
-					.onClick(() => void this.handleExportSettings()),
+				button.setButtonText("Export").onClick(() => void this.handleExportSettings()),
 			);
 
 		new Setting(parent)
 			.setName("Import setup")
-			.setDesc("Paste an encrypted setup link and replace storage, sync scope, ignore, and automation settings.")
+			.setDesc(
+				"Paste an encrypted setup link and replace storage, sync scope, ignore, and automation settings.",
+			)
 			.addButton((button) =>
 				button
 					.setButtonText("Import")
@@ -205,18 +253,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		new Setting(parent).setDesc(
 			"Workspace, cache, trash and device-local plugin data are never synced.",
 		);
-
 		for (const row of SETTINGS_SYNC_ROWS) {
-			new Setting(parent)
-				.setName(row.name)
-				.setDesc(row.desc)
-				.addToggle((t) =>
-					t.setValue(this.plugin.settings.settingsSync[row.key]).onChange((v) =>
-						this.update({
-							settingsSync: { ...this.plugin.settings.settingsSync, [row.key]: v },
-						}, { refreshScope: true }),
-					),
-				);
+			this.renderToggleField(parent, {
+				name: row.name,
+				desc: row.desc,
+				get: (s) => s.settingsSync[row.key],
+				set: (v) => ({
+					settingsSync: { ...this.plugin.settings.settingsSync, [row.key]: v },
+				}),
+				refreshScope: true,
+			});
 		}
 	}
 
@@ -240,97 +286,55 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private renderAutomationSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Automation").setHeading();
+		for (const toggle of AUTOMATION_TOGGLES) this.renderToggleField(parent, toggle);
 
-		new Setting(parent)
-			.setName("Auto-pull on startup")
-			.setDesc("Compare with remote shortly after Obsidian launches and pull non-conflicting changes.")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.autoPullOnStartup)
-					.onChange((v) => this.update({ autoPullOnStartup: v })),
-			);
+		this.renderNumberField(parent, {
+			name: "Auto-pull interval (minutes)",
+			desc: `Set to ${AUTO_PULL_MIN_MINUTES} to disable. Max ${AUTO_PULL_MAX_MINUTES}.`,
+			get: (s) => String(s.autoPullIntervalMinutes),
+			parse: (raw) => {
+				const parsed = Number.parseInt(raw, 10);
+				return Math.max(
+					AUTO_PULL_MIN_MINUTES,
+					Math.min(AUTO_PULL_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
+				);
+			},
+			set: (value) => ({ autoPullIntervalMinutes: value }),
+		});
 
-		new Setting(parent)
-			.setName("Auto-pull interval (minutes)")
-			.setDesc(`Set to ${AUTO_PULL_MIN_MINUTES} to disable. Max ${AUTO_PULL_MAX_MINUTES}.`)
-			.addText((t) =>
-				t
-					.setValue(String(this.plugin.settings.autoPullIntervalMinutes))
-					.onChange((v) => {
-						const parsed = Number.parseInt(v, 10);
-						const safe = Math.max(
-							AUTO_PULL_MIN_MINUTES,
-							Math.min(AUTO_PULL_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
-						);
-						this.update({ autoPullIntervalMinutes: safe });
-					}),
-			);
-
-		new Setting(parent)
-			.setName("Auto-push on save")
-			.setDesc(
-				"Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
-			)
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.autoPushOnSave)
-					.onChange((v) => this.update({ autoPushOnSave: v })),
-			);
+		this.renderToggleField(parent, {
+			name: "Auto-push on save",
+			desc: "Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
+			get: (s) => s.autoPushOnSave,
+			set: (v) => ({ autoPushOnSave: v }),
+		});
 	}
 
 	private renderUiSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Interface").setHeading();
-
-		new Setting(parent)
-			.setName("Status bar indicator")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.showStatusBar)
-					.onChange((v) => this.update({ showStatusBar: v })),
-			);
-
-		new Setting(parent)
-			.setName("Ribbon icon")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.showRibbonIcon)
-					.onChange((v) => this.update({ showRibbonIcon: v })),
-			);
-
-		new Setting(parent)
-			.setName("File explorer indicators")
-			.setDesc("Color file names in the file tree by change status.")
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.showFileExplorerIndicators)
-					.onChange((v) => this.update({ showFileExplorerIndicators: v })),
-			);
+		for (const toggle of UI_TOGGLES) this.renderToggleField(parent, toggle);
 	}
 
 	private renderAdvancedSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Advanced").setHeading();
 
-		new Setting(parent)
-			.setName("Max file size (MB)")
-			.setDesc("Files larger than this are skipped.")
-			.addText((t) =>
-				t.setValue(String(Math.round(this.plugin.settings.maxFileBytes / (1024 * 1024)))).onChange(
-					(v) => {
-						const mb = Math.max(1, Number.parseInt(v, 10) || 0);
-						this.update({ maxFileBytes: mb * 1024 * 1024 }, { refreshScope: true });
-					},
-				),
-			);
+		this.renderNumberField(parent, {
+			name: "Max file size (MB)",
+			desc: "Files larger than this are skipped.",
+			get: (s) => String(Math.round(s.maxFileBytes / BYTES_PER_MB)),
+			parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
+			set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
+			refreshScope: true,
+		});
 
-		new Setting(parent)
-			.setName("Transfer concurrency")
-			.setDesc("Maximum parallel uploads or downloads.")
-			.addText((t) =>
-				t.setValue(String(this.plugin.settings.concurrency)).onChange((v) => {
-					const n = Math.max(1, Math.min(16, Number.parseInt(v, 10) || 1));
-					this.update({ concurrency: n });
-				}),
-			);
+		this.renderNumberField(parent, {
+			name: "Transfer concurrency",
+			desc: "Maximum parallel uploads or downloads.",
+			get: (s) => String(s.concurrency),
+			parse: (raw) =>
+				Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, Number.parseInt(raw, 10) || MIN_CONCURRENCY)),
+			set: (value) => ({ concurrency: value }),
+		});
 	}
 
 	private renderMaintenanceSection(parent: HTMLElement): void {
@@ -394,6 +398,39 @@ export class ObsyncSettingTab extends PluginSettingTab {
 						this.display();
 					}),
 			);
+	}
+
+	private renderTextField(parent: HTMLElement, field: TextFieldConfig): void {
+		const setting = new Setting(parent).setName(field.name);
+		if (field.desc) setting.setDesc(field.desc);
+		setting.addText((t) => {
+			if (field.password) t.inputEl.type = "password";
+			if (field.placeholder) t.setPlaceholder(field.placeholder);
+			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
+				this.update(field.set(v, this.plugin), { refreshScope: field.refreshScope }),
+			);
+		});
+	}
+
+	private renderToggleField(parent: HTMLElement, field: ToggleFieldConfig): void {
+		const setting = new Setting(parent).setName(field.name);
+		if (field.desc) setting.setDesc(field.desc);
+		setting.addToggle((t) =>
+			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
+				this.update(field.set(v, this.plugin), { refreshScope: field.refreshScope }),
+			),
+		);
+	}
+
+	private renderNumberField(parent: HTMLElement, field: NumberFieldConfig): void {
+		const setting = new Setting(parent).setName(field.name);
+		if (field.desc) setting.setDesc(field.desc);
+		setting.addText((t) =>
+			t.setValue(field.get(this.plugin.settings)).onChange((raw) => {
+				const value = field.parse(raw);
+				this.update(field.set(value), { refreshScope: field.refreshScope });
+			}),
+		);
 	}
 
 	private update(partial: Partial<ObsyncSettings>, options: UpdateOptions = {}): void {

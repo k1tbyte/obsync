@@ -11,13 +11,13 @@ import {
 	VAULT_SUBDIR_DENYLIST,
 } from "../constants";
 import type { SettingsSyncCategories } from "../settings/model";
-import type { FileKind } from "../types";
+import { EFileKind } from "../types";
 import type { IgnoreMatcher } from "./ignore";
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
 	canDescend(dir: string): boolean;
-	classify(path: string): FileKind;
+	classify(path: string): EFileKind;
 	isIgnoredByPattern(path: string): boolean;
 }
 
@@ -80,9 +80,9 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		},
 		classify(rawPath) {
 			const path = normalize(rawPath);
-			if (path.startsWith(pluginsDir)) return "plugin";
-			if (path.startsWith(configPrefix)) return "config";
-			return "vault";
+			if (path.startsWith(pluginsDir)) return EFileKind.Plugin;
+			if (path.startsWith(configPrefix)) return EFileKind.Config;
+			return EFileKind.Vault;
 		},
 		isIgnoredByPattern(rawPath) {
 			const path = normalize(rawPath);

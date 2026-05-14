@@ -1,10 +1,14 @@
-export type FileKind = "vault" | "config" | "plugin";
+export enum EFileKind {
+	Vault = "vault",
+	Config = "config",
+	Plugin = "plugin",
+}
 
 export interface ManifestEntry {
 	hash: string;
 	size: number;
 	mtime: number;
-	kind: FileKind;
+	kind: EFileKind;
 }
 
 export interface Manifest {
@@ -44,17 +48,18 @@ export interface SkippedFile {
 	reason: string;
 }
 
-export type ChangeType =
-	| "local-add"
-	| "local-modify"
-	| "local-delete"
-	| "remote-add"
-	| "remote-modify"
-	| "remote-delete";
+export enum EChangeType {
+	LocalAdd = "local-add",
+	LocalModify = "local-modify",
+	LocalDelete = "local-delete",
+	RemoteAdd = "remote-add",
+	RemoteModify = "remote-modify",
+	RemoteDelete = "remote-delete",
+}
 
 export interface FileChange {
 	path: string;
-	type: ChangeType;
+	type: EChangeType;
 	localHash: string | null;
 	remoteHash: string | null;
 }

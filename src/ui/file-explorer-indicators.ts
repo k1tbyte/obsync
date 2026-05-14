@@ -1,7 +1,7 @@
 import type { Plugin, View, Workspace } from "obsidian";
 
 import type { SyncController } from "../sync/controller";
-import type { ChangeType } from "../types";
+import type { EChangeType } from "../types";
 
 type IndicatorClass =
 	| "obsync-changed-added"
@@ -80,7 +80,7 @@ function findFileExplorer(workspace: Workspace): FileExplorerView | null {
 }
 
 function computeIndicators(
-	statuses: Map<string, ChangeType | "conflict">,
+	statuses: Map<string, EChangeType | "conflict">,
 ): Map<string, IndicatorClass> {
 	const out = new Map<string, IndicatorClass>();
 	for (const [path, status] of statuses) {
@@ -90,7 +90,7 @@ function computeIndicators(
 	return out;
 }
 
-function classifyStatus(status: ChangeType | "conflict"): IndicatorClass | null {
+function classifyStatus(status: EChangeType | "conflict"): IndicatorClass | null {
 	if (status === "conflict") return "obsync-changed-conflict";
 	if (status.endsWith("add")) return "obsync-changed-added";
 	if (status.endsWith("modify")) return "obsync-changed-modified";

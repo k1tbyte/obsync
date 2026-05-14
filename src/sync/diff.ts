@@ -1,4 +1,4 @@
-import type { Conflict, DiffResult, FileChange, LocalSnapshot, Manifest } from "../types";
+import { EChangeType, type Conflict, type DiffResult, type FileChange, type LocalSnapshot, type Manifest } from "../types";
 
 export interface DiffInput {
 	local: LocalSnapshot;
@@ -66,8 +66,8 @@ function classify(
 	baseline: string | null,
 	current: string | null,
 	remote = false,
-): FileChange["type"] {
-	if (baseline === null) return remote ? "remote-add" : "local-add";
-	if (current === null) return remote ? "remote-delete" : "local-delete";
-	return remote ? "remote-modify" : "local-modify";
+): EChangeType {
+	if (baseline === null) return remote ? EChangeType.RemoteAdd : EChangeType.LocalAdd;
+	if (current === null) return remote ? EChangeType.RemoteDelete : EChangeType.LocalDelete;
+	return remote ? EChangeType.RemoteModify : EChangeType.LocalModify;
 }
