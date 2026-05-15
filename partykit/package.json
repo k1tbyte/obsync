@@ -1,0 +1,13 @@
+{
+  "name": "obsync-relay",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx partykit dev",
+    "deploy": "npx partykit deploy"
+  },
+  "devDependencies": {
+    "partykit": "^0.0.111",
+    "typescript": "^5.4.5"
+  }
+}

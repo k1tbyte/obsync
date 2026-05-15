@@ -45,6 +45,7 @@ export interface SyncControllerHost {
 	openSession(): Promise<EngineDependencies | null>;
 	persistState(state: LocalState): Promise<void>;
 	getState(): LocalState | null;
+	onPushComplete?(): void;
 	logInfo(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
 	logWarn(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
 	logError(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
@@ -382,6 +383,9 @@ export class SyncController {
 				this.resultAt = Date.now();
 				this.diffCache.clear();
 				this.staleReason = null;
+				if (operation === ESyncLogOperation.Push) {
+					this.host.onPushComplete?.();
+				}
 			} catch (err) {
 				if (err instanceof ConcurrentPushError) {
 					this.error = null;

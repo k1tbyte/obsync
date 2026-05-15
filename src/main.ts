@@ -26,9 +26,10 @@ import {
     type ObsyncTransferSettings,
 } from "./settings/transfer";
 import { SyncController } from "./sync/controller";
+import { RealtimeClient } from "./sync/realtime";
 import { registerScheduler } from "./sync/scheduler";
 import type { LocalState } from "./types";
-import { handleStorageProtocol } from "./storage/registry";
+import { handleStorageProtocol, storageIdentity } from "./storage/registry";
 import { notifyError, notifyInfo } from "./ui/notices";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
@@ -46,6 +47,7 @@ export default class ObsyncPlugin extends Plugin {
     private statePersister!: StatePersister;
     private passphraseManager!: PassphraseManager;
     private scopeRefreshTimer: number | null = null;
+    private realtimeClient: RealtimeClient | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -76,6 +78,7 @@ export default class ObsyncPlugin extends Plugin {
             logInfo: (op, msg, details) => this.logs.info(op, msg, details),
             logWarn: (op, msg, details) => this.logs.warn(op, msg, details),
             logError: (op, msg, details) => this.logs.error(op, msg, details),
+            onPushComplete: () => this.realtimeClient?.notifySync(),
         });
 
         this.addSettingTab(new ObsyncSettingTab(this.app, this));
@@ -94,6 +97,7 @@ export default class ObsyncPlugin extends Plugin {
 
         registerCommands(this);
         registerScheduler(this, this.controller);
+        this.initRealtime();
 
         this.registerIgnoreFileEvents();
         this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
@@ -113,6 +117,8 @@ export default class ObsyncPlugin extends Plugin {
         this.statePersister?.dispose();
         this.controller?.dispose();
         this.passphraseManager?.dispose();
+        this.realtimeClient?.dispose();
+        this.realtimeClient = null;
     }
 
     scheduleScopeRefresh(reason = "Sync scope changed."): void {
@@ -219,6 +225,27 @@ export default class ObsyncPlugin extends Plugin {
         this.registerEvent(
             this.app.vault.on("rename", (file, oldPath) => refreshIfIgnoreFile(file, oldPath)),
         );
+    }
+
+    /** Start or restart the realtime WebSocket connection based on current settings. */
+    initRealtime(): void {
+        this.realtimeClient?.dispose();
+        this.realtimeClient = null;
+
+        if (!this.settings.realtimeSync) return;
+        if (!this.settings.realtimeServerUrl) return;
+        if (!isStorageConfigured(this.settings)) return;
+
+        const channelId = storageIdentity(this.settings.storage);
+
+        this.realtimeClient = new RealtimeClient({
+            serverUrl: this.settings.realtimeServerUrl,
+            channelId,
+            onRemoteSync: () => {
+                void this.controller.refreshAndAutoPull();
+            },
+        });
+        this.realtimeClient.connect();
     }
 }
 
