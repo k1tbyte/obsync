@@ -1,4 +1,5 @@
-import { type App, Notice, type View } from "obsidian";
+import { type App, type View } from "obsidian";
+import { notifyInfo } from "./notices";
 
 interface FileExplorerReveal extends View {
 	revealInFolder?: (file: unknown) => void;
@@ -11,7 +12,7 @@ interface LeafWithOpenFile {
 export async function openInEditor(app: App, path: string): Promise<void> {
 	const file = app.vault.getAbstractFileByPath(path);
 	if (!file) {
-		new Notice(`Obsync: cannot open ${path} (not in vault)`);
+		notifyInfo(`cannot open ${path} (not in vault)`);
 		return;
 	}
 	const leaf = app.workspace.getLeaf(false);
@@ -25,7 +26,7 @@ export async function openInEditor(app: App, path: string): Promise<void> {
 export async function revealInFileExplorer(app: App, path: string): Promise<void> {
 	const file = app.vault.getAbstractFileByPath(path);
 	if (!file) {
-		new Notice(`Obsync: cannot reveal ${path}`);
+		notifyInfo(`cannot reveal ${path}`);
 		return;
 	}
 	const leaves = app.workspace.getLeavesOfType("file-explorer");

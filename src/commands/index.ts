@@ -1,4 +1,5 @@
-import { MarkdownView, Notice } from "obsidian";
+import { MarkdownView } from "obsidian";
+import { notifyError, notifyInfo } from "../ui/notices";
 
 import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
@@ -48,7 +49,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		name: "Forget cached passphrase",
 		callback: () => {
 			plugin.forgetPassphrase();
-			new Notice("Obsync: passphrase forgotten.");
+			notifyInfo("passphrase forgotten.");
 		},
 	});
 
@@ -73,7 +74,7 @@ async function runCompare(plugin: ObsyncPlugin): Promise<void> {
 		await plugin.controller.refresh();
 		await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 	} catch (err) {
-		notifyError(err);
+		notifyError("Compare failed", err);
 	}
 }
 
@@ -87,13 +88,13 @@ async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
 		const refreshed = plugin.controller.getSnapshot().result?.diff;
 		const paths = refreshed?.localChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			new Notice("Obsync: nothing to push");
+			notifyInfo("nothing to push");
 			return;
 		}
 		await plugin.controller.pushPaths(paths);
-		new Notice(`Obsync: pushed ${paths.length} file(s)`);
+		notifyInfo(`pushed ${paths.length} file(s)`);
 	} catch (err) {
-		notifyError(err);
+		notifyError("Push all failed", err);
 	}
 }
 
@@ -103,13 +104,13 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 		const diff = plugin.controller.getSnapshot().result?.diff;
 		const paths = diff?.remoteChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			new Notice("Obsync: nothing to pull");
+			notifyInfo("nothing to pull");
 			return;
 		}
 		await plugin.controller.pullPaths(paths);
-		new Notice(`Obsync: pulled ${paths.length} file(s)`);
+		notifyInfo(`pulled ${paths.length} file(s)`);
 	} catch (err) {
-		notifyError(err);
+		notifyError("Pull all failed", err);
 	}
 }
 
@@ -121,15 +122,9 @@ async function runResetRemoteStorage(plugin: ObsyncPlugin): Promise<void> {
 	const ok = await plugin.controller.resetRemoteStorage();
 	if (!ok) {
 		const message = plugin.controller.getSnapshot().error ?? "Unknown reset error";
-		new Notice(`Obsync error: ${message}`, 8000);
+		notifyError(message);
 		return;
 	}
-	new Notice("Obsync: remote storage reset.");
+	notifyInfo("remote storage reset.");
 	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
-}
-
-function notifyError(err: unknown): void {
-	const message = err instanceof Error ? err.message : String(err);
-	new Notice(`Obsync error: ${message}`, 8000);
-	console.error("[obsync]", err);
 }

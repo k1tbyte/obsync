@@ -1,5 +1,5 @@
 import "./polyfills";
-import { Notice, Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
+import { Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
 
 import { registerCommands } from "./commands";
 import {
@@ -28,6 +28,8 @@ import {
 import { SyncController } from "./sync/controller";
 import { registerScheduler } from "./sync/scheduler";
 import type { LocalState } from "./types";
+import { handleStorageProtocol } from "./storage/registry";
+import { notifyError, notifyInfo } from "./ui/notices";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
 import { registerRibbon } from "./ui/ribbon";
@@ -96,6 +98,10 @@ export default class ObsyncPlugin extends Plugin {
         this.registerIgnoreFileEvents();
         this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
             void this.handleSettingsTransferProtocol(params);
+        });
+
+        this.registerObsidianProtocolHandler("obsync-auth", (params) => {
+            void handleStorageProtocol(params, this.settings.storage, () => this.saveSettings());
         });
     }
 
@@ -190,16 +196,14 @@ export default class ObsyncPlugin extends Plugin {
     private async handleSettingsTransferProtocol(params: ObsidianProtocolData): Promise<void> {
         const data = params.d ?? params.data;
         if (typeof data !== "string") {
-            new Notice("Obsync: settings transfer data is missing.");
+            notifyError("settings transfer data is missing.");
             return;
         }
         try {
             const imported = await this.importSettingsTransfer(data);
-            if (imported) new Notice("Obsync: settings imported.");
+            if (imported) notifyInfo("settings imported.");
         } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            new Notice(`Obsync error: ${message}`, 8000);
-            console.error("[obsync] settings transfer failed", err);
+            notifyError("settings transfer failed", err);
         }
     }
 

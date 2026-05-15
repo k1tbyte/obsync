@@ -3,12 +3,13 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
 	ItemView,
-	Notice,
+	
 	Platform,
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
 
+import { notifyError, notifyInfo } from "./notices";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
 import { EDiffDirection, type FileDiffModel } from "../sync/projection";
@@ -347,10 +348,10 @@ export class DiffView extends ItemView {
 		if (!this.path) return;
 		try {
 			await this.plugin.controller.pushHunks(this.path, new Set([index]));
-			new Notice("Obsync: pushed hunk");
+			notifyInfo("pushed hunk");
 			await this.refreshModel();
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Push hunk failed", err);
 		}
 	}
 
@@ -358,10 +359,10 @@ export class DiffView extends ItemView {
 		if (!this.path) return;
 		try {
 			await this.plugin.controller.pullHunks(this.path, new Set([index]));
-			new Notice("Obsync: pulled hunk");
+			notifyInfo("pulled hunk");
 			await this.refreshModel();
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Pull hunk failed", err);
 		}
 	}
 
@@ -369,10 +370,10 @@ export class DiffView extends ItemView {
 		if (!this.path) return;
 		try {
 			await this.plugin.controller.revertHunks(this.path, new Set([index]));
-			new Notice("Obsync: reverted hunk");
+			notifyInfo("reverted hunk");
 			await this.refreshModel();
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Revert hunk failed", err);
 		}
 	}
 
@@ -381,10 +382,10 @@ export class DiffView extends ItemView {
 		const resolved = this.path;
 		try {
 			await this.plugin.controller.resolveConflictKeepLocal(resolved);
-			new Notice("Obsync: kept local version");
+			notifyInfo("kept local version");
 			await this.advanceAfterResolve(resolved);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Resolve keep local failed", err);
 		}
 	}
 
@@ -393,10 +394,10 @@ export class DiffView extends ItemView {
 		const resolved = this.path;
 		try {
 			await this.plugin.controller.resolveConflictAcceptRemote(resolved);
-			new Notice("Obsync: accepted remote version");
+			notifyInfo("accepted remote version");
 			await this.advanceAfterResolve(resolved);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Resolve accept remote failed", err);
 		}
 	}
 
@@ -451,10 +452,5 @@ export class DiffView extends ItemView {
 			this.merge.destroy();
 			this.merge = null;
 		}
-	}
-
-	private notifyError(err: unknown): void {
-		const message = err instanceof Error ? err.message : String(err);
-		new Notice(`Obsync error: ${message}`, 8000);
 	}
 }

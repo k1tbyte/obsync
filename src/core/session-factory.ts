@@ -1,4 +1,5 @@
-import { type App, Notice } from "obsidian";
+import { type App } from "obsidian";
+import { notifyInfo } from "../ui/notices";
 
 import { ESyncLogOperation } from "../logs/store";
 import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
@@ -36,7 +37,7 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
 			ESyncLogOperation.Session,
 			"Session blocked because storage is not configured.",
 		);
-		new Notice("Obsync: configure storage backend first.");
+		notifyInfo("configure storage backend first.");
 		return null;
 	}
 	if (!(await passphrase.prompt(false))) {
@@ -44,7 +45,7 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
 			ESyncLogOperation.Session,
 			"Session blocked because the passphrase is missing.",
 		);
-		new Notice("Obsync: passphrase is required.");
+		notifyInfo("passphrase is required.");
 		return null;
 	}
 	const adapter = app.vault.adapter;

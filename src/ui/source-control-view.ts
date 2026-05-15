@@ -1,8 +1,8 @@
+import { notifyError, notifyInfo } from "./notices";
 import {
 	type App,
 	ItemView,
 	Menu,
-	Notice,
 	Platform,
 	type WorkspaceLeaf,
 } from "obsidian";
@@ -551,9 +551,9 @@ export class SourceControlView extends ItemView {
 	private async handleRevertSingle(path: string): Promise<void> {
 		try {
 			await this.plugin.controller.revertPaths([path]);
-			new Notice(`Obsync: reverted ${path}`);
+			notifyInfo(` reverted ${path}`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -561,9 +561,9 @@ export class SourceControlView extends ItemView {
 		this.expandedPreviews.delete(path);
 		try {
 			await this.plugin.controller.resolveConflictKeepLocal(path);
-			new Notice(`Obsync: kept local version of ${path}`);
+			notifyInfo(` kept local version of ${path}`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -571,9 +571,9 @@ export class SourceControlView extends ItemView {
 		this.expandedPreviews.delete(path);
 		try {
 			await this.plugin.controller.resolveConflictAcceptRemote(path);
-			new Notice(`Obsync: accepted remote version of ${path}`);
+			notifyInfo(` accepted remote version of ${path}`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -588,9 +588,9 @@ export class SourceControlView extends ItemView {
 		for (const p of paths) this.expandedPreviews.delete(p);
 		try {
 			await this.plugin.controller.resolveConflicts(paths, strategy);
-			new Notice(`Obsync: resolved ${paths.length} conflict(s)`);
+			notifyInfo(` resolved ${paths.length} conflict(s)`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -601,9 +601,9 @@ export class SourceControlView extends ItemView {
 		state.selected.clear();
 		try {
 			await this.plugin.controller.revertPaths(paths);
-			new Notice(`Obsync: reverted ${paths.length} file(s)`);
+			notifyInfo(` reverted ${paths.length} file(s)`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -618,13 +618,13 @@ export class SourceControlView extends ItemView {
 		try {
 			if (kind === "push") {
 				await this.plugin.controller.pushPaths(paths);
-				new Notice(`Obsync: pushed ${paths.length} file(s)`);
+				notifyInfo(` pushed ${paths.length} file(s)`);
 			} else {
 				await this.plugin.controller.pullPaths(paths);
-				new Notice(`Obsync: pulled ${paths.length} file(s)`);
+				notifyInfo(` pulled ${paths.length} file(s)`);
 			}
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -633,9 +633,9 @@ export class SourceControlView extends ItemView {
 		if (!ok) return;
 		try {
 			await this.plugin.controller.adoptNewVault();
-			new Notice("Obsync: adopted new remote vault.");
+			notifyInfo(" adopted new remote vault.");
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -646,9 +646,9 @@ export class SourceControlView extends ItemView {
 		if (paths.length === 0) return;
 		try {
 			await this.plugin.controller.pushPaths(paths);
-			new Notice(`Obsync: pushed ${paths.length} file(s)`);
+			notifyInfo(` pushed ${paths.length} file(s)`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -659,9 +659,9 @@ export class SourceControlView extends ItemView {
 		if (paths.length === 0) return;
 		try {
 			await this.plugin.controller.pullPaths(paths);
-			new Notice(`Obsync: pulled ${paths.length} file(s)`);
+			notifyInfo(` pulled ${paths.length} file(s)`);
 		} catch (err) {
-			this.notifyError(err);
+			notifyError("Operation failed", err);
 		}
 	}
 
@@ -711,7 +711,7 @@ export class SourceControlView extends ItemView {
 
 	private notifyError(err: unknown): void {
 		const message = err instanceof Error ? err.message : String(err);
-		new Notice(`Obsync error: ${message}`, 8000);
+		notifyError(`Operation failed: ${message}`);
 	}
 }
 

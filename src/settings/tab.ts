@@ -1,4 +1,5 @@
-import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { type App, PluginSettingTab, Setting } from "obsidian";
+import { notifyError, notifyInfo } from "../ui/notices";
 
 import { AUTO_PULL_MAX_MINUTES, AUTO_PULL_MIN_MINUTES } from "../constants";
 import { clearCachedPassphrase } from "../crypto/passphrase-cache";
@@ -11,6 +12,7 @@ import {
 	askSettingsTransferInput,
 	showSettingsTransferExport,
 } from "../ui/settings-transfer-modal";
+import { type GoogleDriveStorageConfig } from "../storage/config";
 import { renderLogsView } from "./logs-view";
 import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 
@@ -189,6 +191,10 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		for (const field of descriptor.fields) {
 			this.renderBackendField(parent, field);
 		}
+
+		if (current.kind === EStorageBackend.GoogleDrive) {
+			this.renderGoogleDriveAuth(parent);
+		}
 	}
 
 	private renderBackendField(parent: HTMLElement, field: SettingsFieldSpec): void {
@@ -212,6 +218,24 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				this.updateStorage({ [field.key]: v.trim() });
 			});
 		});
+	}
+
+	private renderGoogleDriveAuth(parent: HTMLElement): void {
+		const config = this.plugin.settings.storage as GoogleDriveStorageConfig;
+		const isAuth = Boolean(config.refreshToken);
+		
+		new Setting(parent)
+			.setName("Google account")
+			.setDesc(isAuth ? "Authenticated. Tokens are securely stored." : "Not authenticated. Click to authorize.")
+			.addButton((b) =>
+				b
+					.setButtonText(isAuth ? "Re-authenticate" : "Log in")
+					.setCta()
+					.onClick(() => {
+						const url = config.authServerUrl || "https://obsync-auth.k1tbyte.workers.dev";
+						window.open(`${url}/auth`);
+					})
+			);
 	}
 
 	private updateStorage(patch: Record<string, unknown>): void {
@@ -396,7 +420,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					.setDisabled(!this.plugin.hasPassphrase())
 					.onClick(() => {
 						this.plugin.forgetPassphrase();
-						new Notice("Obsync: passphrase forgotten.");
+						notifyInfo("passphrase forgotten.");
 						this.display();
 					}),
 			);
@@ -448,7 +472,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		try {
 			const imported = await this.plugin.importSettingsTransfer(input);
 			if (!imported) return;
-			new Notice("Obsync: settings imported.");
+			notifyInfo("settings imported.");
 			this.display();
 		} catch (err) {
 			this.notifyError(err);
@@ -465,12 +489,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			this.notifyError(this.plugin.controller.getSnapshot().error ?? "Unknown reset error");
 			return;
 		}
-		new Notice("Obsync: remote storage reset.");
+		notifyInfo("remote storage reset.");
 	}
 
 	private notifyError(err: unknown): void {
 		const message = err instanceof Error ? err.message : String(err);
-		new Notice(`Obsync error: ${message}`, 8000);
+		notifyError(message);
 		console.error("[obsync]", err);
 	}
 }
