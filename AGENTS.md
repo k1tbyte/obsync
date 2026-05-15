@@ -80,7 +80,11 @@ npm run build
 
 ## Testing
 
-- Manual install for testing: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
+- **Unit tests**: `vitest` is configured for core logic testing (`diff.ts`, `hunks.ts`, `concurrency.ts`, `ignore.ts`, etc.).
+  - Run tests with `npm run test` or `npm run test:watch`.
+  - ALL domain logic (diffs, merging, concurrency, hunks matching, baseline cache) must have complete unit-test coverage.
+  - Tests live in the `tests/` directory at the root.
+- **Manual install for testing**: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
   ```
   <Vault>/.obsidian/plugins/<plugin-id>/
   ```
