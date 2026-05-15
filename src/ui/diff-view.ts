@@ -2,8 +2,8 @@ import { MergeView } from "@codemirror/merge";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+    debounce,
     ItemView,
-
     Platform,
     type ViewStateResult,
     type WorkspaceLeaf,
@@ -68,16 +68,33 @@ export class DiffView extends ItemView {
         await super.setState(state, result);
     }
 
+    private unsubStatus: (() => void) | null = null;
+
     async onOpen(): Promise<void> {
         this.contentEl.empty();
         this.contentEl.addClass("obsync-diff-view");
         this.headerEl = this.contentEl.createDiv({ cls: "obsync-diff-header" });
         this.bodyEl = this.contentEl.createDiv({ cls: "obsync-diff-body" });
         if (Platform.isMobile) this.mode = EDiffMode.Unified;
+
+        const handleStatus = debounce(
+            () => {
+                if (this.path) void this.refreshModel();
+            },
+            200,
+            true,
+        );
+
+        this.unsubStatus = this.plugin.controller.subscribe(handleStatus);
+
         this.renderShell();
     }
 
     async onClose(): Promise<void> {
+        if (this.unsubStatus) {
+            this.unsubStatus();
+            this.unsubStatus = null;
+        }
         this.destroyMerge();
         this.contentEl.empty();
     }
@@ -89,6 +106,14 @@ export class DiffView extends ItemView {
         try {
             this.renderLoading();
             this.model = await this.plugin.controller.getFileDiff(this.path);
+            
+            if (!this.model) {
+                // The file has no differences (e.g. it was pushed/pulled).
+                // Auto-close the view.
+                this.leaf.detach();
+                return;
+            }
+
             this.renderShell();
         } catch (err) {
             this.renderError(err instanceof Error ? err.message : String(err));
@@ -402,6 +427,8 @@ export class DiffView extends ItemView {
     }
 
     private async advanceAfterResolve(resolvedPath: string): Promise<void> {
+        // Because of STATUS_EVENT, if we don't change path here, the leaf will detach.
+        // Let's try to find the next conflict BEFORE refreshModel is called by the resolve operation.
         const next = this.getNextConflictPath(resolvedPath);
         if (next) {
             this.path = next;

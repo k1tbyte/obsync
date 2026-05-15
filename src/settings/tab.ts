@@ -334,6 +334,29 @@ export class ObsyncSettingTab extends PluginSettingTab {
             get: (s) => s.autoPushOnSave,
             set: (v) => ({ autoPushOnSave: v }),
         });
+
+        this.renderToggleField(parent, {
+            name: "Real-time sync signals",
+            desc: "Connect via WebSocket to instantly notify other devices when you push. Other devices will auto-pull immediately.",
+            get: (s) => s.realtimeSync,
+            set: (v) => {
+                this.plugin.settings.realtimeSync = v;
+                void this.plugin.saveSettings().then(() => this.plugin.initRealtime());
+                return { realtimeSync: v };
+            },
+        });
+
+        new Setting(parent)
+            .setName("Realtime server URL")
+            .setDesc("WebSocket endpoint for sync signals. Override if self-hosting.")
+            .addText((t) => {
+                t.setPlaceholder("wss://...")
+                    .setValue(this.plugin.settings.realtimeServerUrl)
+                    .onChange((v) => {
+                        this.plugin.settings.realtimeServerUrl = v.trim();
+                        void this.plugin.saveSettings().then(() => this.plugin.initRealtime());
+                    });
+            });
     }
 
     private renderUiSection(parent: HTMLElement): void {

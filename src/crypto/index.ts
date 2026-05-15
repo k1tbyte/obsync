@@ -1,6 +1,6 @@
 import { BLOB_VERSION, IV_BYTES, KDF_ITERATIONS, KDF_SALT_LABEL } from "../constants";
 
-const subtle = globalThis.crypto.subtle;
+const subtle = window.crypto.subtle;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -71,13 +71,13 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
 
 export function randomBytes(length: number): Uint8Array {
 	const bytes = new Uint8Array(length);
-	globalThis.crypto.getRandomValues(bytes);
+	window.crypto.getRandomValues(bytes);
 	return bytes;
 }
 
 export function randomId(): string {
-	if (typeof globalThis.crypto.randomUUID === "function") {
-		return globalThis.crypto.randomUUID();
+	if (typeof window.crypto.randomUUID === "function") {
+		return window.crypto.randomUUID();
 	}
 	return toHex(randomBytes(16));
 }

@@ -1,0 +1,26 @@
+name: Deploy Relay (PartyKit)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to PartyKit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Install dependencies
+        working-directory: partykit
+        run: npm ci
+
+      - name: Deploy
+        working-directory: partykit
+        run: npx partykit deploy
+        env:
+          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}

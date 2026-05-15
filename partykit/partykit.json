@@ -1,0 +1,5 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "obsync-relay",
+  "main": "src/server.ts"
+}

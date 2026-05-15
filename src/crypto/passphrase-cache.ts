@@ -85,7 +85,7 @@ async function loadDeviceKey(
 }
 
 function importAesKey(bytes: Uint8Array): Promise<EncryptionKey> {
-	return globalThis.crypto.subtle.importKey(
+	return window.crypto.subtle.importKey(
 		"raw",
 		toArrayBuffer(bytes),
 		{ name: "AES-GCM" },

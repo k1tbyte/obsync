@@ -8,7 +8,7 @@ import {
 	SCHEDULER_BACKOFF_THRESHOLD,
 	VAULT_EVENT_DEBOUNCE_MS,
 } from "../constants";
-import type { ObsyncSettings } from "../settings/model";
+import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
 import type { SyncController } from "./controller";
 
 export interface SchedulerHost extends Plugin {
@@ -22,6 +22,7 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 
 	const tick = async (): Promise<void> => {
 		if (!navigator.onLine) return;
+		if (!isStorageConfigured(host.settings)) return;
 		const now = Date.now();
 		if (now - lastRun < AUTO_PULL_BUSY_COOLDOWN_MS) return;
 		if (now < backoffUntil) return;
@@ -65,6 +66,7 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 }
 
 async function runVaultSync(host: SchedulerHost, controller: SyncController): Promise<void> {
+	if (!isStorageConfigured(host.settings)) return;
 	await controller.refresh();
 	if (!host.settings.autoPushOnSave) return;
 	const snap = controller.getSnapshot();

@@ -1,6 +1,6 @@
 import { Buffer as BufferShim } from "buffer/";
 
-const g = globalThis as unknown as {
+const g = window as unknown as {
 	Buffer?: typeof BufferShim;
 	process?: { env: Record<string, string>; platform: string };
 };

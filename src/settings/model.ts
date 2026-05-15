@@ -31,6 +31,8 @@ export interface ObsyncSettings {
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
 	autoPushOnSave: boolean;
+	realtimeSync: boolean;
+	realtimeServerUrl: string;
 	cachePassphrase: boolean;
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
@@ -48,6 +50,8 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
 	autoPushOnSave: false,
+	realtimeSync: false,
+	realtimeServerUrl: "wss://obsync-relay.k1tbyte.partykit.dev",
 	cachePassphrase: true,
 	showStatusBar: true,
 	showRibbonIcon: true,
