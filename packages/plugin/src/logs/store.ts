@@ -130,7 +130,11 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 	}
 }
 
-async function writeAtomic(adapter: DataAdapter, path: string, data: string): Promise<void> {
+async function writeAtomic(
+	adapter: DataAdapter,
+	path: string,
+	data: string,
+): Promise<void> {
 	const tmp = `${path}.tmp`;
 	await adapter.write(tmp, data);
 	if (await adapter.exists(path)) await adapter.remove(path);

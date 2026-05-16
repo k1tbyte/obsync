@@ -26,8 +26,7 @@ export class RemoteResetModal extends Modal {
 		const { contentEl, titleEl } = this;
 		titleEl.setText("Reset remote storage");
 		contentEl.createEl("p", {
-			text:
-				"This deletes the remote Obsync manifest and file objects on the configured backend. Local vault files are not deleted.",
+			text: "This deletes the remote Obsync manifest and file objects on the configured backend. Local vault files are not deleted.",
 		});
 		contentEl.createEl("p", { text: this.target.description });
 		contentEl.createEl("p", { text: `Type ${CONFIRMATION_TEXT} to continue.` });
@@ -45,9 +44,7 @@ export class RemoteResetModal extends Modal {
 
 		new Setting(contentEl)
 			.addButton((button) =>
-				button
-					.setButtonText("Cancel")
-					.onClick(() => this.cancel()),
+				button.setButtonText("Cancel").onClick(() => this.cancel()),
 			)
 			.addButton((button) => {
 				resetButton = button;
@@ -82,7 +79,10 @@ export class RemoteResetModal extends Modal {
 	}
 }
 
-export function confirmRemoteReset(app: App, target: RemoteResetTarget): Promise<boolean> {
+export function confirmRemoteReset(
+	app: App,
+	target: RemoteResetTarget,
+): Promise<boolean> {
 	return new Promise((resolve) => {
 		new RemoteResetModal(app, target, resolve).open();
 	});

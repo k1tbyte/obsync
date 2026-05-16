@@ -1,11 +1,10 @@
 import { Setting } from "obsidian";
-
-import type ObsyncPlugin from "../main";
 import {
 	ESyncLogLevel,
 	ESyncLogOperation,
 	type SyncLogEntry,
 } from "../logs/store";
+import type ObsyncPlugin from "../main";
 
 const LOG_LEVEL_LABELS: Record<ESyncLogLevel, string> = {
 	[ESyncLogLevel.Info]: "Info",
@@ -41,7 +40,9 @@ export function renderLogsView(
 
 	new Setting(parent)
 		.setName("Diagnostics")
-		.setDesc("Stored locally inside the Obsync plugin folder and excluded from sync.")
+		.setDesc(
+			"Stored locally inside the Obsync plugin folder and excluded from sync.",
+		)
 		.addButton((button) =>
 			button.setButtonText("Refresh").onClick(() => {
 				onRefresh();
@@ -70,7 +71,9 @@ export function renderLogsView(
 }
 
 function renderLogEntry(parent: HTMLElement, entry: SyncLogEntry): void {
-	const item = parent.createDiv({ cls: `obsync-log-entry ${LOG_LEVEL_CLASSES[entry.level]}` });
+	const item = parent.createDiv({
+		cls: `obsync-log-entry ${LOG_LEVEL_CLASSES[entry.level]}`,
+	});
 	const meta = item.createDiv({ cls: "obsync-log-meta" });
 	meta.setText(
 		`${formatTimestamp(entry.timestamp)} • ${OPERATION_LABELS[entry.operation]} • ${LOG_LEVEL_LABELS[entry.level]}`,

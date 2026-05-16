@@ -4,14 +4,19 @@ import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
 import { openSourceControlView } from "./source-control-view";
 
-export function registerStatusBar(plugin: Plugin, controller: SyncController): void {
+export function registerStatusBar(
+	plugin: Plugin,
+	controller: SyncController,
+): void {
 	const root = plugin.addStatusBarItem();
 	root.addClass("obsync-status-bar");
 	root.addEventListener("click", () => {
 		void openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 	});
 
-	const spinner = root.createSpan({ cls: "obsync-status-spinner obsync-hidden" });
+	const spinner = root.createSpan({
+		cls: "obsync-status-spinner obsync-hidden",
+	});
 	const text = root.createSpan();
 
 	const render = (snapshot: SyncStatusSnapshot): void => {

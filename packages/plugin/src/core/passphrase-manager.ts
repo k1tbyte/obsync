@@ -80,7 +80,8 @@ export class PassphraseManager {
 	async resolveKey(storage: ObjectStorage): Promise<EncryptionKey> {
 		if (!this.passphrase) throw new Error("Passphrase is not set");
 		const signature = this.bindingSignature();
-		if (this.cachedKey && this.cachedKey.signature === signature) return this.cachedKey.key;
+		if (this.cachedKey && this.cachedKey.signature === signature)
+			return this.cachedKey.key;
 		const key = await deriveSessionKey(storage, this.passphrase);
 		this.cachedKey = { key, signature };
 		return key;

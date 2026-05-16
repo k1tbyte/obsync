@@ -65,7 +65,9 @@ export function isStorageConfigured(settings: ObsyncSettings): boolean {
 	return isAdapterConfigured(settings.storage);
 }
 
-export function mergeSettings(stored: Partial<ObsyncSettings> | null | undefined): ObsyncSettings {
+export function mergeSettings(
+	stored: Partial<ObsyncSettings> | null | undefined,
+): ObsyncSettings {
 	const storage = stored?.storage ?? defaultS3Config();
 	const storageConfigs = stored?.storageConfigs ?? {};
 	if (!storageConfigs[storage.kind]) {
@@ -78,7 +80,9 @@ export function mergeSettings(stored: Partial<ObsyncSettings> | null | undefined
 		storageConfigs,
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
-			...((stored?.settingsSync as Partial<SettingsSyncCategories> | undefined) ?? {}),
+			...((stored?.settingsSync as
+				| Partial<SettingsSyncCategories>
+				| undefined) ?? {}),
 		},
 	};
 }

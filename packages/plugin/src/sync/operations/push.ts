@@ -8,23 +8,41 @@ import {
 	mergeFolderArrays,
 	updateBaselineEntry,
 } from "../baseline";
-import { bytesToText, isLikelyText, loadLocalBytes, textToBytes } from "../content";
+import {
+	bytesToText,
+	isLikelyText,
+	loadLocalBytes,
+	textToBytes,
+} from "../content";
 import { pushPaths, pushSingleFile } from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
-import { buildManifest, objectKey, publishManifestWithGuard } from "../manifest";
+import {
+	buildManifest,
+	objectKey,
+	publishManifestWithGuard,
+} from "../manifest";
 import { loadBaselineOrRemoteText } from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
 
 const LOG_PATH_LIMIT = 50;
 
-export const pushPathsOp: Operation<ReadonlyArray<string>> = async (deps, result, paths, ctx) => {
+export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
+	deps,
+	result,
+	paths,
+	ctx,
+) => {
 	const pushSet = new Set(paths);
 	if (result.diff.conflicts.length > 0) {
 		throw new Error("Cannot push: conflicts must be resolved first");
 	}
-	const blockedByRemote = result.diff.remoteChanges.some((c) => pushSet.has(c.path));
+	const blockedByRemote = result.diff.remoteChanges.some((c) =>
+		pushSet.has(c.path),
+	);
 	if (blockedByRemote) {
-		throw new Error("Cannot push: some of the selected files have remote changes; pull first");
+		throw new Error(
+			"Cannot push: some of the selected files have remote changes; pull first",
+		);
 	}
 	const bytesUploaded = sumBytes(paths, result.snapshot.files);
 	const manifest = await pushPaths(deps, result, paths, (done, total) => {
@@ -46,7 +64,12 @@ export interface PushHunksArgs {
 	selected: ReadonlySet<number>;
 }
 
-export const pushHunksOp: Operation<PushHunksArgs> = async (deps, result, args, ctx) => {
+export const pushHunksOp: Operation<PushHunksArgs> = async (
+	deps,
+	result,
+	args,
+	ctx,
+) => {
 	const { path, selected } = args;
 	const left = await loadBaselineOrRemoteText(deps, result, path);
 	const localBytes = await loadLocalBytes(deps.adapter, path);
@@ -58,8 +81,15 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (deps, result, args, 
 	const { hunks } = computeHunks(left, right);
 	const merged = applyHunks(left, hunks, selected);
 	const bytes = textToBytes(merged);
-	const { manifest, entry } = await pushSingleFile(deps, result, { path, bytes });
-	const baseline = updateBaselineEntry(deps.state.baseline ?? manifest, path, entry);
+	const { manifest, entry } = await pushSingleFile(deps, result, {
+		path,
+		bytes,
+	});
+	const baseline = updateBaselineEntry(
+		deps.state.baseline ?? manifest,
+		path,
+		entry,
+	);
 	const hashCache = { ...result.updatedCache };
 	hashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
 	await ctx.persistState(buildLocalState(deps.state, baseline, hashCache));
@@ -88,11 +118,19 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	for (const path of conflictPaths) {
 		const entry = await uploadLocalAsObject(deps, path);
 		baseFiles[path] = entry;
-		nextHashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
+		nextHashCache[path] = {
+			mtime: entry.mtime,
+			size: entry.size,
+			hash: entry.hash,
+		};
 		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
 	}
-	const folders = mergeFolderArrays(result.remote?.folders, result.snapshot.emptyFolders);
-	const vaultId = deps.state.vaultId ?? result.remote?.vaultId ?? deps.state.deviceId;
+	const folders = mergeFolderArrays(
+		result.remote?.folders,
+		result.snapshot.emptyFolders,
+	);
+	const vaultId =
+		deps.state.vaultId ?? result.remote?.vaultId ?? deps.state.deviceId;
 	const manifest = buildManifest(deps.state.deviceId, vaultId, result.remote, {
 		files: baseFiles,
 		skipped: [],

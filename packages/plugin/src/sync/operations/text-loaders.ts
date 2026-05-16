@@ -1,4 +1,9 @@
-import { bytesToText, isLikelyText, loadLocalBytes, loadRemoteBytes } from "../content";
+import {
+	bytesToText,
+	isLikelyText,
+	loadLocalBytes,
+	loadRemoteBytes,
+} from "../content";
 import type { CompareResult, EngineDependencies } from "../engine";
 
 export async function loadBaselineOrRemoteText(
@@ -28,7 +33,10 @@ export async function loadRemoteText(
 	deps: EngineDependencies,
 	hash: string,
 ): Promise<string | null> {
-	const bytes = await loadRemoteBytes({ storage: deps.storage, key: deps.key }, hash);
+	const bytes = await loadRemoteBytes(
+		{ storage: deps.storage, key: deps.key },
+		hash,
+	);
 	if (!bytes) return null;
 	if (!isLikelyText(bytes)) return null;
 	return bytesToText(bytes);

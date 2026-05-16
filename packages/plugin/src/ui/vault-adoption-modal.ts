@@ -5,7 +5,10 @@ export interface VaultAdoptionInfo {
 	localFileCount: number;
 }
 
-export function confirmVaultAdoption(app: App, info: VaultAdoptionInfo): Promise<boolean> {
+export function confirmVaultAdoption(
+	app: App,
+	info: VaultAdoptionInfo,
+): Promise<boolean> {
 	return new Promise((resolve) => {
 		const modal = new Modal(app);
 		let settled = false;
@@ -17,8 +20,7 @@ export function confirmVaultAdoption(app: App, info: VaultAdoptionInfo): Promise
 		};
 		modal.titleEl.setText("Adopt remote vault?");
 		modal.contentEl.createEl("p", {
-			text:
-				"This device has no Obsync state yet, but the configured bucket prefix already contains a vault.",
+			text: "This device has no Obsync state yet, but the configured bucket prefix already contains a vault.",
 		});
 		modal.contentEl.createEl("p", {
 			text: `Remote vault id: ${info.remoteVaultId}`,
@@ -27,8 +29,7 @@ export function confirmVaultAdoption(app: App, info: VaultAdoptionInfo): Promise
 			text: `Local vault has ${info.localFileCount} file(s). Adopting binds this device to the remote — your local files appear as additions to push, or you can run Reset remote first.`,
 		});
 		modal.contentEl.createEl("p", {
-			text:
-				"If you did not expect this remote, cancel and double-check your storage, prefix, and credentials.",
+			text: "If you did not expect this remote, cancel and double-check your storage, prefix, and credentials.",
 		});
 		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
 		const cancelBtn = buttons.createEl("button", { text: "Cancel" });

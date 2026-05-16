@@ -23,7 +23,7 @@ export function registerFileExplorerIndicators(
 	const apply = (): void => {
 		const next = computeIndicators(controller.getChangedPathStatuses());
 		const view = findFileExplorer(plugin.app.workspace);
-		if (!view || !view.fileItems) return;
+		if (!view?.fileItems) return;
 		const items = view.fileItems;
 
 		for (const [path, cls] of currentClasses) {
@@ -54,7 +54,7 @@ export function registerFileExplorerIndicators(
 
 	const clearAll = (): void => {
 		const view = findFileExplorer(plugin.app.workspace);
-		if (!view || !view.fileItems) return;
+		if (!view?.fileItems) return;
 		for (const [path, cls] of currentClasses) {
 			const item = view.fileItems[path];
 			if (!item) continue;
@@ -90,7 +90,9 @@ function computeIndicators(
 	return out;
 }
 
-function classifyStatus(status: EChangeType | "conflict"): IndicatorClass | null {
+function classifyStatus(
+	status: EChangeType | "conflict",
+): IndicatorClass | null {
 	if (status === "conflict") return "obsync-changed-conflict";
 	if (status.endsWith("add")) return "obsync-changed-added";
 	if (status.endsWith("modify")) return "obsync-changed-modified";

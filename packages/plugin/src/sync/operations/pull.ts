@@ -1,7 +1,7 @@
 import { decryptBytes, sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
-import { type Manifest, type ManifestEntry } from "../../types";
+import type { Manifest, ManifestEntry } from "../../types";
 import { writeBinary } from "../../vault/io";
 import {
 	buildLocalState,
@@ -17,9 +17,15 @@ import type { Operation, OperationOutcome } from "./types";
 
 const LOG_PATH_LIMIT = 50;
 
-export const pullPathsOp: Operation<ReadonlyArray<string>> = async (deps, result, paths, ctx) => {
+export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
+	deps,
+	result,
+	paths,
+	ctx,
+) => {
 	const pullSet = new Set(paths);
-	if (!result.remote) throw new Error("Cannot pull: remote manifest is missing");
+	if (!result.remote)
+		throw new Error("Cannot pull: remote manifest is missing");
 	if (result.diff.conflicts.length > 0) {
 		throw new Error("Cannot pull: conflicts must be resolved first");
 	}
@@ -43,9 +49,15 @@ export interface PullHunksArgs {
 	selected: ReadonlySet<number>;
 }
 
-export const pullHunksOp: Operation<PullHunksArgs> = async (deps, result, args, ctx) => {
+export const pullHunksOp: Operation<PullHunksArgs> = async (
+	deps,
+	result,
+	args,
+	ctx,
+) => {
 	const { path, selected } = args;
-	if (!result.remote) throw new Error("Cannot pull: remote manifest is missing");
+	if (!result.remote)
+		throw new Error("Cannot pull: remote manifest is missing");
 	const remoteEntry = result.remote.files[path];
 	if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
 	const left = (await loadLocalText(deps, path)) ?? "";
@@ -54,9 +66,17 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (deps, result, args, 
 	const merged = applyHunks(left, hunks, selected);
 	const bytes = textToBytes(merged);
 	await writeBinary(deps.adapter, path, bytes);
-	const baseline = updateBaselineEntry(deps.state.baseline ?? result.remote, path, remoteEntry);
+	const baseline = updateBaselineEntry(
+		deps.state.baseline ?? result.remote,
+		path,
+		remoteEntry,
+	);
 	const hashCache = { ...result.updatedCache };
-	hashCache[path] = { mtime: Date.now(), size: bytes.length, hash: await sha256Hex(bytes) };
+	hashCache[path] = {
+		mtime: Date.now(),
+		size: bytes.length,
+		hash: await sha256Hex(bytes),
+	};
 	await ctx.persistState(buildLocalState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
@@ -71,7 +91,8 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 	paths,
 	ctx,
 ): Promise<OperationOutcome> => {
-	if (!result.remote) throw new Error("Cannot resolve: remote manifest is missing");
+	if (!result.remote)
+		throw new Error("Cannot resolve: remote manifest is missing");
 	const remote = result.remote;
 	const conflictPaths = result.diff.conflicts
 		.map((c) => c.path)
@@ -89,7 +110,11 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 		if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
 		const plaintext = await fetchAndWriteRemote(deps, path, remoteEntry);
 		baselineFiles[path] = remoteEntry;
-		nextHashCache[path] = { mtime: Date.now(), size: plaintext.length, hash: remoteEntry.hash };
+		nextHashCache[path] = {
+			mtime: Date.now(),
+			size: plaintext.length,
+			hash: remoteEntry.hash,
+		};
 		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
 	}
 	const baseline: Manifest = {

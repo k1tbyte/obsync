@@ -79,7 +79,9 @@ export async function createSettingsTransferUrl(
 ): Promise<string> {
 	const salt = randomBytes(TRANSFER_SALT_BYTES);
 	const key = await deriveKey(passphrase, salt);
-	const plaintext = encoder.encode(JSON.stringify(createTransferPayload(settings)));
+	const plaintext = encoder.encode(
+		JSON.stringify(createTransferPayload(settings)),
+	);
 	const encoded = await encodeTransferBytes(plaintext);
 	const ciphertext = await encryptBytes(key, encoded.bytes);
 	return `obsidian://${TRANSFER_ACTION}?${TRANSFER_PARAM}=${createTransferToken(encoded.encoding, salt, ciphertext)}`;
@@ -100,7 +102,9 @@ export async function readSettingsTransfer(
 	return expandTransferPayload(payload);
 }
 
-function createTransferPayload(settings: ObsyncSettings): SettingsTransferPayload {
+function createTransferPayload(
+	settings: ObsyncSettings,
+): SettingsTransferPayload {
 	const payload: SettingsTransferPayload = { o: settings.storage };
 	const syncMask = encodeSyncMask(settings.settingsSync);
 	if (syncMask !== DEFAULT_SYNC_MASK) payload.y = syncMask;
@@ -110,27 +114,38 @@ function createTransferPayload(settings: ObsyncSettings): SettingsTransferPayloa
 	if (settings.maxFileBytes !== DEFAULT_SETTINGS.maxFileBytes) {
 		payload.m = settings.maxFileBytes;
 	}
-	if (settings.concurrency !== DEFAULT_SETTINGS.concurrency) payload.c = settings.concurrency;
-	if (settings.autoPullOnStartup !== DEFAULT_SETTINGS.autoPullOnStartup) payload.u = 0;
-	if (settings.autoPullIntervalMinutes !== DEFAULT_SETTINGS.autoPullIntervalMinutes) {
+	if (settings.concurrency !== DEFAULT_SETTINGS.concurrency)
+		payload.c = settings.concurrency;
+	if (settings.autoPullOnStartup !== DEFAULT_SETTINGS.autoPullOnStartup)
+		payload.u = 0;
+	if (
+		settings.autoPullIntervalMinutes !==
+		DEFAULT_SETTINGS.autoPullIntervalMinutes
+	) {
 		payload.n = settings.autoPullIntervalMinutes;
 	}
 	return payload;
 }
 
-function expandTransferPayload(payload: SettingsTransferPayload): ObsyncTransferSettings {
+function expandTransferPayload(
+	payload: SettingsTransferPayload,
+): ObsyncTransferSettings {
 	return {
 		storage: payload.o,
 		settingsSync: decodeSyncMask(payload.y ?? DEFAULT_SYNC_MASK),
 		ignorePatterns: payload.i ?? DEFAULT_SETTINGS.ignorePatterns,
 		maxFileBytes: payload.m ?? DEFAULT_SETTINGS.maxFileBytes,
 		concurrency: payload.c ?? DEFAULT_SETTINGS.concurrency,
-		autoPullOnStartup: payload.u === 0 ? false : DEFAULT_SETTINGS.autoPullOnStartup,
-		autoPullIntervalMinutes: payload.n ?? DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		autoPullOnStartup:
+			payload.u === 0 ? false : DEFAULT_SETTINGS.autoPullOnStartup,
+		autoPullIntervalMinutes:
+			payload.n ?? DEFAULT_SETTINGS.autoPullIntervalMinutes,
 	};
 }
 
-async function encodeTransferBytes(plaintext: Uint8Array): Promise<EncodedTransferBytes> {
+async function encodeTransferBytes(
+	plaintext: Uint8Array,
+): Promise<EncodedTransferBytes> {
 	const compressed = await compressTransferBytes(plaintext);
 	if (compressed === null || compressed.length >= plaintext.length) {
 		return { bytes: plaintext, encoding: ETransferEncoding.Plain };
@@ -146,11 +161,13 @@ async function decodeTransferBytes(
 	return decompressTransferBytes(bytes);
 }
 
-async function compressTransferBytes(bytes: Uint8Array): Promise<Uint8Array | null> {
+async function compressTransferBytes(
+	bytes: Uint8Array,
+): Promise<Uint8Array | null> {
 	if (typeof CompressionStream !== "function") return null;
-	const stream = new Blob([bytes]).stream().pipeThrough(
-		new CompressionStream(TRANSFER_COMPRESSION_FORMAT),
-	);
+	const stream = new Blob([bytes as any])
+		.stream()
+		.pipeThrough(new CompressionStream(TRANSFER_COMPRESSION_FORMAT));
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
@@ -158,9 +175,9 @@ async function decompressTransferBytes(bytes: Uint8Array): Promise<Uint8Array> {
 	if (typeof DecompressionStream !== "function") {
 		throw new Error("This device cannot import compressed Obsync setup links");
 	}
-	const stream = new Blob([bytes]).stream().pipeThrough(
-		new DecompressionStream(TRANSFER_COMPRESSION_FORMAT),
-	);
+	const stream = new Blob([bytes as any])
+		.stream()
+		.pipeThrough(new DecompressionStream(TRANSFER_COMPRESSION_FORMAT));
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
@@ -207,7 +224,8 @@ function extractTransferToken(input: string): string {
 	if (!trimmed) throw new Error("Settings transfer data is empty");
 	try {
 		const url = new URL(trimmed);
-		const data = url.searchParams.get(TRANSFER_PARAM) ?? url.searchParams.get("data");
+		const data =
+			url.searchParams.get(TRANSFER_PARAM) ?? url.searchParams.get("data");
 		if (typeof data === "string" && data.length > 0) return data;
 	} catch {
 		return trimmed;
@@ -261,7 +279,10 @@ function isOptionalZero(value: unknown): value is 0 | undefined {
 function isOptionalSyncMask(value: unknown): value is number | undefined {
 	return (
 		value === undefined ||
-		(typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_SYNC_MASK)
+		(typeof value === "number" &&
+			Number.isInteger(value) &&
+			value >= 0 &&
+			value <= MAX_SYNC_MASK)
 	);
 }
 
@@ -271,7 +292,10 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 		const chunk = bytes.subarray(offset, offset + 0x8000);
 		binary += String.fromCharCode(...chunk);
 	}
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+	return btoa(binary)
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=+$/g, "");
 }
 
 function base64UrlToBytes(value: string): Uint8Array {

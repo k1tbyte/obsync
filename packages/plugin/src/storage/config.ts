@@ -33,4 +33,7 @@ export interface GoogleDriveStorageConfig {
 	expiresAt: number;
 }
 
-export type StorageAdapterConfig = S3StorageConfig | WebDAVStorageConfig | GoogleDriveStorageConfig;
+export type StorageAdapterConfig =
+	| S3StorageConfig
+	| WebDAVStorageConfig
+	| GoogleDriveStorageConfig;

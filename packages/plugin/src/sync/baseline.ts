@@ -1,5 +1,10 @@
 import { randomId } from "../crypto";
-import type { HashCacheEntry, LocalState, Manifest, ManifestEntry } from "../types";
+import type {
+	HashCacheEntry,
+	LocalState,
+	Manifest,
+	ManifestEntry,
+} from "../types";
 import type { CompareResult } from "./engine";
 
 export function buildLocalState(

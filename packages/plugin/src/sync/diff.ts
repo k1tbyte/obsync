@@ -1,4 +1,11 @@
-import { EChangeType, type Conflict, type DiffResult, type FileChange, type LocalSnapshot, type Manifest } from "../types";
+import {
+	type Conflict,
+	type DiffResult,
+	EChangeType,
+	type FileChange,
+	type LocalSnapshot,
+	type Manifest,
+} from "../types";
 
 export interface DiffInput {
 	local: LocalSnapshot;
@@ -33,10 +40,20 @@ export function diff(input: DiffInput): DiffResult {
 		if (localChanged && remoteChanged) {
 			if (local === remote) continue;
 			if (local === null || remote === null) {
-				conflicts.push({ path, localHash: local ?? "", remoteHash: remote ?? "", baselineHash: baseline });
+				conflicts.push({
+					path,
+					localHash: local ?? "",
+					remoteHash: remote ?? "",
+					baselineHash: baseline,
+				});
 				continue;
 			}
-			conflicts.push({ path, localHash: local, remoteHash: remote, baselineHash: baseline });
+			conflicts.push({
+				path,
+				localHash: local,
+				remoteHash: remote,
+				baselineHash: baseline,
+			});
 			continue;
 		}
 
@@ -57,7 +74,8 @@ export function diff(input: DiffInput): DiffResult {
 		}
 	}
 
-	const remoteMoved = (input.baseline?.snapshotId ?? null) !== (input.remote?.snapshotId ?? null);
+	const remoteMoved =
+		(input.baseline?.snapshotId ?? null) !== (input.remote?.snapshotId ?? null);
 
 	return { localChanges, remoteChanges, conflicts, remoteMoved };
 }
@@ -67,7 +85,9 @@ function classify(
 	current: string | null,
 	remote = false,
 ): EChangeType {
-	if (baseline === null) return remote ? EChangeType.RemoteAdd : EChangeType.LocalAdd;
-	if (current === null) return remote ? EChangeType.RemoteDelete : EChangeType.LocalDelete;
+	if (baseline === null)
+		return remote ? EChangeType.RemoteAdd : EChangeType.LocalAdd;
+	if (current === null)
+		return remote ? EChangeType.RemoteDelete : EChangeType.LocalDelete;
 	return remote ? EChangeType.RemoteModify : EChangeType.LocalModify;
 }

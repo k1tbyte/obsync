@@ -56,16 +56,20 @@ export function describeWebDAVTarget(config: WebDAVStorageConfig): string {
 	return `WebDAV: ${url} / path: ${path}`;
 }
 
-export function createWebDAVAdapter(config: WebDAVStorageConfig): StorageAdapter {
+export function createWebDAVAdapter(
+	config: WebDAVStorageConfig,
+): StorageAdapter {
 	assertConfig(config);
 	const baseUrl = ensureTrailingSlash(config.baseUrl);
 	const basePath = normalizeBasePath(config.basePath);
 	const rootUrl = baseUrl + basePath;
-	const auth = "Basic " + btoa(`${config.username}:${config.password}`);
+	const auth = `Basic ${btoa(`${config.username}:${config.password}`)}`;
 	const knownDirs = new Set<string>();
 	knownDirs.add("");
 
-	const buildHeaders = (extra: Record<string, string> = {}): Record<string, string> => ({
+	const buildHeaders = (
+		extra: Record<string, string> = {},
+	): Record<string, string> => ({
 		Authorization: auth,
 		...extra,
 	});
@@ -136,7 +140,7 @@ export function createWebDAVAdapter(config: WebDAVStorageConfig): StorageAdapter
 			const buffer = body.buffer.slice(
 				body.byteOffset,
 				body.byteOffset + body.byteLength,
-			);
+			) as ArrayBuffer;
 			const res = await requestUrl({
 				url: urlForKey(key),
 				method: "PUT",
@@ -222,7 +226,9 @@ function parsePropfindResponse(xmlText: string, rootUrl: string): string[] {
 		if (!hrefEl) continue;
 		const href = (hrefEl.textContent ?? "").trim();
 		if (!href) continue;
-		const resourceType = node.getElementsByTagNameNS("DAV:", "resourcetype").item(0);
+		const resourceType = node
+			.getElementsByTagNameNS("DAV:", "resourcetype")
+			.item(0);
 		const isCollection = Boolean(
 			resourceType?.getElementsByTagNameNS("DAV:", "collection").length,
 		);

@@ -11,7 +11,9 @@ export interface ConfirmModalOptions {
 	cancelLabel?: string;
 }
 
-export function openConfirmModal(options: ConfirmModalOptions): Promise<boolean> {
+export function openConfirmModal(
+	options: ConfirmModalOptions,
+): Promise<boolean> {
 	return new Promise((resolve) => {
 		const modal = new Modal(options.app);
 		let settled = false;
@@ -26,7 +28,9 @@ export function openConfirmModal(options: ConfirmModalOptions): Promise<boolean>
 			modal.contentEl.createEl("p", { text: paragraph });
 		}
 		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
-		const cancelBtn = buttons.createEl("button", { text: options.cancelLabel ?? "Cancel" });
+		const cancelBtn = buttons.createEl("button", {
+			text: options.cancelLabel ?? "Cancel",
+		});
 		cancelBtn.addEventListener("click", () => finish(false));
 		const okBtn = buttons.createEl("button", { text: options.confirmLabel });
 		okBtn.addClass(options.confirmClass ?? "mod-cta");
@@ -41,7 +45,8 @@ export function confirmBatchResolve(
 	count: number,
 	strategy: EConflictStrategy,
 ): Promise<boolean> {
-	const action = strategy === EConflictStrategy.KeepLocal ? "Keep local" : "Accept remote";
+	const action =
+		strategy === EConflictStrategy.KeepLocal ? "Keep local" : "Accept remote";
 	const description =
 		strategy === EConflictStrategy.KeepLocal
 			? "All local versions will be pushed and overwrite remote."

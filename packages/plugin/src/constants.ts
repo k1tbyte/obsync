@@ -57,7 +57,10 @@ export const CONFIG_FILE_DENYLIST: ReadonlyArray<string> = [
 
 export const CONFIG_SUBDIR_DENYLIST: ReadonlyArray<string> = [".cache/"];
 
-export const VAULT_SUBDIR_DENYLIST: ReadonlyArray<string> = [".trash/", ".git/"];
+export const VAULT_SUBDIR_DENYLIST: ReadonlyArray<string> = [
+	".trash/",
+	".git/",
+];
 
 export const DEVICE_LOCAL_PLUGIN_IDS: ReadonlyArray<string> = [
 	"obsidian-git",

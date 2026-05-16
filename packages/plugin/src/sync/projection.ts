@@ -10,7 +10,7 @@ import {
 	loadLocalBytes,
 	loadRemoteBytes,
 } from "./content";
-import { computeHunks, type ComputedHunks } from "./hunks";
+import { type ComputedHunks, computeHunks } from "./hunks";
 
 export enum EDiffDirection {
 	Local = "local",
@@ -45,12 +45,18 @@ export async function buildLocalChangeDiff(
 	deps: ProjectionDeps,
 	change: FileChange,
 ): Promise<FileDiffModel> {
-	const left = await loadBaselineText({ storage: deps.storage, key: deps.key }, deps.baseline, change.path);
+	const left = await loadBaselineText(
+		{ storage: deps.storage, key: deps.key },
+		deps.baseline,
+		change.path,
+	);
 	const localBytes = await loadLocalBytes(deps.adapter, change.path);
-	const right = localBytes && isLikelyText(localBytes) ? bytesToText(localBytes) : null;
+	const right =
+		localBytes && isLikelyText(localBytes) ? bytesToText(localBytes) : null;
 	const leftText = left ?? "";
 	const rightText = right ?? "";
-	const isBinary = (left === null && deps.baseline?.files[change.path]) || right === null;
+	const isBinary =
+		(left === null && deps.baseline?.files[change.path]) || right === null;
 	return {
 		path: change.path,
 		direction: EDiffDirection.Local,
@@ -73,7 +79,10 @@ export async function buildRemoteChangeDiff(
 ): Promise<FileDiffModel> {
 	const remoteEntry = deps.remote?.files[change.path];
 	const remoteBytes = remoteEntry
-		? await loadRemoteBytes({ storage: deps.storage, key: deps.key }, remoteEntry.hash)
+		? await loadRemoteBytes(
+				{ storage: deps.storage, key: deps.key },
+				remoteEntry.hash,
+			)
 		: null;
 	const localBytes = await loadLocalBytes(deps.adapter, change.path);
 	const leftBinary = !!localBytes && !isLikelyText(localBytes);
@@ -102,7 +111,10 @@ export async function buildConflictDiff(
 ): Promise<FileDiffModel> {
 	const remoteEntry = deps.remote?.files[conflict.path];
 	const remoteBytes = remoteEntry
-		? await loadRemoteBytes({ storage: deps.storage, key: deps.key }, remoteEntry.hash)
+		? await loadRemoteBytes(
+				{ storage: deps.storage, key: deps.key },
+				remoteEntry.hash,
+			)
 		: null;
 	const localBytes = await loadLocalBytes(deps.adapter, conflict.path);
 	const baseText = await loadBaselineText(

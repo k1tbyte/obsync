@@ -7,7 +7,12 @@ import {
 	PLUGIN_ID,
 } from "../constants";
 import { readBinary, writeBinary } from "../vault/io";
-import { decryptJson, encryptJson, type EncryptionKey, randomBytes } from "./index";
+import {
+	decryptJson,
+	type EncryptionKey,
+	encryptJson,
+	randomBytes,
+} from "./index";
 
 interface CachedPayload {
 	version: 1;
@@ -96,9 +101,9 @@ function importAesKey(bytes: Uint8Array): Promise<EncryptionKey> {
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer;
+		return bytes.buffer as ArrayBuffer;
 	}
-	return bytes.slice().buffer;
+	return bytes.slice().buffer as ArrayBuffer;
 }
 
 function pluginFolder(configDir: string): string {

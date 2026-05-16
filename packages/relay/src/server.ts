@@ -18,7 +18,10 @@ import type * as Party from "partykit/server";
 export default class SyncRelay implements Party.Server {
 	constructor(readonly room: Party.Room) {}
 
-	onConnect(connection: Party.Connection, { request }: Party.ConnectionContext): void {
+	onConnect(
+		connection: Party.Connection,
+		{ request }: Party.ConnectionContext,
+	): void {
 		const expected = this.room.env.TOKEN as string | undefined;
 		if (!expected) return;
 		const url = new URL(request.url);
@@ -51,7 +54,9 @@ export default class SyncRelay implements Party.Server {
 			return new Response("ok");
 		}
 
-		return new Response("Obsync relay. Connect via WebSocket.", { status: 200 });
+		return new Response("Obsync relay. Connect via WebSocket.", {
+			status: 200,
+		});
 	}
 }
 

@@ -39,8 +39,12 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	const snippetsDir = `${configDir}/${CONFIG_SNIPPETS_DIR}`;
 	const themesDir = `${configDir}/${CONFIG_THEMES_DIR}`;
 
-	const deniedConfigFiles = CONFIG_FILE_DENYLIST.map((f) => `${configDir}/${f}`);
-	const deniedConfigDirs = CONFIG_SUBDIR_DENYLIST.map((d) => `${configDir}/${d}`);
+	const deniedConfigFiles = CONFIG_FILE_DENYLIST.map(
+		(f) => `${configDir}/${f}`,
+	);
+	const deniedConfigDirs = CONFIG_SUBDIR_DENYLIST.map(
+		(d) => `${configDir}/${d}`,
+	);
 	const deviceLocalPluginPrefixes = DEVICE_LOCAL_PLUGIN_IDS.map(
 		(id) => `${pluginsDir}${id}/`,
 	);
@@ -61,7 +65,7 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 				return false;
 			}
 
-			if (ignoreMatcher && ignoreMatcher.ignores(path)) return false;
+			if (ignoreMatcher?.ignores(path)) return false;
 			return true;
 		},
 		canDescend(rawDir) {
@@ -70,7 +74,10 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			const dirPath = `${dir}/`;
 			if (isInVaultDenylist(dirPath)) return false;
 			if (dirPath.startsWith(ownPluginPrefix)) return false;
-			if (ignoreMatcher && (ignoreMatcher.ignores(dir) || ignoreMatcher.ignores(dirPath))) {
+			if (
+				ignoreMatcher &&
+				(ignoreMatcher.ignores(dir) || ignoreMatcher.ignores(dirPath))
+			) {
 				return false;
 			}
 
@@ -91,7 +98,7 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (path.startsWith(ownPluginPrefix)) return false;
 			if (path.startsWith(configPrefix)) return false;
 			if (hasDotSegment(path)) return false;
-			return Boolean(ignoreMatcher && ignoreMatcher.ignores(path));
+			return Boolean(ignoreMatcher?.ignores(path));
 		},
 	};
 
@@ -103,7 +110,8 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		if (sync.hotkeys && path === hotkeysFile) return true;
 		if (sync.pluginList && path === communityPluginsFile) return true;
 		if (sync.pluginConfigs && path.startsWith(pluginsDir)) {
-			if (deviceLocalPluginPrefixes.some((p) => path.startsWith(p))) return false;
+			if (deviceLocalPluginPrefixes.some((p) => path.startsWith(p)))
+				return false;
 			return true;
 		}
 		if (sync.snippets && path.startsWith(snippetsDir)) return true;
@@ -116,10 +124,13 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	}
 
 	function canDescendConfigDir(dirPath: string): boolean {
-		if (deniedConfigDirs.some((d) => dirPath === d || dirPath.startsWith(d))) return false;
+		if (deniedConfigDirs.some((d) => dirPath === d || dirPath.startsWith(d)))
+			return false;
 		if (dirPath.startsWith(pluginsDir)) {
 			if (!sync.pluginConfigs) return false;
-			return !deviceLocalPluginPrefixes.some((p) => dirPath === p || dirPath.startsWith(p));
+			return !deviceLocalPluginPrefixes.some(
+				(p) => dirPath === p || dirPath.startsWith(p),
+			);
 		}
 		if (dirPath.startsWith(snippetsDir)) return sync.snippets;
 		if (dirPath.startsWith(themesDir)) return sync.themes;

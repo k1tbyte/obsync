@@ -2,7 +2,12 @@ import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
 import { RACY_INDEX_WINDOW_MS } from "../constants";
 import { sha256Hex } from "../crypto";
-import type { HashCacheEntry, LocalSnapshot, ManifestEntry, SkippedFile } from "../types";
+import type {
+	HashCacheEntry,
+	LocalSnapshot,
+	ManifestEntry,
+	SkippedFile,
+} from "../types";
 import { runWithConcurrency } from "../utils/concurrency";
 import type { ScopePolicy } from "./scope";
 
@@ -24,13 +29,20 @@ export async function scanVault(
 	scope: ScopePolicy,
 	options: ScannerOptions,
 	hashCache: Record<string, HashCacheEntry>,
-): Promise<{ snapshot: LocalSnapshot; updatedCache: Record<string, HashCacheEntry> }> {
+): Promise<{
+	snapshot: LocalSnapshot;
+	updatedCache: Record<string, HashCacheEntry>;
+}> {
 	const files: Record<string, ManifestEntry> = {};
 	const skipped: SkippedFile[] = [];
 	const ignoredPaths: string[] = [];
 	const updatedCache: Record<string, HashCacheEntry> = {};
 
-	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(adapter, scope, ROOT);
+	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(
+		adapter,
+		scope,
+		ROOT,
+	);
 	let scanned = 0;
 	await runWithConcurrency(paths, options.concurrency ?? 4, async (path) => {
 		if (!scope.includes(path)) {
@@ -40,13 +52,27 @@ export async function scanVault(
 		const stat = await adapter.stat(path);
 		if (!stat || stat.type !== "file") return;
 		if (stat.size > options.maxFileBytes) {
-			skipped.push({ path, reason: `File exceeds max size (${stat.size} bytes)` });
+			skipped.push({
+				path,
+				reason: `File exceeds max size (${stat.size} bytes)`,
+			});
 			return;
 		}
 		const cached = hashCache[path];
-		const entry = await buildEntry(adapter, path, stat.size, stat.mtime, scope.classify(path), cached);
+		const entry = await buildEntry(
+			adapter,
+			path,
+			stat.size,
+			stat.mtime,
+			scope.classify(path),
+			cached,
+		);
 		files[path] = entry;
-		updatedCache[path] = { mtime: stat.mtime, size: stat.size, hash: entry.hash };
+		updatedCache[path] = {
+			mtime: stat.mtime,
+			size: stat.size,
+			hash: entry.hash,
+		};
 		const count = ++scanned;
 		if (options.onProgress && count % 500 === 0) options.onProgress(count);
 	});
@@ -57,7 +83,10 @@ export async function scanVault(
 			const lc = path.toLowerCase();
 			const existing = lower.get(lc);
 			if (existing) {
-				skipped.push({ path, reason: `Case-insensitive collision with "${existing}"` });
+				skipped.push({
+					path,
+					reason: `Case-insensitive collision with "${existing}"`,
+				});
 				delete files[path];
 			} else {
 				lower.set(lc, path);
@@ -65,8 +94,13 @@ export async function scanVault(
 		}
 	}
 
-	const emptyFolders = rawEmptyFolders.filter((dir) => scope.includes(`${dir}/x`));
-	return { snapshot: { files, skipped, emptyFolders, ignoredPaths }, updatedCache };
+	const emptyFolders = rawEmptyFolders.filter((dir) =>
+		scope.includes(`${dir}/x`),
+	);
+	return {
+		snapshot: { files, skipped, emptyFolders, ignoredPaths },
+		updatedCache,
+	};
 }
 
 async function buildEntry(
@@ -77,7 +111,12 @@ async function buildEntry(
 	kind: ManifestEntry["kind"],
 	cached: HashCacheEntry | undefined,
 ): Promise<ManifestEntry> {
-	if (cached && cached.mtime === mtime && cached.size === size && !isRacy(mtime)) {
+	if (
+		cached &&
+		cached.mtime === mtime &&
+		cached.size === size &&
+		!isRacy(mtime)
+	) {
 		return { hash: cached.hash, size, mtime, kind };
 	}
 	const buffer = await adapter.readBinary(path);
@@ -101,8 +140,14 @@ async function listAllFiles(
 		const current = stack.pop() as string;
 		const listing = await safeList(adapter, current);
 		const includedFiles = listing.files.filter((file) => scope.includes(file));
-		const includedFolders = listing.folders.filter((folder) => scope.canDescend(folder));
-		if (current !== dir && includedFiles.length === 0 && includedFolders.length === 0) {
+		const includedFolders = listing.folders.filter((folder) =>
+			scope.canDescend(folder),
+		);
+		if (
+			current !== dir &&
+			includedFiles.length === 0 &&
+			includedFolders.length === 0
+		) {
 			emptyFolders.push(current);
 		}
 		for (const file of includedFiles) files.push(file);

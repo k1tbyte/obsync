@@ -1,10 +1,15 @@
 import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
-import { decryptBytes, encryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
+import {
+	decryptBytes,
+	type EncryptionKey,
+	encryptBytes,
+	sha256Hex,
+} from "../crypto";
 import type { StorageAdapter } from "../storage/types";
 import {
-	EChangeType,
 	type DiffResult,
+	EChangeType,
 	type EFileKind,
 	type HashCacheEntry,
 	type LocalSnapshot,
@@ -12,10 +17,16 @@ import {
 	type Manifest,
 	type ManifestEntry,
 } from "../types";
-import { deletePath, ensureDir, readBinary, removeEmptyDir, writeBinary } from "../vault/io";
+import { runWithConcurrency } from "../utils/concurrency";
+import {
+	deletePath,
+	ensureDir,
+	readBinary,
+	removeEmptyDir,
+	writeBinary,
+} from "../vault/io";
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
-import { runWithConcurrency } from "../utils/concurrency";
 import { diff } from "./diff";
 import {
 	buildManifest,
@@ -43,12 +54,18 @@ export interface CompareResult {
 	updatedCache: Record<string, HashCacheEntry>;
 }
 
-export async function compare(deps: EngineDependencies): Promise<CompareResult> {
+export async function compare(
+	deps: EngineDependencies,
+): Promise<CompareResult> {
 	const [{ snapshot, updatedCache }, fetched] = await Promise.all([
 		scanVault(
 			deps.adapter,
 			deps.scope,
-			{ maxFileBytes: deps.maxFileBytes, onProgress: deps.onScanProgress, concurrency: deps.concurrency },
+			{
+				maxFileBytes: deps.maxFileBytes,
+				onProgress: deps.onScanProgress,
+				concurrency: deps.concurrency,
+			},
 			deps.state.hashCache,
 		),
 		fetchRemoteManifest(deps.storage, deps.key),
@@ -56,15 +73,17 @@ export async function compare(deps: EngineDependencies): Promise<CompareResult> 
 	assertVaultCompatibility(deps.state, fetched);
 	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
 	if (fetched && remote !== fetched) {
-		console.warn(
-			"[obsync] storage returned stale manifest",
-			{ fetched: fetched.snapshotId, baseline: deps.state.baseline?.snapshotId },
-		);
+		console.warn("[obsync] storage returned stale manifest", {
+			fetched: fetched.snapshotId,
+			baseline: deps.state.baseline?.snapshotId,
+		});
 	}
 	const result = diff({
 		local: snapshot,
 		remote: filterManifestForDiff(remote, deps.scope),
-		baseline: remote ? filterManifestForDiff(deps.state.baseline, deps.scope) : null,
+		baseline: remote
+			? filterManifestForDiff(deps.state.baseline, deps.scope)
+			: null,
 	});
 	return { snapshot, remote, diff: result, updatedCache };
 }
@@ -81,24 +100,38 @@ export function filterManifestForDiff(
 	return { ...manifest, files };
 }
 
-export async function push(deps: EngineDependencies, compareResult: CompareResult): Promise<Manifest> {
+export async function push(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+): Promise<Manifest> {
 	if (compareResult.diff.conflicts.length > 0) {
 		throw new Error("Cannot push: conflicts must be resolved first");
 	}
 	if (compareResult.diff.remoteChanges.length > 0) {
 		throw new Error("Cannot push: remote has changes; pull first");
 	}
-	return pushPaths(deps, compareResult, compareResult.diff.localChanges.map((c) => c.path));
+	return pushPaths(
+		deps,
+		compareResult,
+		compareResult.diff.localChanges.map((c) => c.path),
+	);
 }
 
-export async function pull(deps: EngineDependencies, compareResult: CompareResult): Promise<Manifest> {
+export async function pull(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+): Promise<Manifest> {
 	if (compareResult.diff.conflicts.length > 0) {
 		throw new Error("Cannot pull: conflicts must be resolved first");
 	}
 	if (!compareResult.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
 	}
-	return pullPaths(deps, compareResult, compareResult.diff.remoteChanges.map((c) => c.path));
+	return pullPaths(
+		deps,
+		compareResult,
+		compareResult.diff.remoteChanges.map((c) => c.path),
+	);
 }
 
 export async function pushPaths(
@@ -109,7 +142,9 @@ export async function pushPaths(
 ): Promise<Manifest> {
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
 	const pathSet = new Set(paths);
-	const localChanges = compareResult.diff.localChanges.filter((c) => pathSet.has(c.path));
+	const localChanges = compareResult.diff.localChanges.filter((c) =>
+		pathSet.has(c.path),
+	);
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
 	let done = 0;
@@ -132,14 +167,23 @@ export async function pushPaths(
 		snapshot: compareResult.snapshot,
 		localChanges,
 	});
-	const folders = mergeFolderState(compareResult.remote, compareResult.snapshot);
-	const vaultId = deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
-	const manifest = buildManifest(deps.state.deviceId, vaultId, compareResult.remote, {
-		files: nextFiles,
-		skipped: [],
-		emptyFolders: folders,
-		ignoredPaths: [],
-	});
+	const folders = mergeFolderState(
+		compareResult.remote,
+		compareResult.snapshot,
+	);
+	const vaultId =
+		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+	const manifest = buildManifest(
+		deps.state.deviceId,
+		vaultId,
+		compareResult.remote,
+		{
+			files: nextFiles,
+			skipped: [],
+			emptyFolders: folders,
+			ignoredPaths: [],
+		},
+	);
 	await publishManifestWithGuard(
 		deps.storage,
 		deps.key,
@@ -161,7 +205,9 @@ export async function pullPaths(
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
 	const pathSet = new Set(paths);
 	const remote = compareResult.remote;
-	const changes = compareResult.diff.remoteChanges.filter((c) => pathSet.has(c.path));
+	const changes = compareResult.diff.remoteChanges.filter((c) =>
+		pathSet.has(c.path),
+	);
 
 	const downloads = changes.filter((c) => c.type !== EChangeType.RemoteDelete);
 	const deletions = changes.filter((c) => c.type === EChangeType.RemoteDelete);
@@ -232,15 +278,27 @@ export async function pushSingleFile(
 		kind,
 	};
 	const baseFiles = compareResult.remote?.files ?? {};
-	const nextFiles: Record<string, ManifestEntry> = { ...baseFiles, [input.path]: entry };
-	const folders = mergeFolderState(compareResult.remote, compareResult.snapshot);
-	const vaultId = deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
-	const manifest = buildManifest(deps.state.deviceId, vaultId, compareResult.remote, {
-		files: nextFiles,
-		skipped: [],
-		emptyFolders: folders,
-		ignoredPaths: [],
-	});
+	const nextFiles: Record<string, ManifestEntry> = {
+		...baseFiles,
+		[input.path]: entry,
+	};
+	const folders = mergeFolderState(
+		compareResult.remote,
+		compareResult.snapshot,
+	);
+	const vaultId =
+		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+	const manifest = buildManifest(
+		deps.state.deviceId,
+		vaultId,
+		compareResult.remote,
+		{
+			files: nextFiles,
+			skipped: [],
+			emptyFolders: folders,
+			ignoredPaths: [],
+		},
+	);
 	await publishManifestWithGuard(
 		deps.storage,
 		deps.key,
@@ -267,7 +325,10 @@ function buildPartialFileMap(input: {
 	return next;
 }
 
-function mergeFolderState(remote: Manifest | null, snapshot: LocalSnapshot): string[] {
+function mergeFolderState(
+	remote: Manifest | null,
+	snapshot: LocalSnapshot,
+): string[] {
 	if (remote?.folders && remote.folders.length > 0) {
 		const merged = new Set<string>(remote.folders);
 		for (const dir of snapshot.emptyFolders) merged.add(dir);
@@ -282,7 +343,9 @@ function buildAdvancedBaseline(input: {
 	pulledPaths: Set<string>;
 }): Manifest {
 	const baseline = input.previousBaseline;
-	const files: Record<string, ManifestEntry> = baseline ? { ...baseline.files } : {};
+	const files: Record<string, ManifestEntry> = baseline
+		? { ...baseline.files }
+		: {};
 	for (const path of input.pulledPaths) {
 		const remoteEntry = input.remote.files[path];
 		if (remoteEntry) {
@@ -317,7 +380,10 @@ function collectUploads(
 	return uploads;
 }
 
-function assertVaultCompatibility(state: LocalState, remote: Manifest | null): void {
+function assertVaultCompatibility(
+	state: LocalState,
+	remote: Manifest | null,
+): void {
 	if (!remote) return;
 	if (state.vaultId && state.vaultId !== remote.vaultId) {
 		throw new Error(

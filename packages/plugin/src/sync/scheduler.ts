@@ -16,7 +16,10 @@ export interface SchedulerHost extends Plugin {
 	isRealtimeConnected?(): boolean;
 }
 
-export function registerScheduler(host: SchedulerHost, controller: SyncController): void {
+export function registerScheduler(
+	host: SchedulerHost,
+	controller: SyncController,
+): void {
 	let lastRun = 0;
 	let consecutiveFailures = 0;
 	let backoffUntil = 0;
@@ -37,23 +40,31 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 			console.warn("[obsync] auto-pull tick failed", err);
 			if (consecutiveFailures >= SCHEDULER_BACKOFF_THRESHOLD) {
 				const exp = consecutiveFailures - SCHEDULER_BACKOFF_THRESHOLD;
-				const delay = Math.min(SCHEDULER_BACKOFF_BASE_MS * Math.pow(2, exp), SCHEDULER_BACKOFF_MAX_MS);
+				const delay = Math.min(
+					SCHEDULER_BACKOFF_BASE_MS * 2 ** exp,
+					SCHEDULER_BACKOFF_MAX_MS,
+				);
 				backoffUntil = Date.now() + delay;
 			}
 		}
 	};
 
 	if (host.settings.autoPullOnStartup) {
-		const timer = window.setTimeout(() => void tick(), AUTO_PULL_STARTUP_DELAY_MS);
+		const timer = window.setTimeout(
+			() => void tick(),
+			AUTO_PULL_STARTUP_DELAY_MS,
+		);
 		host.register(() => window.clearTimeout(timer));
 	}
 
 	if (host.settings.autoPullIntervalMinutes > 0) {
 		const intervalMs = host.settings.autoPullIntervalMinutes * 60_000;
-		host.registerInterval(window.setInterval(() => {
-			if (host.settings.realtimeSync) return;
-			void tick();
-		}, intervalMs));
+		host.registerInterval(
+			window.setInterval(() => {
+				if (host.settings.realtimeSync) return;
+				void tick();
+			}, intervalMs),
+		);
 	}
 
 	const triggerVaultSync = debounce(
@@ -69,7 +80,10 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 	host.registerEvent(host.app.vault.on("rename", triggerVaultSync));
 }
 
-async function runVaultSync(host: SchedulerHost, controller: SyncController): Promise<void> {
+async function runVaultSync(
+	host: SchedulerHost,
+	controller: SyncController,
+): Promise<void> {
 	if (!isStorageConfigured(host.settings)) return;
 	await controller.refresh();
 	if (!host.settings.autoPushOnSave) return;

@@ -144,7 +144,7 @@ export class RealtimeClient {
 		if (this.reconnectTimer !== null) return;
 
 		const delay = Math.min(
-			RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts),
+			RECONNECT_BASE_MS * 2 ** this.reconnectAttempts,
 			RECONNECT_MAX_MS,
 		);
 		this.reconnectAttempts++;

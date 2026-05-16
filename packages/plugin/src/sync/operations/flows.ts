@@ -1,6 +1,10 @@
 import { ESyncLogOperation } from "../../logs/store";
 import { resetLocalState } from "../baseline";
-import { compare, type CompareResult, type EngineDependencies } from "../engine";
+import {
+	type CompareResult,
+	compare,
+	type EngineDependencies,
+} from "../engine";
 import { resetRemoteStorage as resetStorageObjects } from "../reset";
 import type { OperationContext } from "./types";
 
@@ -15,9 +19,13 @@ export async function runResetRemoteStorageFlow(
 	ctx: OperationContext,
 ): Promise<FlowResult> {
 	ctx.setProgress("Resetting remote storage…");
-	const result = await resetStorageObjects(deps.storage, deps.concurrency, (done, total) => {
-		ctx.reportProgressSoon(`Deleting remote sync data ${done}/${total}…`);
-	});
+	const result = await resetStorageObjects(
+		deps.storage,
+		deps.concurrency,
+		(done, total) => {
+			ctx.reportProgressSoon(`Deleting remote sync data ${done}/${total}…`);
+		},
+	);
 	const resetState = resetLocalState(deps.state);
 	await ctx.persistState(resetState);
 	ctx.setProgress("Refreshing…");

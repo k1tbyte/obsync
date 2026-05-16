@@ -12,10 +12,15 @@ import type {
 	Manifest,
 	ManifestEntry,
 } from "../types";
-import { DiffCache } from "./diff-cache";
 import { autoMergeOp } from "./auto-merge";
 import { diff } from "./diff";
-import { compare, type CompareResult, type EngineDependencies, filterManifestForDiff } from "./engine";
+import { DiffCache } from "./diff-cache";
+import {
+	type CompareResult,
+	compare,
+	type EngineDependencies,
+	filterManifestForDiff,
+} from "./engine";
 import { ConcurrentPushError } from "./manifest";
 import {
 	batchAcceptRemoteOp,
@@ -47,9 +52,21 @@ export interface SyncControllerHost {
 	persistState(state: LocalState): Promise<void>;
 	getState(): LocalState | null;
 	onPushComplete?(): void;
-	logInfo(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
-	logWarn(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
-	logError(operation: ESyncLogOperation, message: string, details?: readonly string[]): Promise<void>;
+	logInfo(
+		operation: ESyncLogOperation,
+		message: string,
+		details?: readonly string[],
+	): Promise<void>;
+	logWarn(
+		operation: ESyncLogOperation,
+		message: string,
+		details?: readonly string[],
+	): Promise<void>;
+	logError(
+		operation: ESyncLogOperation,
+		message: string,
+		details?: readonly string[],
+	): Promise<void>;
 }
 
 export interface SyncStatusSnapshot {
@@ -75,8 +92,14 @@ const CONFLICT_STRATEGY_OPS: Record<
 	EConflictStrategy,
 	{ op: Operation<ReadonlySet<string>>; logOp: ESyncLogOperation }
 > = {
-	[EConflictStrategy.KeepLocal]: { op: batchKeepLocalOp, logOp: ESyncLogOperation.Push },
-	[EConflictStrategy.AcceptRemote]: { op: batchAcceptRemoteOp, logOp: ESyncLogOperation.Pull },
+	[EConflictStrategy.KeepLocal]: {
+		op: batchKeepLocalOp,
+		logOp: ESyncLogOperation.Push,
+	},
+	[EConflictStrategy.AcceptRemote]: {
+		op: batchAcceptRemoteOp,
+		logOp: ESyncLogOperation.Pull,
+	},
 };
 
 export class SyncController {
@@ -95,7 +118,8 @@ export class SyncController {
 		this.host = host;
 		this.broadcaster = new StatusBroadcaster<SyncStatusSnapshot>({
 			getSnapshot: () => this.getSnapshot(),
-			emit: (snapshot) => this.host.app.workspace.trigger(STATUS_EVENT, snapshot),
+			emit: (snapshot) =>
+				this.host.app.workspace.trigger(STATUS_EVENT, snapshot),
 		});
 	}
 
@@ -227,7 +251,10 @@ export class SyncController {
 		);
 	}
 
-	async revertHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
+	async revertHunks(
+		path: string,
+		selected: ReadonlySet<number>,
+	): Promise<void> {
 		if (selected.size === 0) return;
 		await this.runOperation(ESyncLogOperation.Compare, (deps, result, ctx) =>
 			revertHunksOp(deps, result, { path, selected }, ctx),
@@ -249,7 +276,9 @@ export class SyncController {
 		const set = new Set(paths);
 		if (set.size === 0) return;
 		const { op, logOp } = CONFLICT_STRATEGY_OPS[strategy];
-		await this.runOperation(logOp, (deps, result, ctx) => op(deps, result, set, ctx));
+		await this.runOperation(logOp, (deps, result, ctx) =>
+			op(deps, result, set, ctx),
+		);
 	}
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
@@ -294,8 +323,14 @@ export class SyncController {
 	private enqueue<T>(task: () => Promise<T>): Promise<T> {
 		this.pendingOps++;
 		if (this.pendingOps === 1) this.broadcaster.broadcast();
-		const run = this.chain.then(() => task(), () => task());
-		this.chain = run.then(() => undefined, () => undefined);
+		const run = this.chain.then(
+			() => task(),
+			() => task(),
+		);
+		this.chain = run.then(
+			() => undefined,
+			() => undefined,
+		);
 		const finish = (): void => {
 			this.pendingOps--;
 			if (this.pendingOps === 0) this.broadcaster.broadcast();
@@ -324,7 +359,10 @@ export class SyncController {
 			this.diffCache.clear();
 			this.staleReason = null;
 			const freshState = this.host.getState() ?? deps.state;
-			const state: LocalState = { ...freshState, hashCache: result.updatedCache };
+			const state: LocalState = {
+				...freshState,
+				hashCache: result.updatedCache,
+			};
 			await this.host.persistState(state);
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : String(err);
@@ -411,7 +449,9 @@ export class SyncController {
 						await this.doRefresh();
 					} catch (refreshErr) {
 						this.error =
-							refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+							refreshErr instanceof Error
+								? refreshErr.message
+								: String(refreshErr);
 					}
 					await this.host.logWarn(operation, err.message);
 					return;

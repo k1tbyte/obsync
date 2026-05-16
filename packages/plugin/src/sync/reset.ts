@@ -1,4 +1,8 @@
-import { DEFAULT_CONCURRENCY, REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "../constants";
+import {
+	DEFAULT_CONCURRENCY,
+	REMOTE_MANIFEST_KEY,
+	REMOTE_OBJECTS_PREFIX,
+} from "../constants";
 import type { StorageAdapter } from "../storage/types";
 import { runWithConcurrency } from "../utils/concurrency";
 

@@ -27,7 +27,10 @@ export function renderConflictPreview(
 
 	const hunks = model.hunks.hunks;
 	if (hunks.length === 0) {
-		parent.createEl("p", { cls: "obsync-conflict-preview-empty", text: "No textual differences." });
+		parent.createEl("p", {
+			cls: "obsync-conflict-preview-empty",
+			text: "No textual differences.",
+		});
 		return;
 	}
 

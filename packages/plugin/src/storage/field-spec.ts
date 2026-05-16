@@ -23,4 +23,7 @@ export interface ToggleFieldSpec extends BaseFieldSpec {
 	kind: EFieldKind.Toggle;
 }
 
-export type SettingsFieldSpec = TextFieldSpec | PasswordFieldSpec | ToggleFieldSpec;
+export type SettingsFieldSpec =
+	| TextFieldSpec
+	| PasswordFieldSpec
+	| ToggleFieldSpec;

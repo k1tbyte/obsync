@@ -1,7 +1,6 @@
 import { type App, Modal } from "obsidian";
-
-import { describeConflict } from "../sync/reporting";
 import type { CompareResult } from "../sync/engine";
+import { describeConflict } from "../sync/reporting";
 import type { FileChange } from "../types";
 
 export interface ReportActions {
@@ -27,8 +26,16 @@ export class SyncReportModal extends Modal {
 
 		this.renderSummary(contentEl);
 		this.renderConflicts(contentEl);
-		this.renderChangeList(contentEl, "Local changes (push)", this.result.diff.localChanges);
-		this.renderChangeList(contentEl, "Remote changes (pull)", this.result.diff.remoteChanges);
+		this.renderChangeList(
+			contentEl,
+			"Local changes (push)",
+			this.result.diff.localChanges,
+		);
+		this.renderChangeList(
+			contentEl,
+			"Remote changes (pull)",
+			this.result.diff.remoteChanges,
+		);
 		this.renderSkipped(contentEl);
 		this.renderActions(contentEl);
 	}
@@ -43,7 +50,9 @@ export class SyncReportModal extends Modal {
 		const summary = parent.createEl("p");
 		summary.setText(
 			`Local: ${d.localChanges.length} • Remote: ${d.remoteChanges.length} • Conflicts: ${d.conflicts.length}` +
-				(remote ? ` • Remote snapshot: ${shortId(remote.snapshotId)}` : " • No remote manifest"),
+				(remote
+					? ` • Remote snapshot: ${shortId(remote.snapshotId)}`
+					: " • No remote manifest"),
 		);
 		if (this.result.diff.remoteMoved && remote) {
 			parent.createEl("p", { text: "Remote moved since last sync." });
@@ -61,7 +70,11 @@ export class SyncReportModal extends Modal {
 		}
 	}
 
-	private renderChangeList(parent: HTMLElement, title: string, changes: FileChange[]): void {
+	private renderChangeList(
+		parent: HTMLElement,
+		title: string,
+		changes: FileChange[],
+	): void {
 		if (changes.length === 0) return;
 		const section = parent.createEl("details");
 		section.createEl("summary", { text: `${title} (${changes.length})` });

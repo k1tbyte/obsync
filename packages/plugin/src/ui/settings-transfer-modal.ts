@@ -1,7 +1,11 @@
 import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 import * as QRCode from "qrcode";
 
-import { IMPORT_CONFIRMATION_TEXT, QR_ERROR_CORRECTION, QR_SIZE } from "../constants";
+import {
+	IMPORT_CONFIRMATION_TEXT,
+	QR_ERROR_CORRECTION,
+	QR_SIZE,
+} from "../constants";
 import type { ObsyncSettings } from "../settings/model";
 import { describeStorageTarget } from "../storage/registry";
 
@@ -17,12 +21,10 @@ export class SettingsTransferExportModal extends Modal {
 		const { contentEl, titleEl } = this;
 		titleEl.setText("Export Obsync setup");
 		contentEl.createEl("p", {
-			text:
-				"This QR contains the main sync settings in a compact encrypted format. The same Obsync passphrase is required to import it.",
+			text: "This QR contains the main sync settings in a compact encrypted format. The same Obsync passphrase is required to import it.",
 		});
 		contentEl.createEl("p", {
-			text:
-				"Local-only display preferences and the cached passphrase are not transferred.",
+			text: "Local-only display preferences and the cached passphrase are not transferred.",
 		});
 
 		const canvas = contentEl.createEl("canvas");
@@ -39,7 +41,9 @@ export class SettingsTransferExportModal extends Modal {
 			});
 		});
 
-		const textarea = contentEl.createEl("textarea", { cls: "obsync-transfer-url" });
+		const textarea = contentEl.createEl("textarea", {
+			cls: "obsync-transfer-url",
+		});
 		textarea.value = this.transferUrl;
 		textarea.rows = 4;
 		textarea.readOnly = true;
@@ -50,7 +54,9 @@ export class SettingsTransferExportModal extends Modal {
 					.setButtonText("Copy link")
 					.onClick(() => void navigator.clipboard.writeText(this.transferUrl)),
 			)
-			.addButton((button) => button.setButtonText("Close").onClick(() => this.close()));
+			.addButton((button) =>
+				button.setButtonText("Close").onClick(() => this.close()),
+			);
 	}
 
 	onClose(): void {
@@ -75,7 +81,9 @@ export class SettingsTransferImportModal extends Modal {
 			text: "Paste an Obsync setup link or transfer token encrypted with your passphrase.",
 		});
 
-		const textarea = contentEl.createEl("textarea", { cls: "obsync-transfer-url" });
+		const textarea = contentEl.createEl("textarea", {
+			cls: "obsync-transfer-url",
+		});
 		textarea.rows = 6;
 		textarea.addEventListener("input", () => {
 			this.value = textarea.value;
@@ -83,9 +91,7 @@ export class SettingsTransferImportModal extends Modal {
 
 		new Setting(contentEl)
 			.addButton((button) =>
-				button
-					.setButtonText("Cancel")
-					.onClick(() => this.cancel()),
+				button.setButtonText("Cancel").onClick(() => this.cancel()),
 			)
 			.addButton((button) =>
 				button
@@ -144,8 +150,12 @@ export class SettingsTransferConfirmModal extends Modal {
 		contentEl.createEl("p", {
 			text: "Local-only display preferences and passphrase cache settings stay unchanged.",
 		});
-		contentEl.createEl("p", { text: describeStorageTarget(this.settings.storage) });
-		contentEl.createEl("p", { text: `Type ${IMPORT_CONFIRMATION_TEXT} to continue.` });
+		contentEl.createEl("p", {
+			text: describeStorageTarget(this.settings.storage),
+		});
+		contentEl.createEl("p", {
+			text: `Type ${IMPORT_CONFIRMATION_TEXT} to continue.`,
+		});
 
 		let importButton: ButtonComponent | null = null;
 		new Setting(contentEl).setName("Confirmation").addText((text) => {
@@ -157,9 +167,7 @@ export class SettingsTransferConfirmModal extends Modal {
 
 		new Setting(contentEl)
 			.addButton((button) =>
-				button
-					.setButtonText("Cancel")
-					.onClick(() => this.cancel()),
+				button.setButtonText("Cancel").onClick(() => this.cancel()),
 			)
 			.addButton((button) => {
 				importButton = button;
@@ -194,7 +202,10 @@ export class SettingsTransferConfirmModal extends Modal {
 	}
 }
 
-export function showSettingsTransferExport(app: App, transferUrl: string): void {
+export function showSettingsTransferExport(
+	app: App,
+	transferUrl: string,
+): void {
 	new SettingsTransferExportModal(app, transferUrl).open();
 }
 

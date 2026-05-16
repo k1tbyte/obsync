@@ -10,7 +10,12 @@ import type { Operation } from "./types";
 
 const LOG_PATH_LIMIT = 50;
 
-export const revertPathsOp: Operation<ReadonlyArray<string>> = async (deps, result, paths, ctx) => {
+export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
+	deps,
+	result,
+	paths,
+	ctx,
+) => {
 	const touched = new Set(paths);
 	const nextHashCache = { ...result.updatedCache };
 	for (const path of paths) {
@@ -56,7 +61,12 @@ export interface RevertHunksArgs {
 	selected: ReadonlySet<number>;
 }
 
-export const revertHunksOp: Operation<RevertHunksArgs> = async (deps, result, args, ctx) => {
+export const revertHunksOp: Operation<RevertHunksArgs> = async (
+	deps,
+	result,
+	args,
+	ctx,
+) => {
 	const { path, selected } = args;
 	const baselineEntry = deps.state.baseline?.files[path];
 	const baselineText = baselineEntry

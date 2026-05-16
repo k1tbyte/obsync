@@ -27,8 +27,18 @@ export interface ComputedHunks {
 export function computeHunks(left: string, right: string): ComputedHunks {
 	const normalizedLeft = normalizeEol(left);
 	const normalizedRight = normalizeEol(right);
-	const patch = structuredPatch("a", "b", normalizedLeft, normalizedRight, "", "", { context: 3 });
-	const hunks: SyncHunk[] = patch.hunks.map((h, idx) => annotateHunk(idx, h.oldStart, h.oldLines, h.newStart, h.newLines, h.lines));
+	const patch = structuredPatch(
+		"a",
+		"b",
+		normalizedLeft,
+		normalizedRight,
+		"",
+		"",
+		{ context: 3 },
+	);
+	const hunks: SyncHunk[] = patch.hunks.map((h, idx) =>
+		annotateHunk(idx, h.oldStart, h.oldLines, h.newStart, h.newLines, h.lines),
+	);
 	return {
 		hunks,
 		leftLines: splitLines(normalizedLeft),
@@ -36,7 +46,11 @@ export function computeHunks(left: string, right: string): ComputedHunks {
 	};
 }
 
-export function applyHunks(left: string, hunks: SyncHunk[], selected: ReadonlySet<number>): string {
+export function applyHunks(
+	left: string,
+	hunks: SyncHunk[],
+	selected: ReadonlySet<number>,
+): string {
 	const baseLines = splitLines(normalizeEol(left));
 	const out: string[] = [];
 	let cursor = 0;
@@ -69,7 +83,11 @@ export function applyHunks(left: string, hunks: SyncHunk[], selected: ReadonlySe
 	return out.join("\n");
 }
 
-export function buildUnifiedDiff(path: string, left: string, right: string): string {
+export function buildUnifiedDiff(
+	path: string,
+	left: string,
+	right: string,
+): string {
 	return structuredPatch(
 		`a/${path}`,
 		`b/${path}`,
@@ -83,7 +101,11 @@ export function buildUnifiedDiff(path: string, left: string, right: string): str
 		.join("\n");
 }
 
-export function buildUnifiedDiffHeader(path: string, left: string, right: string): string {
+export function buildUnifiedDiffHeader(
+	path: string,
+	left: string,
+	right: string,
+): string {
 	const body = buildUnifiedDiff(path, left, right);
 	if (!body) return "";
 	return `--- a/${path}\n+++ b/${path}\n${body}\n`;

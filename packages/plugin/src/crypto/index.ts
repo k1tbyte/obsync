@@ -1,4 +1,9 @@
-import { BLOB_VERSION, IV_BYTES, KDF_ITERATIONS, KDF_SALT_LABEL } from "../constants";
+import {
+	BLOB_VERSION,
+	IV_BYTES,
+	KDF_ITERATIONS,
+	KDF_SALT_LABEL,
+} from "../constants";
 
 const subtle = window.crypto.subtle;
 const encoder = new TextEncoder();
@@ -6,7 +11,10 @@ const decoder = new TextDecoder();
 
 export type EncryptionKey = CryptoKey;
 
-export async function deriveKey(passphrase: string, salt: Uint8Array): Promise<EncryptionKey> {
+export async function deriveKey(
+	passphrase: string,
+	salt: Uint8Array,
+): Promise<EncryptionKey> {
 	if (!passphrase) {
 		throw new Error("Passphrase is empty");
 	}
@@ -22,7 +30,12 @@ export async function deriveKey(passphrase: string, salt: Uint8Array): Promise<E
 	saltBytes.set(label, 0);
 	saltBytes.set(salt, label.length);
 	return subtle.deriveKey(
-		{ name: "PBKDF2", salt: saltBytes, iterations: KDF_ITERATIONS, hash: "SHA-256" },
+		{
+			name: "PBKDF2",
+			salt: saltBytes,
+			iterations: KDF_ITERATIONS,
+			hash: "SHA-256",
+		},
 		baseKey,
 		{ name: "AES-GCM", length: 256 },
 		false,
@@ -30,10 +43,17 @@ export async function deriveKey(passphrase: string, salt: Uint8Array): Promise<E
 	);
 }
 
-export async function encryptBytes(key: EncryptionKey, plaintext: Uint8Array): Promise<Uint8Array> {
+export async function encryptBytes(
+	key: EncryptionKey,
+	plaintext: Uint8Array,
+): Promise<Uint8Array> {
 	const iv = randomBytes(IV_BYTES);
 	const ciphertext = new Uint8Array(
-		await subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext),
+		await subtle.encrypt(
+			{ name: "AES-GCM", iv: iv as any },
+			key,
+			plaintext as any,
+		),
 	);
 	const out = new Uint8Array(1 + iv.length + ciphertext.length);
 	out[0] = BLOB_VERSION;
@@ -42,7 +62,10 @@ export async function encryptBytes(key: EncryptionKey, plaintext: Uint8Array): P
 	return out;
 }
 
-export async function decryptBytes(key: EncryptionKey, blob: Uint8Array): Promise<Uint8Array> {
+export async function decryptBytes(
+	key: EncryptionKey,
+	blob: Uint8Array,
+): Promise<Uint8Array> {
 	if (blob.length < 1 + IV_BYTES + 16) {
 		throw new Error("Encrypted blob is too short");
 	}
@@ -51,21 +74,31 @@ export async function decryptBytes(key: EncryptionKey, blob: Uint8Array): Promis
 	}
 	const iv = blob.subarray(1, 1 + IV_BYTES);
 	const ciphertext = blob.subarray(1 + IV_BYTES);
-	const plaintext = await subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+	const plaintext = await subtle.decrypt(
+		{ name: "AES-GCM", iv: iv as any },
+		key,
+		ciphertext as any,
+	);
 	return new Uint8Array(plaintext);
 }
 
-export async function encryptJson(key: EncryptionKey, value: unknown): Promise<Uint8Array> {
+export async function encryptJson(
+	key: EncryptionKey,
+	value: unknown,
+): Promise<Uint8Array> {
 	return encryptBytes(key, encoder.encode(JSON.stringify(value)));
 }
 
-export async function decryptJson<T>(key: EncryptionKey, blob: Uint8Array): Promise<T> {
+export async function decryptJson<T>(
+	key: EncryptionKey,
+	blob: Uint8Array,
+): Promise<T> {
 	const plaintext = await decryptBytes(key, blob);
 	return JSON.parse(decoder.decode(plaintext)) as T;
 }
 
 export async function sha256Hex(data: Uint8Array): Promise<string> {
-	const digest = await subtle.digest("SHA-256", data);
+	const digest = await subtle.digest("SHA-256", data as any);
 	return toHex(new Uint8Array(digest));
 }
 

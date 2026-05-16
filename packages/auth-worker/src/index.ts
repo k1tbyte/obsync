@@ -4,7 +4,11 @@ export interface Env {
 }
 
 export default {
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+	async fetch(
+		request: Request,
+		env: Env,
+		_ctx: ExecutionContext,
+	): Promise<Response> {
 		const url = new URL(request.url);
 
 		// Handle CORS preflight for the /refresh endpoint
@@ -19,16 +23,18 @@ export default {
 		}
 
 		if (url.pathname === "/refresh") {
-			if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-			let body;
+			if (request.method !== "POST")
+				return new Response("Method not allowed", { status: 405 });
+			let body: any;
 			try {
-				body = await request.json() as any;
-			} catch (err) {
+				body = (await request.json()) as any;
+			} catch (_err) {
 				return new Response("Invalid JSON body", { status: 400 });
 			}
-			
-			if (!body.refresh_token) return new Response("Missing refresh_token", { status: 400 });
-			
+
+			if (!body.refresh_token)
+				return new Response("Missing refresh_token", { status: 400 });
+
 			const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -39,11 +45,14 @@ export default {
 					grant_type: "refresh_token",
 				}),
 			});
-			
+
 			const tokenData = await tokenRes.json();
 			return new Response(JSON.stringify(tokenData), {
 				status: tokenRes.status,
-				headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+				headers: {
+					"Content-Type": "application/json",
+					"Access-Control-Allow-Origin": "*",
+				},
 			});
 		}
 
@@ -53,7 +62,9 @@ export default {
 			const REDIRECT_URI = `${url.origin}/auth`;
 
 			if (error) {
-				return Response.redirect(`obsidian://obsync-auth?error=${encodeURIComponent(error)}`);
+				return Response.redirect(
+					`obsidian://obsync-auth?error=${encodeURIComponent(error)}`,
+				);
 			}
 
 			if (!code) {
@@ -62,7 +73,10 @@ export default {
 				authUrl.searchParams.set("client_id", env.GDRIVE_CLIENT_ID);
 				authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
 				authUrl.searchParams.set("response_type", "code");
-				authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/drive.file");
+				authUrl.searchParams.set(
+					"scope",
+					"https://www.googleapis.com/auth/drive.file",
+				);
 				authUrl.searchParams.set("access_type", "offline");
 				authUrl.searchParams.set("prompt", "consent"); // Force consent to ensure we get a refresh_token
 				return Response.redirect(authUrl.toString());
@@ -81,10 +95,13 @@ export default {
 				}),
 			});
 
-			const tokenData = await tokenRes.json() as any;
+			const tokenData = (await tokenRes.json()) as any;
 
 			if (!tokenRes.ok || !tokenData.access_token) {
-				return new Response(`Failed to exchange token: ${JSON.stringify(tokenData)}`, { status: 400 });
+				return new Response(
+					`Failed to exchange token: ${JSON.stringify(tokenData)}`,
+					{ status: 400 },
+				);
 			}
 
 			// Redirect to Obsidian with the tokens
@@ -94,12 +111,17 @@ export default {
 				redirectUrl.searchParams.set("refresh_token", tokenData.refresh_token);
 			}
 			if (tokenData.expires_in) {
-				redirectUrl.searchParams.set("expires_in", tokenData.expires_in.toString());
+				redirectUrl.searchParams.set(
+					"expires_in",
+					tokenData.expires_in.toString(),
+				);
 			}
 
 			return Response.redirect(redirectUrl.toString());
 		}
 
-		return new Response("Not found. Use /auth to start OAuth flow.", { status: 404 });
+		return new Response("Not found. Use /auth to start OAuth flow.", {
+			status: 404,
+		});
 	},
 };

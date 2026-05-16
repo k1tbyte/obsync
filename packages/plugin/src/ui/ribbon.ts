@@ -41,7 +41,8 @@ export function registerRibbon(
 }
 
 function buildLabel(snapshot: SyncStatusSnapshot): string {
-	if (snapshot.conflicts > 0) return `Obsync — ${snapshot.conflicts} conflict(s)`;
+	if (snapshot.conflicts > 0)
+		return `Obsync — ${snapshot.conflicts} conflict(s)`;
 	const pending = snapshot.pendingLocal + snapshot.pendingRemote;
 	if (pending === 0) return "Obsync — no changes";
 	return `Obsync — ${snapshot.pendingLocal} to push, ${snapshot.pendingRemote} to pull`;

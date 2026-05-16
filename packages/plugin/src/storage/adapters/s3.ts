@@ -32,7 +32,11 @@ export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 		placeholder: "vaults/my-vault",
 	},
 	{ kind: EFieldKind.Text, key: "accessKeyId", name: "Access key ID" },
-	{ kind: EFieldKind.Password, key: "secretAccessKey", name: "Secret access key" },
+	{
+		kind: EFieldKind.Password,
+		key: "secretAccessKey",
+		name: "Secret access key",
+	},
 	{
 		kind: EFieldKind.Toggle,
 		key: "forcePathStyle",
@@ -91,7 +95,12 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			return withRetry(async () => {
 				try {
 					await withTimeout(
-						client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+						client.send(
+							new HeadObjectCommand({
+								Bucket: config.bucket,
+								Key: fullKey(key),
+							}),
+						),
 					);
 					return true;
 				} catch (err) {
@@ -104,11 +113,13 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			return withRetry(async () => {
 				try {
 					const out = await withTimeout(
-						client.send(new GetObjectCommand({
-							Bucket: config.bucket,
-							Key: fullKey(key),
-							ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`,
-						})),
+						client.send(
+							new GetObjectCommand({
+								Bucket: config.bucket,
+								Key: fullKey(key),
+								ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`,
+							}),
+						),
 					);
 					const body = out.Body;
 					if (!body) return new Uint8Array(0);
@@ -137,7 +148,12 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 		async delete(key) {
 			await withRetry(() =>
 				withTimeout(
-					client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: fullKey(key) })),
+					client.send(
+						new DeleteObjectCommand({
+							Bucket: config.bucket,
+							Key: fullKey(key),
+						}),
+					),
 				),
 			);
 		},
@@ -185,14 +201,23 @@ function relativeKey(key: string, prefix: string): string {
 function isNotFound(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-	return e.name === "NoSuchKey" || e.name === "NotFound" || e.$metadata?.httpStatusCode === 404;
+	return (
+		e.name === "NoSuchKey" ||
+		e.name === "NotFound" ||
+		e.$metadata?.httpStatusCode === 404
+	);
 }
 
 async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
 	if (body instanceof Uint8Array) return body;
 	if (body instanceof ArrayBuffer) return new Uint8Array(body);
-	if (typeof (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray === "function") {
-		return (body as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray();
+	if (
+		typeof (body as { transformToByteArray?: () => Promise<Uint8Array> })
+			.transformToByteArray === "function"
+	) {
+		return (
+			body as { transformToByteArray: () => Promise<Uint8Array> }
+		).transformToByteArray();
 	}
 	if (body instanceof Blob) {
 		return new Uint8Array(await body.arrayBuffer());
@@ -221,7 +246,12 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 function isRetryable(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-	if (e.name === "TimeoutError" || e.name === "NetworkingError" || e.name === "RequestTimeout") return true;
+	if (
+		e.name === "TimeoutError" ||
+		e.name === "NetworkingError" ||
+		e.name === "RequestTimeout"
+	)
+		return true;
 	const status = e.$metadata?.httpStatusCode;
 	return status !== undefined && status >= 500;
 }
@@ -237,13 +267,21 @@ function withTimeout<T>(promise: Promise<T>, ms = S3_TIMEOUT_MS): Promise<T> {
 			ms,
 		);
 		promise.then(
-			(value) => { window.clearTimeout(id); resolve(value); },
-			(err: unknown) => { window.clearTimeout(id); reject(err instanceof Error ? err : new Error(String(err))); },
+			(value) => {
+				window.clearTimeout(id);
+				resolve(value);
+			},
+			(err: unknown) => {
+				window.clearTimeout(id);
+				reject(err instanceof Error ? err : new Error(String(err)));
+			},
 		);
 	});
 }
 
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+async function readStream(
+	stream: ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
 	let total = 0;

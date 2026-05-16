@@ -17,7 +17,8 @@ export async function autoMergeOp(
 
 	for (const conflict of result.diff.conflicts) {
 		// Skip delete conflicts and conflicts without a common ancestor
-		if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash) continue;
+		if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash)
+			continue;
 
 		const [baseText, remoteText, localText] = await Promise.all([
 			loadRemoteText(remoteFetch, conflict.baselineHash),
@@ -25,7 +26,8 @@ export async function autoMergeOp(
 			loadLocalText(deps.adapter, conflict.path),
 		]);
 		// Skip binary or missing files
-		if (baseText === null || remoteText === null || localText === null) continue;
+		if (baseText === null || remoteText === null || localText === null)
+			continue;
 
 		const regions = diff3Merge(
 			localText.split("\n"),

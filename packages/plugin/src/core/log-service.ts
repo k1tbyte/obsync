@@ -6,8 +6,8 @@ import {
 	ESyncLogLevel,
 	type ESyncLogOperation,
 	loadSyncLogs,
-	saveSyncLogs,
 	type SyncLogEntry,
+	saveSyncLogs,
 } from "../logs/store";
 
 export class LogService {

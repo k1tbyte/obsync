@@ -36,10 +36,10 @@ export class StatusBroadcaster<T> {
 		if (this.disposed) return;
 		if (this.frame !== null) return;
 		const schedule =
-			typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
+			typeof window !== "undefined" &&
+			typeof window.requestAnimationFrame === "function"
 				? (cb: () => void) => window.requestAnimationFrame(cb)
-				: (cb: () => void) =>
-						window.setTimeout(cb, SCHEDULE_FALLBACK_MS);
+				: (cb: () => void) => window.setTimeout(cb, SCHEDULE_FALLBACK_MS);
 		this.frame = schedule(() => {
 			this.frame = null;
 			this.emitNow();
@@ -54,7 +54,10 @@ export class StatusBroadcaster<T> {
 
 	private cancelPending(): void {
 		if (this.frame === null) return;
-		if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+		if (
+			typeof window !== "undefined" &&
+			typeof window.cancelAnimationFrame === "function"
+		) {
 			window.cancelAnimationFrame(this.frame);
 		} else {
 			window.clearTimeout(this.frame);

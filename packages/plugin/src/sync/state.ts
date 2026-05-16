@@ -8,7 +8,10 @@ export function stateFilePath(configDir: string): string {
 	return `${trimmed}/plugins/${PLUGIN_ID}/${STATE_FILE_NAME}`;
 }
 
-export async function loadState(adapter: DataAdapter, configDir: string): Promise<LocalState> {
+export async function loadState(
+	adapter: DataAdapter,
+	configDir: string,
+): Promise<LocalState> {
 	const path = stateFilePath(configDir);
 	const candidates = [path, `${path}.new`, `${path}.bak`];
 	for (const candidate of candidates) {
@@ -16,9 +19,7 @@ export async function loadState(adapter: DataAdapter, configDir: string): Promis
 		try {
 			const raw = await adapter.read(candidate);
 			return normalizeState(JSON.parse(raw) as Partial<LocalState>);
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return createEmptyState();
 }
@@ -54,7 +55,11 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 	if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
 }
 
-async function writeAtomic(adapter: DataAdapter, path: string, data: string): Promise<void> {
+async function writeAtomic(
+	adapter: DataAdapter,
+	path: string,
+	data: string,
+): Promise<void> {
 	const newPath = `${path}.new`;
 	const bakPath = `${path}.bak`;
 	if (await adapter.exists(newPath)) await adapter.remove(newPath);

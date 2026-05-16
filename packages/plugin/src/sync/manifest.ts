@@ -1,5 +1,14 @@
-import { MANIFEST_VERSION, REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "../constants";
-import { decryptJson, encryptJson, type EncryptionKey, randomId } from "../crypto";
+import {
+	MANIFEST_VERSION,
+	REMOTE_MANIFEST_KEY,
+	REMOTE_OBJECTS_PREFIX,
+} from "../constants";
+import {
+	decryptJson,
+	type EncryptionKey,
+	encryptJson,
+	randomId,
+} from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 import type { LocalSnapshot, Manifest } from "../types";
 
@@ -37,7 +46,10 @@ export function reconcileRemoteAgainstBaseline(
 ): Manifest | null {
 	if (!remote || !baseline) return remote;
 	if (remote.snapshotId === baseline.snapshotId) return remote;
-	if (baseline.parentSnapshotId && remote.snapshotId === baseline.parentSnapshotId) {
+	if (
+		baseline.parentSnapshotId &&
+		remote.snapshotId === baseline.parentSnapshotId
+	) {
 		return baseline;
 	}
 	return remote;
@@ -107,7 +119,8 @@ export function buildManifest(
 		createdAt: Date.now(),
 		deviceId,
 		files: snapshot.files,
-		folders: snapshot.emptyFolders.length > 0 ? snapshot.emptyFolders : undefined,
+		folders:
+			snapshot.emptyFolders.length > 0 ? snapshot.emptyFolders : undefined,
 	};
 }
 

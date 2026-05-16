@@ -28,12 +28,10 @@ export class PassphraseModal extends Modal {
 
 		new Setting(contentEl)
 			.addButton((b) =>
-				b
-					.setButtonText("Cancel")
-					.onClick(() => {
-						this.resolveValue(null);
-						this.close();
-					}),
+				b.setButtonText("Cancel").onClick(() => {
+					this.resolveValue(null);
+					this.close();
+				}),
 			)
 			.addButton((b) =>
 				b
