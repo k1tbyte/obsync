@@ -25,6 +25,7 @@ import {
 	askSettingsTransferInput,
 	showSettingsTransferExport,
 } from "../ui/settings-transfer-modal";
+import { openConfirmModal } from "../ui/source-control/modals";
 import { renderLogsView } from "./logs-view";
 import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 
@@ -544,6 +545,27 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		new Setting(parent).setName("Maintenance").setHeading();
 
 		new Setting(parent)
+			.setName("Verify remote integrity")
+			.setDesc("Check every referenced object exists and decrypts to its hash.")
+			.addButton((button) =>
+				button
+					.setButtonText("Verify")
+					.onClick(() => void this.handleVerifyRemote()),
+			);
+
+		new Setting(parent)
+			.setName("Deep-clean orphaned objects")
+			.setDesc(
+				"List storage and delete blobs/snapshots unreachable from the manifest or history.",
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("Deep-clean")
+					.setWarning()
+					.onClick(() => void this.handleDeepClean()),
+			);
+
+		new Setting(parent)
 			.setName("Reset remote storage")
 			.setDesc(
 				"Delete the remote Obsync manifest and objects on the configured backend.",
@@ -554,6 +576,51 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					.setWarning()
 					.onClick(() => void this.handleResetRemote()),
 			);
+	}
+
+	private async handleVerifyRemote(): Promise<void> {
+		try {
+			const result = await this.plugin.controller.verifyRemote(true);
+			if (!result) {
+				this.notifyError("Configure a storage backend first.");
+				return;
+			}
+			if (result.missing.length === 0 && result.corrupt.length === 0) {
+				notifyInfo(`Integrity OK — ${result.checked} object(s) verified.`);
+				return;
+			}
+			this.notifyError(
+				`Integrity issues: ${result.missing.length} missing, ${result.corrupt.length} corrupt. See logs.`,
+			);
+		} catch (err) {
+			this.notifyError(err);
+		}
+	}
+
+	private async handleDeepClean(): Promise<void> {
+		const confirmed = await openConfirmModal({
+			app: this.app,
+			title: "Deep-clean orphaned objects?",
+			body: [
+				"Permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
+				"Safe in normal operation, but cannot be undone.",
+			],
+			confirmLabel: "Deep-clean",
+			confirmClass: "mod-warning",
+		});
+		if (!confirmed) return;
+		try {
+			const result = await this.plugin.controller.deepCleanRemote();
+			if (!result) {
+				this.notifyError("Configure a storage backend first.");
+				return;
+			}
+			notifyInfo(
+				`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
+			);
+		} catch (err) {
+			this.notifyError(err);
+		}
 	}
 
 	private renderSecuritySection(parent: HTMLElement): void {

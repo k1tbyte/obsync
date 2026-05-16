@@ -69,7 +69,9 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	const { storage, key } = input;
 	const max = clampMaxSnapshots(input.maxSnapshots);
 	const entries = input.index.entries;
-	if (entries.length <= max) {
+	const pinned = entries.filter((e) => e.pinned);
+	const nonPinned = entries.filter((e) => !e.pinned);
+	if (nonPinned.length <= max) {
 		return {
 			index: input.index,
 			deletedObjects: 0,
@@ -78,13 +80,18 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 		};
 	}
 
-	const retained = entries.slice(0, max);
-	const evicted = entries.slice(max);
+	const retainedNonPinned = nonPinned.slice(0, max);
+	const evicted = nonPinned.slice(max);
+	const keptIds = new Set(
+		[...pinned, ...retainedNonPinned].map((e) => e.snapshotId),
+	);
+	// Preserve original (newest-first) order; pinned + newest `max` survive.
+	const nextEntries = entries.filter((e) => keptIds.has(e.snapshotId));
 
 	const liveHashes = new Set<string>();
 	collectHashes(input.headManifest, liveHashes);
 	let retainedComplete = true;
-	for (const entry of retained) {
+	for (const entry of nextEntries) {
 		if (entry.snapshotId === input.headManifest.snapshotId) continue;
 		const manifest = await fetchArchivedManifest(
 			storage,
@@ -123,7 +130,7 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 
 	const nextIndex: SnapshotIndex = {
 		version: input.index.version,
-		entries: retained,
+		entries: nextEntries,
 	};
 	await writeSnapshotIndex(storage, key, nextIndex);
 
@@ -135,7 +142,7 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	};
 }
 
-function collectHashes(manifest: Manifest, into: Set<string>): void {
+export function collectHashes(manifest: Manifest, into: Set<string>): void {
 	for (const entry of Object.values(manifest.files)) into.add(entry.hash);
 }
 

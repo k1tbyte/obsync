@@ -692,6 +692,11 @@
 	font-weight: var(--font-normal);
 }
 
+.obsync-history-pinned-badge {
+	color: var(--text-accent);
+	font-weight: var(--font-normal);
+}
+
 .obsync-history-preview {
 	max-height: 50vh;
 	overflow: auto;

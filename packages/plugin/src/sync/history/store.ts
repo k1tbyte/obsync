@@ -71,6 +71,23 @@ export async function fetchArchivedManifest(
 	}
 }
 
+export async function setSnapshotPinned(
+	storage: ObjectStorage,
+	key: EncryptionKey,
+	snapshotId: string,
+	pinned: boolean,
+): Promise<void> {
+	const index = await readSnapshotIndex(storage, key);
+	let changed = false;
+	const entries = index.entries.map((entry) => {
+		if (entry.snapshotId !== snapshotId) return entry;
+		changed = true;
+		return { ...entry, pinned };
+	});
+	if (!changed) return;
+	await writeSnapshotIndex(storage, key, { ...index, entries });
+}
+
 export function prependIndexEntry(
 	index: SnapshotIndex,
 	entry: SnapshotIndexEntry,

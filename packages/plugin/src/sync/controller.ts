@@ -34,8 +34,15 @@ import {
 	type PathHistorySummary,
 	listFileHistories as queryAllHistories,
 	getFileHistory as queryFileHistory,
+	setSnapshotPinned as storeSetSnapshotPinned,
 } from "./history";
 import { applyHunks, computeHunks } from "./hunks";
+import {
+	type CleanResult,
+	deepCleanOrphans,
+	type VerifyResult,
+	verifyRemote,
+} from "./maintenance";
 import { ConcurrentPushError } from "./manifest";
 import {
 	batchAcceptRemoteOp,
@@ -258,6 +265,35 @@ export class SyncController {
 		const deps = await this.host.openSession();
 		if (!deps) throw new Error("Storage session unavailable");
 		return loadVersionBytes(deps.storage, deps.key, hash);
+	}
+
+	async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<void> {
+		const deps = await this.host.openSession();
+		if (!deps) throw new Error("Storage session unavailable");
+		await storeSetSnapshotPinned(deps.storage, deps.key, snapshotId, pinned);
+	}
+
+	async verifyRemote(deep: boolean): Promise<VerifyResult | null> {
+		const deps = await this.host.openSession();
+		if (!deps) return null;
+		const result = await verifyRemote(deps.storage, deps.key, deep);
+		await this.host.logInfo(
+			ESyncLogOperation.Compare,
+			`Integrity check: ${result.checked} object(s), ${result.missing.length} missing, ${result.corrupt.length} corrupt.`,
+			[...result.missing, ...result.corrupt].slice(0, 50),
+		);
+		return result;
+	}
+
+	async deepCleanRemote(): Promise<CleanResult | null> {
+		const deps = await this.host.openSession();
+		if (!deps) return null;
+		const result = await deepCleanOrphans(deps.storage, deps.key);
+		await this.host.logInfo(
+			ESyncLogOperation.Reset,
+			`Deep-clean removed ${result.deletedObjects} object(s) and ${result.deletedSnapshots} snapshot(s).`,
+		);
+		return result;
 	}
 
 	async restoreFileVersion(path: string, hash: string): Promise<void> {

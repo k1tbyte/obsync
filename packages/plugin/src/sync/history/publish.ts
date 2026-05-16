@@ -45,7 +45,8 @@ export async function publishManifestWithHistory(
 			deviceId: manifest.deviceId,
 			deviceName: manifest.deviceName,
 		});
-		if (shouldRunGc(index.entries.length, history.maxSnapshots)) {
+		const nonPinned = index.entries.filter((e) => !e.pinned).length;
+		if (shouldRunGc(nonPinned, history.maxSnapshots)) {
 			await collectGarbage({
 				storage,
 				key,

@@ -10,6 +10,8 @@ export interface SnapshotIndexEntry {
 	createdAt: number;
 	deviceId: string;
 	deviceName?: string;
+	/** Pinned snapshots are never evicted by GC (named restore points). */
+	pinned?: boolean;
 }
 
 export interface SnapshotIndex {
@@ -36,4 +38,5 @@ export interface FileVersion {
 	createdAt: number;
 	deviceId: string;
 	deviceName?: string;
+	pinned: boolean;
 }

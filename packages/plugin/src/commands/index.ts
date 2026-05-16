@@ -4,6 +4,7 @@ import type ObsyncPlugin from "../main";
 import { describeStorageTarget } from "../storage/registry";
 import { notifyError, notifyInfo } from "../ui/notices";
 import { confirmRemoteReset } from "../ui/reset-modal";
+import { openConfirmModal } from "../ui/source-control/modals";
 import {
 	openDiffView,
 	openSourceControlHistory,
@@ -82,6 +83,18 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	});
 
 	plugin.addCommand({
+		id: "verify-remote-integrity",
+		name: "Verify remote integrity",
+		callback: () => void runVerifyRemote(plugin),
+	});
+
+	plugin.addCommand({
+		id: "deep-clean-orphans",
+		name: "Deep-clean orphaned objects",
+		callback: () => void runDeepClean(plugin),
+	});
+
+	plugin.addCommand({
 		id: "open-diff-active-file",
 		name: "Open diff for active file",
 		checkCallback: (checking) => {
@@ -139,6 +152,51 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 		notifyInfo(`pulled ${paths.length} file(s)`);
 	} catch (err) {
 		notifyError("Pull all failed", err);
+	}
+}
+
+async function runVerifyRemote(plugin: ObsyncPlugin): Promise<void> {
+	try {
+		const result = await plugin.controller.verifyRemote(true);
+		if (!result) {
+			notifyError("Configure a storage backend first.");
+			return;
+		}
+		if (result.missing.length === 0 && result.corrupt.length === 0) {
+			notifyInfo(`Integrity OK — ${result.checked} object(s) verified.`);
+			return;
+		}
+		notifyError(
+			`Integrity issues: ${result.missing.length} missing, ${result.corrupt.length} corrupt. See logs.`,
+		);
+	} catch (err) {
+		notifyError("Verify failed", err);
+	}
+}
+
+async function runDeepClean(plugin: ObsyncPlugin): Promise<void> {
+	const confirmed = await openConfirmModal({
+		app: plugin.app,
+		title: "Deep-clean orphaned objects?",
+		body: [
+			"Lists remote storage and permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
+			"Safe in normal operation, but cannot be undone.",
+		],
+		confirmLabel: "Deep-clean",
+		confirmClass: "mod-warning",
+	});
+	if (!confirmed) return;
+	try {
+		const result = await plugin.controller.deepCleanRemote();
+		if (!result) {
+			notifyError("Configure a storage backend first.");
+			return;
+		}
+		notifyInfo(
+			`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
+		);
+	} catch (err) {
+		notifyError("Deep-clean failed", err);
 	}
 }
 

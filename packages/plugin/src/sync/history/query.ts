@@ -65,6 +65,7 @@ export async function getFileHistory(
 			createdAt: entry.createdAt,
 			deviceId: entry.deviceId,
 			deviceName: entry.deviceName,
+			pinned: entry.pinned === true,
 		});
 	}
 	return versions;

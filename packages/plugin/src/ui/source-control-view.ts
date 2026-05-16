@@ -452,7 +452,16 @@ export class SourceControlView extends ItemView {
 			const row = body.createDiv({ cls: "obsync-history-row" });
 			const label =
 				index === 0 ? "Latest" : `Version ${versions.length - index}`;
-			row.createDiv({ cls: "obsync-history-row-title", text: label });
+			const titleEl = row.createDiv({
+				cls: "obsync-history-row-title",
+				text: label,
+			});
+			if (version.pinned) {
+				titleEl.createSpan({
+					cls: "obsync-history-pinned-badge",
+					text: " (pinned)",
+				});
+			}
 			row.createDiv({
 				cls: "obsync-history-row-meta",
 				text: `${formatTimestamp(version.createdAt)} · ${formatBytes(
@@ -477,7 +486,28 @@ export class SourceControlView extends ItemView {
 				"click",
 				() => void this.handleRestoreVersion(path, version.hash),
 			);
+			const pinBtn = actions.createEl("button", {
+				text: version.pinned ? "Unpin" : "Pin",
+			});
+			pinBtn.addEventListener(
+				"click",
+				() => void this.handleTogglePin(version.snapshotId, !version.pinned),
+			);
 		});
+	}
+
+	private async handleTogglePin(
+		snapshotId: string,
+		pinned: boolean,
+	): Promise<void> {
+		try {
+			await this.plugin.controller.setSnapshotPinned(snapshotId, pinned);
+			this.historyVersions = null;
+			this.render(this.plugin.controller.getSnapshot(), true);
+			notifyInfo(pinned ? "Snapshot pinned." : "Snapshot unpinned.");
+		} catch (err) {
+			notifyError("Could not update pin", err);
+		}
 	}
 
 	private async handleRestoreVersion(
