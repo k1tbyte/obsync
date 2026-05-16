@@ -20,6 +20,8 @@ export interface DiffCacheInput {
 	remote: ProjectionDeps["remote"];
 }
 
+const DIFF_CACHE_MAX_ENTRIES = 64;
+
 export class DiffCache {
 	private readonly entries = new Map<string, FileDiffModel>();
 
@@ -39,7 +41,15 @@ export class DiffCache {
 			remote: input.remote,
 		};
 		const model = await buildModel(projection, input.status);
-		if (model) this.entries.set(cacheKey, model);
+		if (model) {
+			this.entries.set(cacheKey, model);
+			if (this.entries.size > DIFF_CACHE_MAX_ENTRIES) {
+				for (const oldest of this.entries.keys()) {
+					this.entries.delete(oldest);
+					break;
+				}
+			}
+		}
 		return model;
 	}
 }

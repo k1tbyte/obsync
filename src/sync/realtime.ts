@@ -50,20 +50,24 @@ export class RealtimeClient {
 			? `${baseUrl}/party/${roomId}?token=${encodeURIComponent(token)}`
 			: `${baseUrl}/party/${roomId}`;
 
+		let socket: WebSocket;
 		try {
-			this.ws = new WebSocket(wsUrl);
+			socket = new WebSocket(wsUrl);
 		} catch {
 			this.scheduleReconnect();
 			return;
 		}
+		this.ws = socket;
 
-		this.ws.addEventListener("open", () => {
+		socket.addEventListener("open", () => {
+			if (this.ws !== socket) return;
 			this.reconnectAttempts = 0;
 			this.startPing();
 			this.options.onConnectionChange?.(true);
 		});
 
-		this.ws.addEventListener("message", (event) => {
+		socket.addEventListener("message", (event) => {
+			if (this.ws !== socket) return;
 			const data = typeof event.data === "string" ? event.data : "";
 			try {
 				const msg = JSON.parse(data) as { type?: string };
@@ -75,14 +79,15 @@ export class RealtimeClient {
 			}
 		});
 
-		this.ws.addEventListener("close", () => {
+		socket.addEventListener("close", () => {
+			if (this.ws !== socket) return;
 			this.stopPing();
 			this.options.onConnectionChange?.(false);
 			if (!this.disposed) this.scheduleReconnect();
 		});
 
-		this.ws.addEventListener("error", () => {
-			this.ws?.close();
+		socket.addEventListener("error", () => {
+			socket.close();
 		});
 	}
 
@@ -123,13 +128,14 @@ export class RealtimeClient {
 
 	private cleanup(): void {
 		this.stopPing();
-		if (this.ws) {
+		const socket = this.ws;
+		this.ws = null;
+		if (socket) {
 			try {
-				this.ws.close();
+				socket.close();
 			} catch {
 				// ignore
 			}
-			this.ws = null;
 		}
 	}
 
