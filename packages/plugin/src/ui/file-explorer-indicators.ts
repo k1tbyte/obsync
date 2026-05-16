@@ -76,7 +76,7 @@ function findFileExplorer(workspace: Workspace): FileExplorerView | null {
 	const leaves = workspace.getLeavesOfType("file-explorer");
 	const first = leaves[0];
 	if (!first) return null;
-	return first.view as FileExplorerView;
+	return first.view;
 }
 
 function computeIndicators(

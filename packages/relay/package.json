@@ -1,0 +1,13 @@
+{
+	"name": "obsync-relay",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"dev": "partykit dev",
+		"deploy": "partykit deploy",
+		"typecheck": "tsc -noEmit"
+	},
+	"devDependencies": {
+		"partykit": "^0.0.111"
+	}
+}

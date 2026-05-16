@@ -39,11 +39,11 @@ export class StatusBroadcaster<T> {
 			typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
 				? (cb: () => void) => window.requestAnimationFrame(cb)
 				: (cb: () => void) =>
-						window.setTimeout(cb, SCHEDULE_FALLBACK_MS) as unknown as number;
+						window.setTimeout(cb, SCHEDULE_FALLBACK_MS);
 		this.frame = schedule(() => {
 			this.frame = null;
 			this.emitNow();
-		}) as unknown as number;
+		});
 	}
 
 	dispose(): void {

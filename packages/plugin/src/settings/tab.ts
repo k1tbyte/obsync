@@ -4,7 +4,7 @@ import { notifyError, notifyInfo } from "../ui/notices";
 import { AUTO_PULL_MAX_MINUTES, AUTO_PULL_MIN_MINUTES } from "../constants";
 import { clearCachedPassphrase } from "../crypto/passphrase-cache";
 import type ObsyncPlugin from "../main";
-import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
+import { EStorageBackend } from "../storage/config";
 import { EFieldKind, type SettingsFieldSpec } from "../storage/field-spec";
 import { describeStorageTarget, getDescriptor, listBackends } from "../storage/registry";
 import { confirmRemoteReset } from "../ui/reset-modal";
@@ -250,7 +250,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         const nextStorage = {
             ...this.plugin.settings.storage,
             ...patch,
-        } as StorageAdapterConfig;
+        };
         this.plugin.settings.storage = nextStorage;
         this.plugin.settings.storageConfigs[nextStorage.kind] = nextStorage;
         void this.plugin.saveSettings();

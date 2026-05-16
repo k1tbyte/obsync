@@ -43,7 +43,7 @@ async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer as ArrayBuffer;
+		return bytes.buffer;
 	}
 	return bytes.slice().buffer;
 }
