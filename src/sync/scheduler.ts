@@ -13,6 +13,7 @@ import type { SyncController } from "./controller";
 
 export interface SchedulerHost extends Plugin {
 	settings: ObsyncSettings;
+	isRealtimeConnected?(): boolean;
 }
 
 export function registerScheduler(host: SchedulerHost, controller: SyncController): void {
@@ -49,7 +50,10 @@ export function registerScheduler(host: SchedulerHost, controller: SyncControlle
 
 	if (host.settings.autoPullIntervalMinutes > 0) {
 		const intervalMs = host.settings.autoPullIntervalMinutes * 60_000;
-		host.registerInterval(window.setInterval(() => void tick(), intervalMs));
+		host.registerInterval(window.setInterval(() => {
+			if (host.settings.realtimeSync) return;
+			void tick();
+		}, intervalMs));
 	}
 
 	const triggerVaultSync = debounce(

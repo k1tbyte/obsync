@@ -13,6 +13,7 @@ import type {
 	ManifestEntry,
 } from "../types";
 import { DiffCache } from "./diff-cache";
+import { autoMergeOp } from "./auto-merge";
 import { diff } from "./diff";
 import { compare, type CompareResult, type EngineDependencies, filterManifestForDiff } from "./engine";
 import { ConcurrentPushError } from "./manifest";
@@ -162,10 +163,23 @@ export class SyncController {
 		await this.refresh();
 		const result = this.result;
 		if (!result) return;
-		if (result.diff.conflicts.length > 0) return;
-		if (result.diff.localChanges.length > 0) return;
-		if (result.diff.remoteChanges.length === 0) return;
-		await this.pullPaths(result.diff.remoteChanges.map((c) => c.path));
+
+		if (result.diff.conflicts.length > 0) {
+			await this.autoMerge();
+		}
+
+		const afterMerge = this.result;
+		if (!afterMerge) return;
+		if (afterMerge.diff.conflicts.length > 0) return;
+		if (afterMerge.diff.localChanges.length > 0) return;
+		if (afterMerge.diff.remoteChanges.length === 0) return;
+		await this.pullPaths(afterMerge.diff.remoteChanges.map((c) => c.path));
+	}
+
+	private async autoMerge(): Promise<void> {
+		await this.runOperation(ESyncLogOperation.Compare, (deps, result, ctx) =>
+			autoMergeOp(deps, result, ctx),
+		);
 	}
 
 	async resetRemoteStorage(): Promise<boolean> {

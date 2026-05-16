@@ -37,6 +37,7 @@
 		"diff": "^9.0.0",
 		"diff2html": "^3.4.56",
 		"ignore": "^7.0.5",
+		"node-diff3": "^3.2.0",
 		"obsidian": "latest",
 		"qrcode": "^1.5.4"
 	},

@@ -34,7 +34,7 @@ import { handleStorageProtocol, storageIdentity } from "./storage/registry";
 import { notifyError, notifyInfo } from "./ui/notices";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
-import { registerRibbon } from "./ui/ribbon";
+import { registerRibbon, type RealtimeStatusHandle } from "./ui/ribbon";
 import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
 import { SourceControlView } from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
@@ -93,7 +93,13 @@ export default class ObsyncPlugin extends Plugin {
         this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this));
 
         if (this.settings.showStatusBar) registerStatusBar(this, this.controller);
-        if (this.settings.showRibbonIcon) registerRibbon(this, this.controller);
+        if (this.settings.showRibbonIcon) {
+            const realtimeHandle: RealtimeStatusHandle = {
+                isConnected: () => this.isRealtimeConnected(),
+                subscribe: (fn) => this.subscribeRealtimeStatus(fn),
+            };
+            registerRibbon(this, this.controller, realtimeHandle);
+        }
         if (this.settings.showFileExplorerIndicators) {
             registerFileExplorerIndicators(this, this.controller);
         }
