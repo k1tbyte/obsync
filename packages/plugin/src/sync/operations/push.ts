@@ -15,12 +15,9 @@ import {
 	textToBytes,
 } from "../content";
 import { pushPaths, pushSingleFile } from "../engine";
+import { publishManifestWithHistory } from "../history";
 import { applyHunks, computeHunks } from "../hunks";
-import {
-	buildManifest,
-	objectKey,
-	publishManifestWithGuard,
-} from "../manifest";
+import { buildManifest, objectKey } from "../manifest";
 import { loadBaselineOrRemoteText } from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
 
@@ -131,17 +128,24 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	);
 	const vaultId =
 		deps.state.vaultId ?? result.remote?.vaultId ?? deps.state.deviceId;
-	const manifest = buildManifest(deps.state.deviceId, vaultId, result.remote, {
-		files: baseFiles,
-		skipped: [],
-		emptyFolders: folders,
-		ignoredPaths: [],
-	});
-	await publishManifestWithGuard(
+	const manifest = buildManifest(
+		deps.state.deviceId,
+		deps.state.deviceName,
+		vaultId,
+		result.remote,
+		{
+			files: baseFiles,
+			skipped: [],
+			emptyFolders: folders,
+			ignoredPaths: [],
+		},
+	);
+	await publishManifestWithHistory(
 		deps.storage,
 		deps.key,
 		manifest,
 		result.remote?.snapshotId ?? null,
+		deps.history,
 	);
 	await ctx.persistState(buildLocalState(deps.state, manifest, nextHashCache));
 	await ctx.logInfo(

@@ -107,6 +107,7 @@ export async function publishManifestWithGuard(
 
 export function buildManifest(
 	deviceId: string,
+	deviceName: string | undefined,
 	vaultId: string,
 	parent: Manifest | null,
 	snapshot: LocalSnapshot,
@@ -118,6 +119,7 @@ export function buildManifest(
 		parentSnapshotId: parent?.snapshotId ?? null,
 		createdAt: Date.now(),
 		deviceId,
+		deviceName,
 		files: snapshot.files,
 		folders:
 			snapshot.emptyFolders.length > 0 ? snapshot.emptyFolders : undefined,

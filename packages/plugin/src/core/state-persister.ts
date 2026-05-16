@@ -67,6 +67,7 @@ export class StatePersister {
 function canDebounce(prev: LocalState | null, next: LocalState): boolean {
 	if (!prev) return false;
 	if (prev.deviceId !== next.deviceId) return false;
+	if (prev.deviceName !== next.deviceName) return false;
 	if (prev.vaultId !== next.vaultId) return false;
 	if (prev.baseline !== next.baseline) return false;
 	return true;

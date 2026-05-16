@@ -1,4 +1,8 @@
-import { DEFAULT_CONCURRENCY, DEFAULT_MAX_FILE_BYTES } from "../constants";
+import {
+	DEFAULT_CONCURRENCY,
+	DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
+	DEFAULT_MAX_FILE_BYTES,
+} from "../constants";
 import { defaultS3Config } from "../storage/adapters/s3";
 import type { StorageAdapterConfig } from "../storage/config";
 import { isAdapterConfigured } from "../storage/registry";
@@ -32,6 +36,8 @@ export interface ObsyncSettings {
 	autoPullIntervalMinutes: number;
 	autoPushOnSave: boolean;
 	autoPushOnSaveCurrentFileOnly: boolean;
+	fileHistoryEnabled: boolean;
+	fileHistoryMaxSnapshots: number;
 	realtimeSync: boolean;
 	realtimeServerUrl: string;
 	realtimeToken: string;
@@ -53,6 +59,8 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	autoPullIntervalMinutes: 0,
 	autoPushOnSave: false,
 	autoPushOnSaveCurrentFileOnly: false,
+	fileHistoryEnabled: false,
+	fileHistoryMaxSnapshots: DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
 	realtimeSync: false,
 	realtimeServerUrl: "",
 	realtimeToken: "",

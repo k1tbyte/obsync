@@ -8,6 +8,9 @@ export const IGNORE_FILE_NAME = ".syncignore";
 
 export const REMOTE_MANIFEST_KEY = "manifest.json.enc";
 export const REMOTE_OBJECTS_PREFIX = "objects/";
+export const REMOTE_SNAPSHOTS_PREFIX = "snapshots/";
+export const REMOTE_SNAPSHOT_INDEX_KEY = "snapshots/index.json.enc";
+export const SNAPSHOT_INDEX_VERSION = 1;
 export const REMOTE_SALT_KEY = "salt.bin";
 export const SALT_BYTES = 16;
 
@@ -20,6 +23,14 @@ export const KDF_SALT_LABEL = "obsync.v1.kdf";
 
 export const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_CONCURRENCY = 4;
+
+export const DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS = 50;
+export const FILE_HISTORY_MIN_SNAPSHOTS = 1;
+export const FILE_HISTORY_MAX_SNAPSHOTS = 1000;
+/** GC fires only when retained snapshots exceed max by this fraction... */
+export const FILE_HISTORY_GC_EXCESS_RATIO = 0.3;
+/** ...or by this absolute count, whichever is larger. Bounds GC frequency. */
+export const FILE_HISTORY_GC_MIN_EXCESS = 10;
 
 export const DEVICE_KEY_BYTES = 32;
 

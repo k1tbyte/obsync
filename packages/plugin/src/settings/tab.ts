@@ -1,5 +1,10 @@
 import { type App, PluginSettingTab, Setting } from "obsidian";
-import { AUTO_PULL_MAX_MINUTES, AUTO_PULL_MIN_MINUTES } from "../constants";
+import {
+	AUTO_PULL_MAX_MINUTES,
+	AUTO_PULL_MIN_MINUTES,
+	FILE_HISTORY_MAX_SNAPSHOTS,
+	FILE_HISTORY_MIN_SNAPSHOTS,
+} from "../constants";
 import { clearCachedPassphrase } from "../crypto/passphrase-cache";
 import type ObsyncPlugin from "../main";
 import {
@@ -12,6 +17,8 @@ import {
 	getDescriptor,
 	listBackends,
 } from "../storage/registry";
+import { defaultDeviceName } from "../sync/device";
+import { clampMaxSnapshots } from "../sync/history";
 import { notifyError, notifyInfo } from "../ui/notices";
 import { confirmRemoteReset } from "../ui/reset-modal";
 import {
@@ -399,6 +406,38 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			subSetting.settingEl.addClass("obsync-sub-setting");
 		}
 
+		new Setting(parent)
+			.setName("File version history")
+			.setDesc(
+				"Keep past versions of files so you can view or restore them. Adds a small encrypted snapshot per push; old versions are pruned automatically.",
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.fileHistoryEnabled).onChange((v) => {
+					this.update({ fileHistoryEnabled: v });
+					this.display();
+				}),
+			);
+
+		if (this.plugin.settings.fileHistoryEnabled) {
+			const historyLimit = new Setting(parent)
+				.setName("Versions to keep")
+				.setDesc(
+					`How many snapshots to retain (${FILE_HISTORY_MIN_SNAPSHOTS}–${FILE_HISTORY_MAX_SNAPSHOTS}). Older versions are garbage-collected.`,
+				)
+				.addText((t) =>
+					t
+						.setValue(String(this.plugin.settings.fileHistoryMaxSnapshots))
+						.onChange((raw) =>
+							this.update({
+								fileHistoryMaxSnapshots: clampMaxSnapshots(
+									Number.parseInt(raw, 10),
+								),
+							}),
+						),
+				);
+			historyLimit.settingEl.addClass("obsync-sub-setting");
+		}
+
 		this.renderToggleField(parent, {
 			name: "Real-time sync signals",
 			desc: "Connect via WebSocket to instantly notify other devices when you push. Other devices will auto-pull immediately.",
@@ -463,6 +502,18 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private renderAdvancedSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Advanced").setHeading();
+
+		new Setting(parent)
+			.setName("Device name")
+			.setDesc(
+				"Shown in file history so you can tell devices apart. Stored locally on this device; never synced.",
+			)
+			.addText((t) =>
+				t
+					.setPlaceholder(defaultDeviceName())
+					.setValue(this.plugin.getDeviceName())
+					.onChange((v) => void this.plugin.setDeviceName(v)),
+			);
 
 		this.renderNumberField(parent, {
 			name: "Max file size (MB)",

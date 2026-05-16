@@ -12,7 +12,14 @@ import type {
 	Manifest,
 	ManifestEntry,
 } from "../types";
+import { writeBinary } from "../vault/io";
 import { autoMergeOp } from "./auto-merge";
+import {
+	bytesToText,
+	isLikelyText,
+	loadLocalBytes,
+	textToBytes,
+} from "./content";
 import { diff } from "./diff";
 import { DiffCache } from "./diff-cache";
 import {
@@ -21,6 +28,14 @@ import {
 	type EngineDependencies,
 	filterManifestForDiff,
 } from "./engine";
+import {
+	type FileVersion,
+	loadVersionBytes,
+	type PathHistorySummary,
+	listFileHistories as queryAllHistories,
+	getFileHistory as queryFileHistory,
+} from "./history";
+import { applyHunks, computeHunks } from "./hunks";
 import { ConcurrentPushError } from "./manifest";
 import {
 	batchAcceptRemoteOp,
@@ -37,7 +52,7 @@ import {
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
 } from "./operations";
-import type { FileDiffModel } from "./projection";
+import { buildHistoryDiff, type FileDiffModel } from "./projection";
 import { StatusBroadcaster } from "./status-broadcaster";
 
 export enum EConflictStrategy {
@@ -216,6 +231,86 @@ export class SyncController {
 		return this.runFlow(ESyncLogOperation.Compare, (deps, ctx) =>
 			runAdoptNewVaultFlow(deps, ctx),
 		);
+	}
+
+	async getFileHistory(path: string): Promise<FileVersion[]> {
+		const deps = await this.host.openSession();
+		if (!deps) return [];
+		return queryFileHistory({
+			storage: deps.storage,
+			key: deps.key,
+			path,
+			concurrency: deps.concurrency,
+		});
+	}
+
+	async listFileHistories(): Promise<PathHistorySummary[]> {
+		const deps = await this.host.openSession();
+		if (!deps) return [];
+		return queryAllHistories({
+			storage: deps.storage,
+			key: deps.key,
+			concurrency: deps.concurrency,
+		});
+	}
+
+	async loadFileVersionBytes(hash: string): Promise<Uint8Array> {
+		const deps = await this.host.openSession();
+		if (!deps) throw new Error("Storage session unavailable");
+		return loadVersionBytes(deps.storage, deps.key, hash);
+	}
+
+	async restoreFileVersion(path: string, hash: string): Promise<void> {
+		await this.enqueue(async () => {
+			const deps = await this.host.openSession();
+			if (!deps) throw new Error("Storage session unavailable");
+			const bytes = await loadVersionBytes(deps.storage, deps.key, hash);
+			await writeBinary(deps.adapter, path, bytes);
+			await this.doRefresh();
+		});
+	}
+
+	async getHistoryDiff(
+		path: string,
+		hash: string,
+		label: string,
+	): Promise<FileDiffModel | null> {
+		const deps = await this.host.openSession();
+		if (!deps) return null;
+		return buildHistoryDiff(
+			{ adapter: deps.adapter, storage: deps.storage, key: deps.key },
+			path,
+			hash,
+			label,
+		);
+	}
+
+	async restoreHistoryHunks(
+		path: string,
+		hash: string,
+		selected: ReadonlySet<number>,
+	): Promise<void> {
+		if (selected.size === 0) return;
+		await this.enqueue(async () => {
+			const deps = await this.host.openSession();
+			if (!deps) throw new Error("Storage session unavailable");
+			const versionBytes = await loadVersionBytes(deps.storage, deps.key, hash);
+			const currentBytes = await loadLocalBytes(deps.adapter, path);
+			if (
+				!isLikelyText(versionBytes) ||
+				!currentBytes ||
+				!isLikelyText(currentBytes)
+			) {
+				throw new Error("Per-hunk restore is only supported for text files");
+			}
+			const versionText = bytesToText(versionBytes);
+			const currentText = bytesToText(currentBytes);
+			// left = current, right = version: a selected hunk takes the version side.
+			const { hunks } = computeHunks(currentText, versionText);
+			const merged = applyHunks(currentText, hunks, selected);
+			await writeBinary(deps.adapter, path, textToBytes(merged));
+			await this.doRefresh();
+		});
 	}
 
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {

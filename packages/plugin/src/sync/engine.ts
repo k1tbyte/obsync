@@ -28,11 +28,11 @@ import {
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
 import { diff } from "./diff";
+import { type HistoryConfig, publishManifestWithHistory } from "./history";
 import {
 	buildManifest,
 	fetchRemoteManifest,
 	objectKey,
-	publishManifestWithGuard,
 	reconcileRemoteAgainstBaseline,
 } from "./manifest";
 
@@ -45,6 +45,7 @@ export interface EngineDependencies {
 	maxFileBytes: number;
 	concurrency?: number;
 	onScanProgress?: (scanned: number) => void;
+	history?: HistoryConfig;
 }
 
 export interface CompareResult {
@@ -175,6 +176,7 @@ export async function pushPaths(
 		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
 	const manifest = buildManifest(
 		deps.state.deviceId,
+		deps.state.deviceName,
 		vaultId,
 		compareResult.remote,
 		{
@@ -184,11 +186,12 @@ export async function pushPaths(
 			ignoredPaths: [],
 		},
 	);
-	await publishManifestWithGuard(
+	await publishManifestWithHistory(
 		deps.storage,
 		deps.key,
 		manifest,
 		compareResult.remote?.snapshotId ?? null,
+		deps.history,
 	);
 	return manifest;
 }
@@ -290,6 +293,7 @@ export async function pushSingleFile(
 		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
 	const manifest = buildManifest(
 		deps.state.deviceId,
+		deps.state.deviceName,
 		vaultId,
 		compareResult.remote,
 		{
@@ -299,11 +303,12 @@ export async function pushSingleFile(
 			ignoredPaths: [],
 		},
 	);
-	await publishManifestWithGuard(
+	await publishManifestWithHistory(
 		deps.storage,
 		deps.key,
 		manifest,
 		compareResult.remote?.snapshotId ?? null,
+		deps.history,
 	);
 	return { manifest, entry };
 }

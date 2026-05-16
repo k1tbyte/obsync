@@ -4,7 +4,11 @@ import type ObsyncPlugin from "../main";
 import { describeStorageTarget } from "../storage/registry";
 import { notifyError, notifyInfo } from "../ui/notices";
 import { confirmRemoteReset } from "../ui/reset-modal";
-import { openDiffView, openSourceControlView } from "../ui/source-control-view";
+import {
+	openDiffView,
+	openSourceControlHistory,
+	openSourceControlView,
+} from "../ui/source-control-view";
 
 export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
@@ -50,6 +54,30 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		callback: () => {
 			plugin.forgetPassphrase();
 			notifyInfo("passphrase forgotten.");
+		},
+	});
+
+	plugin.addCommand({
+		id: "file-history",
+		name: "Show file history (current file)",
+		checkCallback: (checking) => {
+			if (!plugin.settings.fileHistoryEnabled) return false;
+			const file = plugin.app.workspace.getActiveFile();
+			if (!file) return false;
+			if (checking) return true;
+			void openSourceControlHistory(plugin, file.path);
+			return true;
+		},
+	});
+
+	plugin.addCommand({
+		id: "browse-file-history",
+		name: "Browse file history (all files)",
+		checkCallback: (checking) => {
+			if (!plugin.settings.fileHistoryEnabled) return false;
+			if (checking) return true;
+			void openSourceControlHistory(plugin);
+			return true;
 		},
 	});
 

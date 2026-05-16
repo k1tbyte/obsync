@@ -17,6 +17,8 @@ import { openSourceControlView } from "./source-control-view";
 
 interface DiffViewState {
 	path?: string;
+	historyHash?: string;
+	historyLabel?: string;
 }
 
 enum EDiffMode {
@@ -27,6 +29,8 @@ enum EDiffMode {
 export class DiffView extends ItemView {
 	private readonly plugin: ObsyncPlugin;
 	private path: string | null = null;
+	private historyHash: string | null = null;
+	private historyLabel = "Version";
 	private model: FileDiffModel | null = null;
 	private mode: EDiffMode = EDiffMode.Unified;
 	private merge: MergeView | null = null;
@@ -47,7 +51,8 @@ export class DiffView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return this.path ? `Diff: ${this.path}` : "Obsync diff";
+		if (!this.path) return "Obsync diff";
+		return this.historyHash ? `History: ${this.path}` : `Diff: ${this.path}`;
 	}
 
 	getIcon(): string {
@@ -59,8 +64,13 @@ export class DiffView extends ItemView {
 	}
 
 	async setState(state: DiffViewState, result: ViewStateResult): Promise<void> {
-		if (state.path && state.path !== this.path) {
-			this.path = state.path;
+		const changed =
+			(state.path && state.path !== this.path) ||
+			(state.historyHash ?? null) !== this.historyHash;
+		if (changed) {
+			this.path = state.path ?? this.path;
+			this.historyHash = state.historyHash ?? null;
+			this.historyLabel = state.historyLabel ?? "Version";
 			this.currentHunkIndex = -1;
 			await this.refreshModel();
 		}
@@ -104,6 +114,19 @@ export class DiffView extends ItemView {
 		this.rendering = true;
 		try {
 			this.renderLoading();
+			if (this.historyHash) {
+				this.model = await this.plugin.controller.getHistoryDiff(
+					this.path,
+					this.historyHash,
+					this.historyLabel,
+				);
+				if (!this.model) {
+					this.renderError("This version is no longer available.");
+					return;
+				}
+				this.renderShell();
+				return;
+			}
 			this.model = await this.plugin.controller.getFileDiff(this.path);
 
 			if (!this.model) {
@@ -156,6 +179,40 @@ export class DiffView extends ItemView {
 
 		const model = this.model;
 		if (!model) return;
+
+		if (model.direction === EDiffDirection.History) {
+			const restore = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Restore this version",
+			});
+			restore.addEventListener("click", () => void this.restoreVersion());
+			if (!model.isBinary && model.hunks.hunks.length > 0) {
+				const prev = header.createEl("button", {
+					cls: "obsync-icon-btn",
+					text: "↑",
+				});
+				prev.setAttr("aria-label", "Previous hunk");
+				prev.addEventListener("click", () => this.jumpHunk(-1));
+				const next = header.createEl("button", {
+					cls: "obsync-icon-btn",
+					text: "↓",
+				});
+				next.setAttr("aria-label", "Next hunk");
+				next.addEventListener("click", () => this.jumpHunk(1));
+			}
+			if (!Platform.isMobile) {
+				const modeBtn = header.createEl("button", {
+					cls: "obsync-icon-btn",
+					text: this.mode === EDiffMode.Split ? "Unified" : "Side-by-side",
+				});
+				modeBtn.addEventListener("click", () => {
+					this.mode =
+						this.mode === EDiffMode.Split ? EDiffMode.Unified : EDiffMode.Split;
+					this.renderShell();
+				});
+			}
+			return;
+		}
 
 		if (model.direction === EDiffDirection.Conflict) {
 			const keepLocal = header.createEl("button", {
@@ -319,6 +376,16 @@ export class DiffView extends ItemView {
 		hunk: SyncHunk,
 		direction: EDiffDirection,
 	): void {
+		if (direction === EDiffDirection.History) {
+			this.makeChunkArrow(
+				parent,
+				"↺",
+				"Restore this hunk from the old version",
+				"is-revert",
+				() => void this.restoreHistoryHunk(hunk.index),
+			);
+			return;
+		}
 		if (direction === EDiffDirection.Local) {
 			this.makeChunkArrow(
 				parent,
@@ -424,6 +491,35 @@ export class DiffView extends ItemView {
 		this.summaryEl.setText(
 			`${hunkCount} hunk(s) · +${totalAdded} −${totalRemoved}`,
 		);
+	}
+
+	private async restoreVersion(): Promise<void> {
+		if (!this.path || !this.historyHash) return;
+		try {
+			await this.plugin.controller.restoreFileVersion(
+				this.path,
+				this.historyHash,
+			);
+			notifyInfo("Restored version. Review and push when ready.");
+			await this.refreshModel();
+		} catch (err) {
+			notifyError("Restore failed", err);
+		}
+	}
+
+	private async restoreHistoryHunk(index: number): Promise<void> {
+		if (!this.path || !this.historyHash) return;
+		try {
+			await this.plugin.controller.restoreHistoryHunks(
+				this.path,
+				this.historyHash,
+				new Set([index]),
+			);
+			notifyInfo("Restored hunk. Review and push when ready.");
+			await this.refreshModel();
+		} catch (err) {
+			notifyError("Restore hunk failed", err);
+		}
 	}
 
 	private async pushSingleHunk(index: number): Promise<void> {

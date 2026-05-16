@@ -18,6 +18,7 @@ export interface Manifest {
 	parentSnapshotId: string | null;
 	createdAt: number;
 	deviceId: string;
+	deviceName?: string;
 	files: Record<string, ManifestEntry>;
 	/** Leaf empty directories that have no files and would otherwise not be created. */
 	folders?: string[];
@@ -31,6 +32,7 @@ export interface HashCacheEntry {
 
 export interface LocalState {
 	deviceId: string;
+	deviceName?: string;
 	vaultId: string | null;
 	baseline: Manifest | null;
 	baselines?: Record<string, Manifest>;

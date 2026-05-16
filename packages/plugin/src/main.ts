@@ -4,6 +4,7 @@ import {
 	type ObsidianProtocolData,
 	Plugin,
 	type TAbstractFile,
+	TFile,
 } from "obsidian";
 
 import { registerCommands } from "./commands";
@@ -33,8 +34,10 @@ import {
 } from "./settings/transfer";
 import { handleStorageProtocol, storageIdentity } from "./storage/registry";
 import { SyncController, type SyncStatusSnapshot } from "./sync/controller";
+import { defaultDeviceName } from "./sync/device";
 import { RealtimeClient } from "./sync/realtime";
 import { registerScheduler } from "./sync/scheduler";
+import { loadState } from "./sync/state";
 import type { LocalState } from "./types";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
@@ -42,7 +45,10 @@ import { notifyError, notifyInfo } from "./ui/notices";
 import { type RealtimeStatusHandle, registerRibbon } from "./ui/ribbon";
 import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
 import { confirmAdoptNewVault } from "./ui/source-control/modals";
-import { SourceControlView } from "./ui/source-control-view";
+import {
+	openSourceControlHistory,
+	SourceControlView,
+} from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
 
 const VAULT_MISMATCH_ERROR = "Remote vault id does not match local";
@@ -127,6 +133,7 @@ export default class ObsyncPlugin extends Plugin {
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
+		this.registerFileHistoryMenu();
 		this.initRealtime();
 
 		this.registerIgnoreFileEvents();
@@ -151,6 +158,21 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager?.dispose();
 		this.realtimeClient?.dispose();
 		this.realtimeClient = null;
+	}
+
+	private registerFileHistoryMenu(): void {
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!this.settings.fileHistoryEnabled) return;
+				if (!(file instanceof TFile)) return;
+				menu.addItem((item) =>
+					item
+						.setTitle("Obsync: File history")
+						.setIcon("history")
+						.onClick(() => void openSourceControlHistory(this, file.path)),
+				);
+			}),
+		);
 	}
 
 	private async maybePromptAdoptVault(
@@ -202,6 +224,19 @@ export default class ObsyncPlugin extends Plugin {
 		if (!confirmed) return false;
 		await this.applyImportedSettings(imported);
 		return true;
+	}
+
+	getDeviceName(): string {
+		return this.statePersister.state?.deviceName ?? defaultDeviceName();
+	}
+
+	async setDeviceName(name: string): Promise<void> {
+		const trimmed = name.trim() || defaultDeviceName();
+		const base =
+			this.statePersister.state ??
+			(await loadState(this.app.vault.adapter, this.app.vault.configDir));
+		this.statePersister.setInitial(base);
+		await this.statePersister.persist({ ...base, deviceName: trimmed });
 	}
 
 	async loadSettings(): Promise<void> {

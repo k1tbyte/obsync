@@ -16,6 +16,7 @@ export enum EDiffDirection {
 	Local = "local",
 	Remote = "remote",
 	Conflict = "conflict",
+	History = "history",
 }
 
 export interface FileDiffModel {
@@ -102,6 +103,37 @@ export async function buildRemoteChangeDiff(
 		isBinary: leftBinary || rightBinary,
 		leftSize: localBytes?.length ?? 0,
 		rightSize: remoteBytes?.length ?? 0,
+	};
+}
+
+export async function buildHistoryDiff(
+	deps: Pick<ProjectionDeps, "adapter" | "storage" | "key">,
+	path: string,
+	versionHash: string,
+	versionLabel: string,
+): Promise<FileDiffModel> {
+	const versionBytes = await loadRemoteBytes(
+		{ storage: deps.storage, key: deps.key },
+		versionHash,
+	);
+	const localBytes = await loadLocalBytes(deps.adapter, path);
+	const leftBinary = !!versionBytes && !isLikelyText(versionBytes);
+	const rightBinary = !!localBytes && !isLikelyText(localBytes);
+	const leftText = versionBytes && !leftBinary ? bytesToText(versionBytes) : "";
+	const rightText = localBytes && !rightBinary ? bytesToText(localBytes) : "";
+	return {
+		path,
+		direction: EDiffDirection.History,
+		changeType: "conflict",
+		leftText,
+		rightText,
+		baseText: null,
+		hunks: computeHunks(leftText, rightText),
+		leftLabel: versionLabel,
+		rightLabel: "Current",
+		isBinary: leftBinary || rightBinary,
+		leftSize: versionBytes?.length ?? 0,
+		rightSize: localBytes?.length ?? 0,
 	};
 }
 

@@ -2,6 +2,7 @@ import type { DataAdapter } from "obsidian";
 import { PLUGIN_ID, STATE_FILE_NAME } from "../constants";
 import { randomId } from "../crypto";
 import type { LocalState } from "../types";
+import { defaultDeviceName } from "./device";
 
 export function stateFilePath(configDir: string): string {
 	const trimmed = configDir.endsWith("/") ? configDir.slice(0, -1) : configDir;
@@ -35,12 +36,19 @@ export async function saveState(
 }
 
 function createEmptyState(): LocalState {
-	return { deviceId: randomId(), vaultId: null, baseline: null, hashCache: {} };
+	return {
+		deviceId: randomId(),
+		deviceName: defaultDeviceName(),
+		vaultId: null,
+		baseline: null,
+		hashCache: {},
+	};
 }
 
 function normalizeState(parsed: Partial<LocalState>): LocalState {
 	return {
 		deviceId: parsed.deviceId ?? randomId(),
+		deviceName: parsed.deviceName ?? defaultDeviceName(),
 		vaultId: parsed.vaultId ?? null,
 		baseline: parsed.baseline ?? null,
 		baselines: parsed.baselines ?? {},
