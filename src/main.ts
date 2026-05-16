@@ -1,10 +1,11 @@
 import "./polyfills";
-import { Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
+import { debounce, Plugin, type ObsidianProtocolData, type TAbstractFile } from "obsidian";
 
 import { registerCommands } from "./commands";
 import {
     DIFF_VIEW_TYPE,
     IGNORE_FILE_NAME,
+    REALTIME_SYNC_DEBOUNCE_MS,
     SOURCE_CONTROL_VIEW_TYPE,
 } from "./constants";
 import { LogService } from "./core/log-service";
@@ -48,6 +49,8 @@ export default class ObsyncPlugin extends Plugin {
     private passphraseManager!: PassphraseManager;
     private scopeRefreshTimer: number | null = null;
     private realtimeClient: RealtimeClient | null = null;
+    private realtimeConnected = false;
+    private readonly realtimeListeners = new Set<(connected: boolean) => void>();
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -227,10 +230,20 @@ export default class ObsyncPlugin extends Plugin {
         );
     }
 
+    isRealtimeConnected(): boolean {
+        return this.realtimeConnected;
+    }
+
+    subscribeRealtimeStatus(fn: (connected: boolean) => void): () => void {
+        this.realtimeListeners.add(fn);
+        return () => this.realtimeListeners.delete(fn);
+    }
+
     /** Start or restart the realtime WebSocket connection based on current settings. */
     initRealtime(): void {
         this.realtimeClient?.dispose();
         this.realtimeClient = null;
+        this.notifyRealtimeStatus(false);
 
         if (!this.settings.realtimeSync) return;
         if (!this.settings.realtimeServerUrl) return;
@@ -241,11 +254,18 @@ export default class ObsyncPlugin extends Plugin {
         this.realtimeClient = new RealtimeClient({
             serverUrl: this.settings.realtimeServerUrl,
             channelId,
-            onRemoteSync: () => {
+            token: this.settings.realtimeToken || undefined,
+            onRemoteSync: debounce(() => {
                 void this.controller.refreshAndAutoPull();
-            },
+            }, REALTIME_SYNC_DEBOUNCE_MS, true),
+            onConnectionChange: (connected) => this.notifyRealtimeStatus(connected),
         });
         this.realtimeClient.connect();
+    }
+
+    private notifyRealtimeStatus(connected: boolean): void {
+        this.realtimeConnected = connected;
+        for (const fn of this.realtimeListeners) fn(connected);
     }
 }
 

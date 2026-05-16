@@ -51,18 +51,23 @@ async function openSession(deps: SessionFactoryDeps): Promise<EngineDependencies
     const adapter = app.vault.adapter;
     const storage = createStorageAdapter(settings.storage);
     const key = await passphrase.resolveKey(storage);
-    const currentState = state.state ?? (await loadState(adapter, app.vault.configDir));
+    let currentState = state.state ?? (await loadState(adapter, app.vault.configDir));
     state.setInitial(currentState);
     await persistDeviceIdIfNew(app, currentState);
 
     if (currentState.vaultId === null) {
-        const adopted = await confirmAdoptionIfNeeded(app, storage, key);
-        if (!adopted) {
+        const adoptedVaultId = await confirmAdoptionIfNeeded(app, storage, key);
+        if (adoptedVaultId === false) {
             await logs.warn(
                 ESyncLogOperation.Session,
                 "Session cancelled: user declined to adopt remote vault.",
             );
             return null;
+        }
+        if (adoptedVaultId) {
+            currentState = { ...currentState, vaultId: adoptedVaultId };
+            state.setInitial(currentState);
+            await saveState(adapter, app.vault.configDir, currentState);
         }
     }
 
@@ -89,21 +94,22 @@ async function confirmAdoptionIfNeeded(
     app: App,
     storage: ObjectStorage,
     key: import("../crypto").EncryptionKey,
-): Promise<boolean> {
+): Promise<string | false> {
     const localFileCount = app.vault.getFiles().length;
-    if (localFileCount === 0) return true;
+    if (localFileCount === 0) return "";
     let remote;
     try {
         remote = await fetchRemoteManifest(storage, key);
     } catch (err) {
         console.warn("[obsync] adoption peek failed", err);
-        return true;
+        return "";
     }
-    if (!remote) return true;
-    return confirmVaultAdoption(app, {
+    if (!remote) return "";
+    const confirmed = await confirmVaultAdoption(app, {
         remoteVaultId: remote.vaultId,
         localFileCount,
     });
+    return confirmed ? remote.vaultId : false;
 }
 
 async function persistDeviceIdIfNew(app: App, state: LocalState): Promise<void> {

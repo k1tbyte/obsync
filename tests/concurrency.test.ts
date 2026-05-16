@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runWithConcurrency } from "../src/sync/concurrency";
+import { runWithConcurrency } from "../src/utils/concurrency";
 
 describe("runWithConcurrency", () => {
     it("processes all items", async () => {

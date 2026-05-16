@@ -3,6 +3,7 @@ import { Platform } from "obsidian";
 import { RACY_INDEX_WINDOW_MS } from "../constants";
 import { sha256Hex } from "../crypto";
 import type { HashCacheEntry, LocalSnapshot, ManifestEntry, SkippedFile } from "../types";
+import { runWithConcurrency } from "../utils/concurrency";
 import type { ScopePolicy } from "./scope";
 
 const ROOT = "";
@@ -10,6 +11,7 @@ const ROOT = "";
 export interface ScannerOptions {
 	maxFileBytes: number;
 	onProgress?: (scanned: number) => void;
+	concurrency?: number;
 }
 
 export interface ScanContext {
@@ -30,24 +32,24 @@ export async function scanVault(
 
 	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(adapter, scope, ROOT);
 	let scanned = 0;
-	for (const path of paths) {
+	await runWithConcurrency(paths, options.concurrency ?? 4, async (path) => {
 		if (!scope.includes(path)) {
 			if (scope.isIgnoredByPattern(path)) ignoredPaths.push(path);
-			continue;
+			return;
 		}
 		const stat = await adapter.stat(path);
-		if (!stat || stat.type !== "file") continue;
+		if (!stat || stat.type !== "file") return;
 		if (stat.size > options.maxFileBytes) {
 			skipped.push({ path, reason: `File exceeds max size (${stat.size} bytes)` });
-			continue;
+			return;
 		}
 		const cached = hashCache[path];
 		const entry = await buildEntry(adapter, path, stat.size, stat.mtime, scope.classify(path), cached);
 		files[path] = entry;
 		updatedCache[path] = { mtime: stat.mtime, size: stat.size, hash: entry.hash };
-		scanned++;
-		if (options.onProgress && scanned % 500 === 0) options.onProgress(scanned);
-	}
+		const count = ++scanned;
+		if (options.onProgress && count % 500 === 0) options.onProgress(count);
+	});
 
 	if (Platform.isWin) {
 		const lower = new Map<string, string>();

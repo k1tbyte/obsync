@@ -108,13 +108,21 @@ const AUTOMATION_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 export class ObsyncSettingTab extends PluginSettingTab {
     private readonly plugin: ObsyncPlugin;
     private activeTab = ESettingsViewTab.Settings;
+    private realtimeStatusUnsub: (() => void) | null = null;
 
     constructor(app: App, plugin: ObsyncPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
 
+    hide(): void {
+        this.realtimeStatusUnsub?.();
+        this.realtimeStatusUnsub = null;
+    }
+
     display(): void {
+        this.realtimeStatusUnsub?.();
+        this.realtimeStatusUnsub = null;
         const { containerEl } = this;
         containerEl.empty();
         this.renderTabBar(containerEl);
@@ -347,8 +355,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
         });
 
         new Setting(parent)
-            .setName("Realtime server URL")
-            .setDesc("WebSocket endpoint for sync signals. Override if self-hosting.")
+            .setName("Relay server URL")
+            .setDesc("WebSocket endpoint for sync signals.")
             .addText((t) => {
                 t.setPlaceholder("wss://...")
                     .setValue(this.plugin.settings.realtimeServerUrl)
@@ -357,6 +365,32 @@ export class ObsyncSettingTab extends PluginSettingTab {
                         void this.plugin.saveSettings().then(() => this.plugin.initRealtime());
                     });
             });
+
+        new Setting(parent)
+            .setName("Relay token")
+            .setDesc("Secret token required by the relay server. Must match the TOKEN set at deploy time.")
+            .addText((t) => {
+                t.inputEl.type = "password";
+                t.setPlaceholder("••••••••")
+                    .setValue(this.plugin.settings.realtimeToken)
+                    .onChange((v) => {
+                        this.plugin.settings.realtimeToken = v.trim();
+                        void this.plugin.saveSettings().then(() => this.plugin.initRealtime());
+                    });
+            });
+
+        const statusSetting = new Setting(parent).setName("Relay status");
+        const updateStatus = (connected: boolean): void => {
+            statusSetting.setDesc(
+                !this.plugin.settings.realtimeSync
+                    ? "Relay is disabled."
+                    : connected
+                      ? "● Connected"
+                      : "○ Not connected",
+            );
+        };
+        updateStatus(this.plugin.isRealtimeConnected());
+        this.realtimeStatusUnsub = this.plugin.subscribeRealtimeStatus(updateStatus);
     }
 
     private renderUiSection(parent: HTMLElement): void {

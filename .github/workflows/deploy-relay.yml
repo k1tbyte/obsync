@@ -21,7 +21,7 @@ jobs:
 
       - name: Deploy
         working-directory: partykit
-        run: npx partykit deploy
+        run: npx partykit deploy --var TOKEN="${{ secrets.RELAY_TOKEN }}"
         env:
           PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
           PARTYKIT_LOGIN: ${{ secrets.PARTYKIT_LOGIN }}

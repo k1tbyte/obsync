@@ -15,7 +15,7 @@ import {
 import { deletePath, ensureDir, readBinary, removeEmptyDir, writeBinary } from "../vault/io";
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
-import { runWithConcurrency } from "./concurrency";
+import { runWithConcurrency } from "../utils/concurrency";
 import { diff } from "./diff";
 import {
 	buildManifest,
@@ -44,13 +44,15 @@ export interface CompareResult {
 }
 
 export async function compare(deps: EngineDependencies): Promise<CompareResult> {
-	const { snapshot, updatedCache } = await scanVault(
-		deps.adapter,
-		deps.scope,
-		{ maxFileBytes: deps.maxFileBytes, onProgress: deps.onScanProgress },
-		deps.state.hashCache,
-	);
-	const fetched = await fetchRemoteManifest(deps.storage, deps.key);
+	const [{ snapshot, updatedCache }, fetched] = await Promise.all([
+		scanVault(
+			deps.adapter,
+			deps.scope,
+			{ maxFileBytes: deps.maxFileBytes, onProgress: deps.onScanProgress, concurrency: deps.concurrency },
+			deps.state.hashCache,
+		),
+		fetchRemoteManifest(deps.storage, deps.key),
+	]);
 	assertVaultCompatibility(deps.state, fetched);
 	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
 	if (fetched && remote !== fetched) {

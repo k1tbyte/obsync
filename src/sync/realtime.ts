@@ -22,7 +22,9 @@ const PING_INTERVAL_MS = 30_000;
 export interface RealtimeClientOptions {
 	serverUrl: string;
 	channelId: string;
+	token?: string;
 	onRemoteSync: () => void;
+	onConnectionChange?: (connected: boolean) => void;
 }
 
 export class RealtimeClient {
@@ -43,7 +45,10 @@ export class RealtimeClient {
 
 		const baseUrl = this.options.serverUrl.replace(/\/$/, "");
 		const roomId = encodeURIComponent(this.options.channelId);
-		const wsUrl = `${baseUrl}/party/${roomId}`;
+		const token = this.options.token;
+		const wsUrl = token
+			? `${baseUrl}/party/${roomId}?token=${encodeURIComponent(token)}`
+			: `${baseUrl}/party/${roomId}`;
 
 		try {
 			this.ws = new WebSocket(wsUrl);
@@ -55,6 +60,7 @@ export class RealtimeClient {
 		this.ws.addEventListener("open", () => {
 			this.reconnectAttempts = 0;
 			this.startPing();
+			this.options.onConnectionChange?.(true);
 		});
 
 		this.ws.addEventListener("message", (event) => {
@@ -71,6 +77,7 @@ export class RealtimeClient {
 
 		this.ws.addEventListener("close", () => {
 			this.stopPing();
+			this.options.onConnectionChange?.(false);
 			if (!this.disposed) this.scheduleReconnect();
 		});
 
@@ -103,7 +110,10 @@ export class RealtimeClient {
 			.replace(/^ws(s)?:/, "http$1:")
 			.replace(/\/$/, "");
 		const roomId = encodeURIComponent(this.options.channelId);
-		const url = `${baseUrl}/party/${roomId}`;
+		const token = this.options.token;
+		const url = token
+			? `${baseUrl}/party/${roomId}?token=${encodeURIComponent(token)}`
+			: `${baseUrl}/party/${roomId}`;
 		try {
 			await requestUrl({ url, method: "POST", throw: false });
 		} catch {
