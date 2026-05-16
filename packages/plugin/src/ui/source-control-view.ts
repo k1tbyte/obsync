@@ -242,11 +242,11 @@ export class SourceControlView extends ItemView {
 			line.addClass("is-error");
 			line.setText(`Error: ${snapshot.error}`);
 			if (snapshot.error.includes("Remote vault id does not match local")) {
-				const adoptBtn = line.createEl("button", {
-					text: "Adopt new vault",
+				const retryBtn = line.createEl("button", {
+					text: "Resolve vault mismatch",
 					cls: ["mod-warning", "obsync-adopt-new-vault-btn"],
 				});
-				adoptBtn.addEventListener(
+				retryBtn.addEventListener(
 					"click",
 					() => void this.handleAdoptNewVault(),
 				);

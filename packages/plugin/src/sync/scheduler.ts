@@ -1,4 +1,4 @@
-import { debounce, type Plugin } from "obsidian";
+import { debounce, type Plugin, type TAbstractFile } from "obsidian";
 
 import {
 	AUTO_PULL_BUSY_COOLDOWN_MS,
@@ -67,22 +67,31 @@ export function registerScheduler(
 		);
 	}
 
+	const pendingPaths = new Set<string>();
 	const triggerVaultSync = debounce(
 		() => {
-			void runVaultSync(host, controller);
+			const tracked = new Set(pendingPaths);
+			pendingPaths.clear();
+			void runVaultSync(host, controller, tracked);
 		},
 		VAULT_EVENT_DEBOUNCE_MS,
 		true,
 	);
-	host.registerEvent(host.app.vault.on("modify", triggerVaultSync));
-	host.registerEvent(host.app.vault.on("create", triggerVaultSync));
-	host.registerEvent(host.app.vault.on("delete", triggerVaultSync));
-	host.registerEvent(host.app.vault.on("rename", triggerVaultSync));
+	const onVaultEvent = (file: TAbstractFile, oldPath?: string): void => {
+		pendingPaths.add(file.path);
+		if (oldPath) pendingPaths.add(oldPath);
+		triggerVaultSync();
+	};
+	host.registerEvent(host.app.vault.on("modify", onVaultEvent));
+	host.registerEvent(host.app.vault.on("create", onVaultEvent));
+	host.registerEvent(host.app.vault.on("delete", onVaultEvent));
+	host.registerEvent(host.app.vault.on("rename", onVaultEvent));
 }
 
 async function runVaultSync(
 	host: SchedulerHost,
 	controller: SyncController,
+	trackedPaths: ReadonlySet<string>,
 ): Promise<void> {
 	if (!isStorageConfigured(host.settings)) return;
 	await controller.refresh();
@@ -94,6 +103,11 @@ async function runVaultSync(
 	const remoteChangedPaths = new Set(remoteChanges.map((c) => c.path));
 	const pushable = localChanges
 		.filter((c) => !remoteChangedPaths.has(c.path))
+		.filter(
+			(c) =>
+				!host.settings.autoPushOnSaveCurrentFileOnly ||
+				trackedPaths.has(c.path),
+		)
 		.map((c) => c.path);
 	if (pushable.length === 0) return;
 	await controller.pushPaths(pushable);

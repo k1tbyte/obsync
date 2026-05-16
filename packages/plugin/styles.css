@@ -599,3 +599,9 @@
 .obsync-adopt-new-vault-btn {
 	margin-left: var(--size-4-2);
 }
+
+.obsync-sub-setting {
+	margin-left: var(--size-4-3);
+	border-left: 1px solid var(--background-modifier-border);
+	padding-left: var(--size-4-2);
+}

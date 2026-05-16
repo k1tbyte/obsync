@@ -32,7 +32,7 @@ import {
 	settingsTransferAction,
 } from "./settings/transfer";
 import { handleStorageProtocol, storageIdentity } from "./storage/registry";
-import { SyncController } from "./sync/controller";
+import { SyncController, type SyncStatusSnapshot } from "./sync/controller";
 import { RealtimeClient } from "./sync/realtime";
 import { registerScheduler } from "./sync/scheduler";
 import type { LocalState } from "./types";
@@ -41,8 +41,11 @@ import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
 import { notifyError, notifyInfo } from "./ui/notices";
 import { type RealtimeStatusHandle, registerRibbon } from "./ui/ribbon";
 import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
+import { confirmAdoptNewVault } from "./ui/source-control/modals";
 import { SourceControlView } from "./ui/source-control-view";
 import { registerStatusBar } from "./ui/status-bar";
+
+const VAULT_MISMATCH_ERROR = "Remote vault id does not match local";
 
 const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 
@@ -56,6 +59,7 @@ export default class ObsyncPlugin extends Plugin {
 	private realtimeClient: RealtimeClient | null = null;
 	private realtimeConnected = false;
 	private readonly realtimeListeners = new Set<(connected: boolean) => void>();
+	private adoptPromptActive = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -94,6 +98,12 @@ export default class ObsyncPlugin extends Plugin {
 			logError: (op, msg, details) => this.logs.error(op, msg, details),
 			onPushComplete: () => this.realtimeClient?.notifySync(),
 		});
+
+		this.register(
+			this.controller.subscribe((snapshot) => {
+				void this.maybePromptAdoptVault(snapshot);
+			}),
+		);
 
 		this.addSettingTab(new ObsyncSettingTab(this.app, this));
 
@@ -141,6 +151,26 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager?.dispose();
 		this.realtimeClient?.dispose();
 		this.realtimeClient = null;
+	}
+
+	private async maybePromptAdoptVault(
+		snapshot: SyncStatusSnapshot,
+	): Promise<void> {
+		const isMismatch = snapshot.error?.includes(VAULT_MISMATCH_ERROR) ?? false;
+		if (!isMismatch) {
+			this.adoptPromptActive = false;
+			return;
+		}
+		if (this.adoptPromptActive) return;
+		this.adoptPromptActive = true;
+		const confirmed = await confirmAdoptNewVault(this.app);
+		if (!confirmed) return;
+		try {
+			await this.controller.adoptNewVault();
+			notifyInfo("Adopted new remote vault.");
+		} catch (err) {
+			notifyError("Operation failed", err);
+		}
 	}
 
 	scheduleScopeRefresh(reason = "Sync scope changed."): void {

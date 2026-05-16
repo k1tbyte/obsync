@@ -373,12 +373,31 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			set: (value) => ({ autoPullIntervalMinutes: value }),
 		});
 
-		this.renderToggleField(parent, {
-			name: "Auto-push on save",
-			desc: "Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
-			get: (s) => s.autoPushOnSave,
-			set: (v) => ({ autoPushOnSave: v }),
-		});
+		new Setting(parent)
+			.setName("Auto-push on save")
+			.setDesc(
+				"Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.autoPushOnSave).onChange((v) => {
+					this.update({ autoPushOnSave: v });
+					this.display();
+				}),
+			);
+
+		if (this.plugin.settings.autoPushOnSave) {
+			const subSetting = new Setting(parent)
+				.setName("Push only the saved file")
+				.setDesc(
+					"When a file is saved, push just that file instead of every pending local change.",
+				)
+				.addToggle((t) =>
+					t
+						.setValue(this.plugin.settings.autoPushOnSaveCurrentFileOnly)
+						.onChange((v) => this.update({ autoPushOnSaveCurrentFileOnly: v })),
+				);
+			subSetting.settingEl.addClass("obsync-sub-setting");
+		}
 
 		this.renderToggleField(parent, {
 			name: "Real-time sync signals",

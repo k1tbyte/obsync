@@ -31,6 +31,7 @@ export interface ObsyncSettings {
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
 	autoPushOnSave: boolean;
+	autoPushOnSaveCurrentFileOnly: boolean;
 	realtimeSync: boolean;
 	realtimeServerUrl: string;
 	realtimeToken: string;
@@ -51,6 +52,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
 	autoPushOnSave: false,
+	autoPushOnSaveCurrentFileOnly: false,
 	realtimeSync: false,
 	realtimeServerUrl: "",
 	realtimeToken: "",
