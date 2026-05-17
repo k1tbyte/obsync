@@ -6,15 +6,16 @@ import {
 	loadCachedPassphrase,
 	saveCachedPassphrase,
 } from "../crypto/passphrase-cache";
-import type { ObsyncSettings } from "../settings/model";
+import { activeStorage, type ObsyncSettings } from "../settings/model";
 import { storageIdentity } from "../storage/registry";
 import type { ObjectStorage } from "../storage/types";
-import { deriveSessionKey } from "../sync/session";
+import { resolveContentKey } from "../sync/keyfile";
 import { askPassphrase } from "../ui/passphrase-modal";
 
 interface CachedKey {
 	key: EncryptionKey;
 	signature: string;
+	epoch: number;
 }
 
 export class PassphraseManager {
@@ -62,6 +63,13 @@ export class PassphraseManager {
 		return true;
 	}
 
+	/** Adopts a new passphrase after a successful remote rotation. */
+	async replacePassphrase(value: string): Promise<void> {
+		this.passphrase = value;
+		this.cachedKey = null;
+		await this.persistIfEnabled();
+	}
+
 	async persistIfEnabled(): Promise<void> {
 		if (!this.settings.cachePassphrase) return;
 		if (!this.passphrase) return;
@@ -82,13 +90,21 @@ export class PassphraseManager {
 		const signature = this.bindingSignature();
 		if (this.cachedKey && this.cachedKey.signature === signature)
 			return this.cachedKey.key;
-		const key = await deriveSessionKey(storage, this.passphrase);
-		this.cachedKey = { key, signature };
-		return key;
+		const { contentKey, epoch } = await resolveContentKey(
+			storage,
+			this.passphrase,
+		);
+		this.cachedKey = { key: contentKey, signature, epoch };
+		return contentKey;
+	}
+
+	/** Key epoch from the last {@link resolveKey}, or null if not resolved. */
+	epoch(): number | null {
+		return this.cachedKey?.epoch ?? null;
 	}
 
 	private bindingSignature(): string {
-		return storageIdentity(this.settings.storage);
+		return storageIdentity(activeStorage(this.settings));
 	}
 
 	private async tryLoadCached(): Promise<boolean> {

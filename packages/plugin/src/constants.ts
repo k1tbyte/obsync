@@ -12,6 +12,9 @@ export const REMOTE_SNAPSHOTS_PREFIX = "snapshots/";
 export const REMOTE_SNAPSHOT_INDEX_KEY = "snapshots/index.json.enc";
 export const SNAPSHOT_INDEX_VERSION = 1;
 export const REMOTE_SALT_KEY = "salt.bin";
+export const REMOTE_KEYFILE_KEY = "keys.json";
+export const KEYFILE_VERSION = 1;
+export const DATA_KEY_BYTES = 32;
 export const SALT_BYTES = 16;
 
 export const MANIFEST_VERSION = 1;

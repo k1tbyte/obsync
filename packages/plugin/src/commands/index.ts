@@ -1,6 +1,7 @@
 import { MarkdownView } from "obsidian";
 import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import { activeStorage } from "../settings/model";
 import { describeStorageTarget } from "../storage/registry";
 import { notifyError, notifyInfo } from "../ui/notices";
 import { confirmRemoteReset } from "../ui/reset-modal";
@@ -202,7 +203,7 @@ async function runDeepClean(plugin: ObsyncPlugin): Promise<void> {
 
 async function runResetRemoteStorage(plugin: ObsyncPlugin): Promise<void> {
 	const confirmed = await confirmRemoteReset(plugin.app, {
-		description: describeStorageTarget(plugin.settings.storage),
+		description: describeStorageTarget(activeStorage(plugin.settings)),
 	});
 	if (!confirmed) return;
 	const ok = await plugin.controller.resetRemoteStorage();

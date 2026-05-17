@@ -20,6 +20,7 @@ import { createSessionOpener } from "./core/session-factory";
 import { StatePersister } from "./core/state-persister";
 import type { SyncLogEntry } from "./logs/store";
 import {
+	activeStorage,
 	DEFAULT_SETTINGS,
 	isStorageConfigured,
 	mergeSettings,
@@ -32,9 +33,14 @@ import {
 	readSettingsTransfer,
 	settingsTransferAction,
 } from "./settings/transfer";
-import { handleStorageProtocol, storageIdentity } from "./storage/registry";
+import {
+	createStorageAdapter,
+	handleStorageProtocol,
+	storageIdentity,
+} from "./storage/registry";
 import { SyncController, type SyncStatusSnapshot } from "./sync/controller";
 import { defaultDeviceName } from "./sync/device";
+import { rotatePassphrase } from "./sync/keyfile";
 import { RealtimeClient } from "./sync/realtime";
 import { registerScheduler } from "./sync/scheduler";
 import { loadState } from "./sync/state";
@@ -142,7 +148,7 @@ export default class ObsyncPlugin extends Plugin {
 		});
 
 		this.registerObsidianProtocolHandler("obsync-auth", (params) => {
-			void handleStorageProtocol(params, this.settings.storage, () =>
+			void handleStorageProtocol(params, activeStorage(this.settings), () =>
 				this.saveSettings(),
 			);
 		});
@@ -268,6 +274,24 @@ export default class ObsyncPlugin extends Plugin {
 		return this.passphraseManager.prompt(replace);
 	}
 
+	/**
+	 * Rotates the vault passphrase by re-wrapping the data key. No content is
+	 * re-encrypted. Returns the new key epoch, or null if it could not run.
+	 */
+	async changePassphrase(newPassphrase: string): Promise<number | null> {
+		if (!isStorageConfigured(this.settings)) {
+			notifyError("Configure a storage backend first.");
+			return null;
+		}
+		if (!(await this.passphraseManager.prompt(false))) return null;
+		const current = this.passphraseManager.current();
+		if (!current) return null;
+		const storage = createStorageAdapter(activeStorage(this.settings));
+		const epoch = await rotatePassphrase(storage, current, newPassphrase);
+		await this.passphraseManager.replacePassphrase(newPassphrase);
+		return epoch;
+	}
+
 	applyState(state: LocalState): void {
 		this.statePersister.setInitial(state);
 	}
@@ -349,7 +373,7 @@ export default class ObsyncPlugin extends Plugin {
 		if (!this.settings.realtimeServerUrl) return;
 		if (!isStorageConfigured(this.settings)) return;
 
-		const channelId = storageIdentity(this.settings.storage);
+		const channelId = storageIdentity(activeStorage(this.settings));
 
 		this.realtimeClient = new RealtimeClient({
 			serverUrl: this.settings.realtimeServerUrl,

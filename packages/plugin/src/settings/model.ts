@@ -4,7 +4,7 @@ import {
 	DEFAULT_MAX_FILE_BYTES,
 } from "../constants";
 import { defaultS3Config } from "../storage/adapters/s3";
-import type { StorageAdapterConfig } from "../storage/config";
+import type { EStorageBackend, StorageAdapterConfig } from "../storage/config";
 import { isAdapterConfigured } from "../storage/registry";
 
 export interface SettingsSyncCategories {
@@ -26,8 +26,9 @@ export const DEFAULT_SETTINGS_SYNC: SettingsSyncCategories = {
 };
 
 export interface ObsyncSettings {
-	storage: StorageAdapterConfig;
+	/** Per-backend saved configs. The active one is `storageConfigs[activeStorageKind]`. */
 	storageConfigs: Record<string, StorageAdapterConfig>;
+	activeStorageKind: EStorageBackend;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
 	maxFileBytes: number;
@@ -48,9 +49,11 @@ export interface ObsyncSettings {
 	uiLayout: "tree" | "flat";
 }
 
+const DEFAULT_STORAGE = defaultS3Config();
+
 export const DEFAULT_SETTINGS: ObsyncSettings = {
-	storage: defaultS3Config(),
-	storageConfigs: {},
+	storageConfigs: { [DEFAULT_STORAGE.kind]: DEFAULT_STORAGE },
+	activeStorageKind: DEFAULT_STORAGE.kind,
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
@@ -71,28 +74,53 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	uiLayout: "tree",
 };
 
+/** The single source of truth for the active backend config. */
+export function activeStorage(settings: ObsyncSettings): StorageAdapterConfig {
+	return (
+		settings.storageConfigs[settings.activeStorageKind] ?? defaultS3Config()
+	);
+}
+
 export function isStorageConfigured(settings: ObsyncSettings): boolean {
-	return isAdapterConfigured(settings.storage);
+	return isAdapterConfigured(activeStorage(settings));
+}
+
+/** Legacy single-field shape, folded into `storageConfigs` on first load. */
+interface LegacyStorageShape {
+	storage?: StorageAdapterConfig;
 }
 
 export function mergeSettings(
-	stored: Partial<ObsyncSettings> | null | undefined,
+	stored: (Partial<ObsyncSettings> & LegacyStorageShape) | null | undefined,
 ): ObsyncSettings {
-	const storage = stored?.storage ?? defaultS3Config();
-	const storageConfigs = stored?.storageConfigs ?? {};
-	if (!storageConfigs[storage.kind]) {
-		storageConfigs[storage.kind] = storage;
+	const storageConfigs: Record<string, StorageAdapterConfig> = {
+		...(stored?.storageConfigs ?? {}),
+	};
+	const legacy = stored?.storage;
+	if (legacy && !storageConfigs[legacy.kind]) {
+		storageConfigs[legacy.kind] = legacy;
 	}
-	return {
+	if (Object.keys(storageConfigs).length === 0) {
+		storageConfigs[DEFAULT_STORAGE.kind] = DEFAULT_STORAGE;
+	}
+	const requested = stored?.activeStorageKind ?? legacy?.kind;
+	const activeStorageKind =
+		requested && storageConfigs[requested]
+			? requested
+			: (Object.keys(storageConfigs)[0] as EStorageBackend);
+
+	const merged = {
 		...DEFAULT_SETTINGS,
 		...(stored ?? {}),
-		storage,
 		storageConfigs,
+		activeStorageKind,
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
 			...((stored?.settingsSync as
 				| Partial<SettingsSyncCategories>
 				| undefined) ?? {}),
 		},
-	};
+	} as ObsyncSettings & LegacyStorageShape;
+	delete merged.storage;
+	return merged;
 }

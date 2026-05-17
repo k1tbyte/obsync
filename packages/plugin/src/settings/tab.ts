@@ -10,6 +10,7 @@ import type ObsyncPlugin from "../main";
 import {
 	EStorageBackend,
 	type GoogleDriveStorageConfig,
+	type StorageAdapterConfig,
 } from "../storage/config";
 import { EFieldKind, type SettingsFieldSpec } from "../storage/field-spec";
 import {
@@ -19,7 +20,9 @@ import {
 } from "../storage/registry";
 import { defaultDeviceName } from "../sync/device";
 import { clampMaxSnapshots } from "../sync/history";
+import { PassphraseRotatedError } from "../sync/keyfile";
 import { notifyError, notifyInfo } from "../ui/notices";
+import { askNewPassphrase } from "../ui/passphrase-modal";
 import { confirmRemoteReset } from "../ui/reset-modal";
 import {
 	askSettingsTransferInput,
@@ -27,7 +30,11 @@ import {
 } from "../ui/settings-transfer-modal";
 import { openConfirmModal } from "../ui/source-control/modals";
 import { renderLogsView } from "./logs-view";
-import type { ObsyncSettings, SettingsSyncCategories } from "./model";
+import {
+	activeStorage,
+	type ObsyncSettings,
+	type SettingsSyncCategories,
+} from "./model";
 
 enum ESettingsViewTab {
 	Settings = "settings",
@@ -196,7 +203,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			"Credentials are stored locally on this device and never uploaded.",
 		);
 
-		const current = this.plugin.settings.storage;
+		const settings = this.plugin.settings;
+		const activeKind = settings.activeStorageKind;
 		new Setting(parent)
 			.setName("Storage backend")
 			.setDesc(
@@ -206,16 +214,18 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				for (const entry of listBackends()) {
 					dropdown.addOption(entry.kind, entry.label);
 				}
-				dropdown.setValue(current.kind);
+				dropdown.setValue(activeKind);
 				dropdown.onChange((value) => {
 					const nextKind = value as EStorageBackend;
-					if (nextKind === current.kind) return;
+					if (nextKind === settings.activeStorageKind) return;
 
-					this.plugin.settings.storageConfigs[current.kind] = current;
-					const descriptor = getDescriptor(nextKind);
-					this.plugin.settings.storage =
-						this.plugin.settings.storageConfigs[nextKind] ??
-						descriptor.defaults();
+					// Each backend keeps its own saved config; just switch the
+					// active pointer (seeding defaults on first use).
+					if (!settings.storageConfigs[nextKind]) {
+						settings.storageConfigs[nextKind] =
+							getDescriptor(nextKind).defaults();
+					}
+					settings.activeStorageKind = nextKind;
 
 					void this.plugin.saveSettings().then(() => {
 						this.plugin.scheduleScopeRefresh(BACKEND_SETTINGS_CHANGED);
@@ -224,12 +234,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				});
 			});
 
-		const descriptor = getDescriptor(current.kind);
+		const descriptor = getDescriptor(activeKind);
 		for (const field of descriptor.fields) {
 			this.renderBackendField(parent, field);
 		}
 
-		if (current.kind === EStorageBackend.GoogleDrive) {
+		if (activeKind === EStorageBackend.GoogleDrive) {
 			this.renderGoogleDriveAuth(parent);
 		}
 	}
@@ -240,7 +250,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	): void {
 		const setting = new Setting(parent).setName(field.name);
 		if (field.desc) setting.setDesc(field.desc);
-		const storage = this.plugin.settings.storage as unknown as Record<
+		const storage = activeStorage(this.plugin.settings) as unknown as Record<
 			string,
 			unknown
 		>;
@@ -264,7 +274,9 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private renderGoogleDriveAuth(parent: HTMLElement): void {
-		const config = this.plugin.settings.storage as GoogleDriveStorageConfig;
+		const config = activeStorage(
+			this.plugin.settings,
+		) as GoogleDriveStorageConfig;
 		const isAuth = Boolean(config.refreshToken);
 
 		new Setting(parent)
@@ -287,12 +299,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private updateStorage(patch: Record<string, unknown>): void {
-		const nextStorage = {
-			...this.plugin.settings.storage,
+		const settings = this.plugin.settings;
+		const next = {
+			...activeStorage(settings),
 			...patch,
-		};
-		this.plugin.settings.storage = nextStorage;
-		this.plugin.settings.storageConfigs[nextStorage.kind] = nextStorage;
+		} as StorageAdapterConfig;
+		settings.storageConfigs[settings.activeStorageKind] = next;
 		void this.plugin.saveSettings();
 	}
 
@@ -670,6 +682,30 @@ export class ObsyncSettingTab extends PluginSettingTab {
 						this.display();
 					}),
 			);
+
+		new Setting(parent)
+			.setName("Rotate passphrase")
+			.setDesc(
+				"Switch to a new passphrase. Re-wraps the data key only — notes are not re-encrypted, so it is instant. All other devices must enter the new passphrase afterwards.",
+			)
+			.addButton((b) =>
+				b.setButtonText("Change…").onClick(async () => {
+					const next = await askNewPassphrase(this.plugin.app);
+					if (!next) return;
+					try {
+						const epoch = await this.plugin.changePassphrase(next);
+						if (epoch === null) return;
+						notifyInfo(`Passphrase changed (key epoch ${epoch}).`);
+						this.display();
+					} catch (err) {
+						if (err instanceof PassphraseRotatedError) {
+							notifyError("Current passphrase is incorrect.");
+							return;
+						}
+						this.notifyError(err);
+					}
+				}),
+			);
 	}
 
 	private renderToggleField(
@@ -738,7 +774,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private async handleResetRemote(): Promise<void> {
 		const confirmed = await confirmRemoteReset(this.app, {
-			description: describeStorageTarget(this.plugin.settings.storage),
+			description: describeStorageTarget(activeStorage(this.plugin.settings)),
 		});
 		if (!confirmed) return;
 		const ok = await this.plugin.controller.resetRemoteStorage();

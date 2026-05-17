@@ -1,9 +1,14 @@
 import type { App } from "obsidian";
 import { ESyncLogOperation } from "../logs/store";
-import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
+import {
+	activeStorage,
+	isStorageConfigured,
+	type ObsyncSettings,
+} from "../settings/model";
 import { createStorageAdapter } from "../storage/registry";
 import type { ObjectStorage } from "../storage/types";
 import type { EngineDependencies } from "../sync/engine";
+import { PassphraseRotatedError } from "../sync/keyfile";
 import { fetchRemoteManifest } from "../sync/manifest";
 import { loadState, saveState } from "../sync/state";
 import type { LocalState } from "../types";
@@ -50,8 +55,9 @@ async function openSession(
 		return null;
 	}
 	const adapter = app.vault.adapter;
-	const storage = createStorageAdapter(settings.storage);
-	const key = await passphrase.resolveKey(storage);
+	const storage = createStorageAdapter(activeStorage(settings));
+	const key = await resolveKeyWithRotationRetry(deps, storage);
+	if (!key) return null;
 	let currentState =
 		state.state ?? (await loadState(adapter, app.vault.configDir));
 	state.setInitial(currentState);
@@ -96,6 +102,41 @@ async function openSession(
 			? { maxSnapshots: settings.fileHistoryMaxSnapshots }
 			: undefined,
 	};
+}
+
+/**
+ * Resolves the content key, transparently recovering from a passphrase that
+ * was rotated on another device: forget the stale passphrase, re-prompt once,
+ * and retry. A second failure aborts the session.
+ */
+async function resolveKeyWithRotationRetry(
+	deps: SessionFactoryDeps,
+	storage: ObjectStorage,
+): Promise<import("../crypto").EncryptionKey | null> {
+	const { passphrase, logs } = deps;
+	try {
+		return await passphrase.resolveKey(storage);
+	} catch (err) {
+		if (!(err instanceof PassphraseRotatedError)) throw err;
+		await logs.warn(
+			ESyncLogOperation.Session,
+			"Passphrase no longer matches the remote (rotated elsewhere); re-prompting.",
+		);
+		notifyInfo("Passphrase changed on another device. Enter the new one.");
+		passphrase.forget();
+		if (!(await passphrase.prompt(true))) return null;
+		try {
+			return await passphrase.resolveKey(storage);
+		} catch (retryErr) {
+			if (!(retryErr instanceof PassphraseRotatedError)) throw retryErr;
+			await logs.warn(
+				ESyncLogOperation.Session,
+				"Session blocked: passphrase still does not match after re-prompt.",
+			);
+			notifyInfo("Passphrase still incorrect.");
+			return null;
+		}
+	}
 }
 
 async function confirmAdoptionIfNeeded(

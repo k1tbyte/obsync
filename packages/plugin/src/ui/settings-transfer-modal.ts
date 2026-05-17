@@ -6,7 +6,7 @@ import {
 	QR_ERROR_CORRECTION,
 	QR_SIZE,
 } from "../constants";
-import type { ObsyncSettings } from "../settings/model";
+import { activeStorage, type ObsyncSettings } from "../settings/model";
 import { describeStorageTarget } from "../storage/registry";
 
 export class SettingsTransferExportModal extends Modal {
@@ -151,7 +151,7 @@ export class SettingsTransferConfirmModal extends Modal {
 			text: "Local-only display preferences and passphrase cache settings stay unchanged.",
 		});
 		contentEl.createEl("p", {
-			text: describeStorageTarget(this.settings.storage),
+			text: describeStorageTarget(activeStorage(this.settings)),
 		});
 		contentEl.createEl("p", {
 			text: `Type ${IMPORT_CONFIRMATION_TEXT} to continue.`,

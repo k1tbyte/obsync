@@ -10,6 +10,10 @@ import {
 } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import {
+	buildMergedConflict,
+	hasUnresolvedMarkers,
+} from "../sync/conflict-merge";
 import type { SyncHunk } from "../sync/hunks";
 import { EDiffDirection, type FileDiffModel } from "../sync/projection";
 import { notifyError, notifyInfo } from "./notices";
@@ -34,6 +38,8 @@ export class DiffView extends ItemView {
 	private model: FileDiffModel | null = null;
 	private mode: EDiffMode = EDiffMode.Unified;
 	private merge: MergeView | null = null;
+	private mergeEditor: EditorView | null = null;
+	private mergeEditing = false;
 	private headerEl: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
 	private summaryEl: HTMLElement | null = null;
@@ -72,6 +78,7 @@ export class DiffView extends ItemView {
 			this.historyHash = state.historyHash ?? null;
 			this.historyLabel = state.historyLabel ?? "Version";
 			this.currentHunkIndex = -1;
+			this.mergeEditing = false;
 			await this.refreshModel();
 		}
 		await super.setState(state, result);
@@ -88,7 +95,7 @@ export class DiffView extends ItemView {
 
 		const handleStatus = debounce(
 			() => {
-				if (this.path) void this.refreshModel();
+				if (this.path && !this.mergeEditing) void this.refreshModel();
 			},
 			200,
 			true,
@@ -180,6 +187,23 @@ export class DiffView extends ItemView {
 		const model = this.model;
 		if (!model) return;
 
+		if (this.mergeEditing) {
+			const save = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Save resolution",
+			});
+			save.addEventListener("click", () => void this.saveMerge());
+			const cancel = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Cancel",
+			});
+			cancel.addEventListener("click", () => {
+				this.mergeEditing = false;
+				this.renderShell();
+			});
+			return;
+		}
+
 		if (model.direction === EDiffDirection.History) {
 			const restore = header.createEl("button", {
 				cls: "obsync-icon-btn",
@@ -228,6 +252,11 @@ export class DiffView extends ItemView {
 				"click",
 				() => void this.resolveAcceptRemote(),
 			);
+			const mergeBtn = header.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Merge…",
+			});
+			mergeBtn.addEventListener("click", () => void this.enterMerge());
 		}
 
 		if (!model.isBinary && model.hunks.hunks.length > 0) {
@@ -290,6 +319,10 @@ export class DiffView extends ItemView {
 				cls: "obsync-diff-binary",
 				text: `Binary file — ${model.leftSize} bytes vs ${model.rightSize} bytes`,
 			});
+			return;
+		}
+		if (this.mergeEditing) {
+			this.renderMergeEditor(body);
 			return;
 		}
 		if (this.mode === EDiffMode.Split) {
@@ -627,10 +660,69 @@ export class DiffView extends ItemView {
 		await this.refreshModel();
 	}
 
+	private mergeText = "";
+
+	private async enterMerge(): Promise<void> {
+		if (!this.path) return;
+		try {
+			const texts = await this.plugin.controller.getConflictThreeWay(this.path);
+			if (!texts) {
+				notifyError(
+					"Cannot three-way merge this file (binary or no common ancestor). Use Keep local / Accept remote.",
+				);
+				return;
+			}
+			const merged = buildMergedConflict(texts.base, texts.local, texts.remote);
+			this.mergeText = merged.text;
+			this.mergeEditing = true;
+			this.renderShell();
+			if (!merged.hasConflicts) {
+				notifyInfo("No overlapping changes — auto-merged. Review and save.");
+			}
+		} catch (err) {
+			notifyError("Merge failed", err);
+		}
+	}
+
+	private renderMergeEditor(parent: HTMLElement): void {
+		parent.createDiv({
+			cls: "obsync-diff-hint",
+			text: "Resolve every <<<<<<< / ||||||| / ======= / >>>>>>> marker, then Save resolution. The result is pushed and the conflict cleared.",
+		});
+		const host = parent.createDiv({ cls: "obsync-merge-host" });
+		this.mergeEditor = new EditorView({
+			doc: this.mergeText,
+			extensions: [EditorView.lineWrapping],
+			parent: host,
+		});
+	}
+
+	private async saveMerge(): Promise<void> {
+		if (!this.path || !this.mergeEditor) return;
+		const content = this.mergeEditor.state.doc.toString();
+		if (hasUnresolvedMarkers(content)) {
+			notifyError("Resolve all conflict markers before saving.");
+			return;
+		}
+		const resolved = this.path;
+		try {
+			await this.plugin.controller.resolveConflictMerged(resolved, content);
+			this.mergeEditing = false;
+			notifyInfo("Conflict resolved with merged content.");
+			await this.advanceAfterResolve(resolved);
+		} catch (err) {
+			notifyError("Save resolution failed", err);
+		}
+	}
+
 	private destroyMerge(): void {
 		if (this.merge) {
 			this.merge.destroy();
 			this.merge = null;
+		}
+		if (this.mergeEditor) {
+			this.mergeEditor.destroy();
+			this.mergeEditor = null;
 		}
 	}
 }

@@ -1,6 +1,7 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
 import type { StorageAdapterConfig } from "../storage/config";
 import {
+	activeStorage,
 	DEFAULT_SETTINGS,
 	DEFAULT_SETTINGS_SYNC,
 	type ObsyncSettings,
@@ -29,14 +30,16 @@ const decoder = new TextDecoder();
 
 export type ObsyncTransferSettings = Pick<
 	ObsyncSettings,
-	| "storage"
 	| "settingsSync"
 	| "ignorePatterns"
 	| "maxFileBytes"
 	| "concurrency"
 	| "autoPullOnStartup"
 	| "autoPullIntervalMinutes"
->;
+> & {
+	/** Transfer-only legacy shape; folded back via {@link mergeSettings}. */
+	storage: StorageAdapterConfig;
+};
 
 interface SettingsTransferPayload {
 	o: StorageAdapterConfig;
@@ -105,7 +108,7 @@ export async function readSettingsTransfer(
 function createTransferPayload(
 	settings: ObsyncSettings,
 ): SettingsTransferPayload {
-	const payload: SettingsTransferPayload = { o: settings.storage };
+	const payload: SettingsTransferPayload = { o: activeStorage(settings) };
 	const syncMask = encodeSyncMask(settings.settingsSync);
 	if (syncMask !== DEFAULT_SYNC_MASK) payload.y = syncMask;
 	if (settings.ignorePatterns !== DEFAULT_SETTINGS.ignorePatterns) {

@@ -43,6 +43,14 @@ export async function deriveKey(
 	);
 }
 
+/** Imports raw key bytes as an AES-GCM content key (the envelope data key). */
+export async function importAesKey(raw: Uint8Array): Promise<EncryptionKey> {
+	return subtle.importKey("raw", raw as any, { name: "AES-GCM" }, false, [
+		"encrypt",
+		"decrypt",
+	]);
+}
+
 export async function encryptBytes(
 	key: EncryptionKey,
 	plaintext: Uint8Array,

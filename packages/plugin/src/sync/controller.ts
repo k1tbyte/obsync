@@ -18,6 +18,8 @@ import {
 	bytesToText,
 	isLikelyText,
 	loadLocalBytes,
+	loadLocalText,
+	loadRemoteText,
 	textToBytes,
 } from "./content";
 import { diff } from "./diff";
@@ -410,6 +412,42 @@ export class SyncController {
 		await this.runOperation(logOp, (deps, result, ctx) =>
 			op(deps, result, set, ctx),
 		);
+	}
+
+	/**
+	 * Loads the base/local/remote text of a conflicted file for a manual
+	 * three-way merge. Returns null if the file is missing or binary, or has
+	 * no common ancestor (nothing to merge against).
+	 */
+	async getConflictThreeWay(
+		path: string,
+	): Promise<{ base: string; local: string; remote: string } | null> {
+		const result = this.result;
+		if (!result) return null;
+		const conflict = result.diff.conflicts.find((c) => c.path === path);
+		if (!conflict?.baselineHash) return null;
+		const deps = await this.host.openSession();
+		if (!deps) return null;
+		const fetch = { storage: deps.storage, key: deps.key };
+		const [base, local, remote] = await Promise.all([
+			loadRemoteText(fetch, conflict.baselineHash),
+			loadLocalText(deps.adapter, path),
+			loadRemoteText(fetch, conflict.remoteHash),
+		]);
+		if (base === null || local === null || remote === null) return null;
+		return { base, local, remote };
+	}
+
+	/**
+	 * Resolves a conflict with user-merged content: writes it locally and then
+	 * keeps the local side (uploads it, advancing the baseline to remote), the
+	 * same outcome as auto-merge.
+	 */
+	async resolveConflictMerged(path: string, content: string): Promise<void> {
+		await this.runOperation(ESyncLogOperation.Push, async (deps, res, ctx) => {
+			await writeBinary(deps.adapter, path, textToBytes(content));
+			return batchKeepLocalOp(deps, res, new Set([path]), ctx);
+		});
 	}
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {

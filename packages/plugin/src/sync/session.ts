@@ -1,5 +1,5 @@
 import { REMOTE_SALT_KEY, SALT_BYTES } from "../constants";
-import { deriveKey, type EncryptionKey, randomBytes } from "../crypto";
+import { randomBytes } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 
 export async function loadOrCreateSalt(
@@ -10,12 +10,4 @@ export async function loadOrCreateSalt(
 	const fresh = randomBytes(SALT_BYTES);
 	await storage.put(REMOTE_SALT_KEY, fresh);
 	return fresh;
-}
-
-export async function deriveSessionKey(
-	storage: ObjectStorage,
-	passphrase: string,
-): Promise<EncryptionKey> {
-	const salt = await loadOrCreateSalt(storage);
-	return deriveKey(passphrase, salt);
 }
