@@ -8,7 +8,11 @@ import {
 } from "@aws-sdk/client-s3";
 
 import { EStorageBackend, type S3StorageConfig } from "../config";
-import { EFieldKind, type SettingsFieldSpec } from "../field-spec";
+import {
+	CONCURRENCY_FIELD,
+	EFieldKind,
+	type SettingsFieldSpec,
+} from "../field-spec";
 import type { StorageAdapter } from "../types";
 
 const S3_TIMEOUT_MS = 30_000;
@@ -43,6 +47,7 @@ export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 		name: "Force path-style URLs",
 		desc: "Required for most non-AWS S3 backends.",
 	},
+	CONCURRENCY_FIELD,
 ];
 
 export function defaultS3Config(): S3StorageConfig {
@@ -55,6 +60,7 @@ export function defaultS3Config(): S3StorageConfig {
 		accessKeyId: "",
 		secretAccessKey: "",
 		forcePathStyle: true,
+		concurrency: 4,
 	};
 }
 

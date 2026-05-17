@@ -13,6 +13,7 @@ export interface S3StorageConfig {
 	accessKeyId: string;
 	secretAccessKey: string;
 	forcePathStyle: boolean;
+	concurrency: number;
 }
 
 export interface WebDAVStorageConfig {
@@ -21,6 +22,7 @@ export interface WebDAVStorageConfig {
 	basePath: string;
 	username: string;
 	password: string;
+	concurrency: number;
 }
 
 export interface GoogleDriveStorageConfig {
@@ -31,6 +33,7 @@ export interface GoogleDriveStorageConfig {
 	accessToken: string;
 	refreshToken: string;
 	expiresAt: number;
+	concurrency: number;
 }
 
 export type StorageAdapterConfig =

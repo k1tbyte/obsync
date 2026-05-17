@@ -43,7 +43,7 @@ import { defaultDeviceName } from "./sync/device";
 import { rotatePassphrase } from "./sync/keyfile";
 import { RealtimeClient } from "./sync/realtime";
 import { registerScheduler } from "./sync/scheduler";
-import { loadState } from "./sync/state";
+import { loadState, stateFilePath } from "./sync/state";
 import type { LocalState } from "./types";
 import { DiffView } from "./ui/diff-view";
 import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
@@ -64,6 +64,7 @@ const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 export default class ObsyncPlugin extends Plugin {
 	settings: ObsyncSettings = DEFAULT_SETTINGS;
 	controller!: SyncController;
+	private settingsTab?: ObsyncSettingTab;
 	private logs!: LogService;
 	private statePersister!: StatePersister;
 	private passphraseManager!: PassphraseManager;
@@ -90,6 +91,7 @@ export default class ObsyncPlugin extends Plugin {
 			this.app.vault.configDir,
 			this.settings,
 		);
+		await this.ensureDeviceNamePersisted();
 
 		const openSession = createSessionOpener({
 			app: this.app,
@@ -108,7 +110,17 @@ export default class ObsyncPlugin extends Plugin {
 			logInfo: (op, msg, details) => this.logs.info(op, msg, details),
 			logWarn: (op, msg, details) => this.logs.warn(op, msg, details),
 			logError: (op, msg, details) => this.logs.error(op, msg, details),
-			onPushComplete: () => this.realtimeClient?.notifySync(),
+			onPushComplete: () => {
+				this.realtimeClient?.notifySync();
+				if (!this.settings.historyAutoRefresh) return;
+				for (const leaf of this.app.workspace.getLeavesOfType(
+					SOURCE_CONTROL_VIEW_TYPE,
+				)) {
+					if (leaf.view instanceof SourceControlView) {
+						leaf.view.refreshHistoryAfterPush();
+					}
+				}
+			},
 		});
 
 		this.register(
@@ -117,7 +129,8 @@ export default class ObsyncPlugin extends Plugin {
 			}),
 		);
 
-		this.addSettingTab(new ObsyncSettingTab(this.app, this));
+		this.settingsTab = new ObsyncSettingTab(this.app, this);
+		this.addSettingTab(this.settingsTab);
 
 		this.registerView(
 			SOURCE_CONTROL_VIEW_TYPE,
@@ -148,8 +161,15 @@ export default class ObsyncPlugin extends Plugin {
 		});
 
 		this.registerObsidianProtocolHandler("obsync-auth", (params) => {
-			void handleStorageProtocol(params, activeStorage(this.settings), () =>
-				this.saveSettings(),
+			void handleStorageProtocol(
+				params,
+				activeStorage(this.settings),
+				async () => {
+					await this.saveSettings();
+					// Re-render the open Settings tab so auth status updates without
+					// the user closing and reopening it.
+					this.settingsTab?.display();
+				},
 			);
 		});
 	}
@@ -230,6 +250,21 @@ export default class ObsyncPlugin extends Plugin {
 		if (!confirmed) return false;
 		await this.applyImportedSettings(imported);
 		return true;
+	}
+
+	/**
+	 * Loads state into the persister at startup and writes it to disk once if
+	 * no state file exists yet, so the device name is durable and the value
+	 * shown in Settings matches what future pushes record.
+	 */
+	private async ensureDeviceNamePersisted(): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		const configDir = this.app.vault.configDir;
+		const state = await loadState(adapter, configDir);
+		this.statePersister.setInitial(state);
+		if (!(await adapter.exists(stateFilePath(configDir)))) {
+			await this.statePersister.persist(state);
+		}
 	}
 
 	getDeviceName(): string {

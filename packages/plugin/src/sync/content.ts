@@ -69,11 +69,16 @@ export async function loadBaselineText(
 export function isLikelyText(bytes: Uint8Array): boolean {
 	if (bytes.length === 0) return true;
 	if (bytes.length > HUNK_TEXT_MAX_BYTES) return false;
+	return !hasBinaryBytes(bytes);
+}
+
+/** Size-independent binary sniff: a NUL within the first {@link TEXT_SNIFF_BYTES}. */
+export function hasBinaryBytes(bytes: Uint8Array): boolean {
 	const scan = Math.min(bytes.length, TEXT_SNIFF_BYTES);
 	for (let i = 0; i < scan; i++) {
-		if (bytes[i] === 0) return false;
+		if (bytes[i] === 0) return true;
 	}
-	return true;
+	return false;
 }
 
 export function bytesToText(bytes: Uint8Array): string {

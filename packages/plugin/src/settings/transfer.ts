@@ -33,7 +33,6 @@ export type ObsyncTransferSettings = Pick<
 	| "settingsSync"
 	| "ignorePatterns"
 	| "maxFileBytes"
-	| "concurrency"
 	| "autoPullOnStartup"
 	| "autoPullIntervalMinutes"
 > & {
@@ -46,7 +45,6 @@ interface SettingsTransferPayload {
 	y?: number;
 	i?: string;
 	m?: number;
-	c?: number;
 	u?: 0;
 	n?: number;
 }
@@ -117,8 +115,6 @@ function createTransferPayload(
 	if (settings.maxFileBytes !== DEFAULT_SETTINGS.maxFileBytes) {
 		payload.m = settings.maxFileBytes;
 	}
-	if (settings.concurrency !== DEFAULT_SETTINGS.concurrency)
-		payload.c = settings.concurrency;
 	if (settings.autoPullOnStartup !== DEFAULT_SETTINGS.autoPullOnStartup)
 		payload.u = 0;
 	if (
@@ -138,7 +134,6 @@ function expandTransferPayload(
 		settingsSync: decodeSyncMask(payload.y ?? DEFAULT_SYNC_MASK),
 		ignorePatterns: payload.i ?? DEFAULT_SETTINGS.ignorePatterns,
 		maxFileBytes: payload.m ?? DEFAULT_SETTINGS.maxFileBytes,
-		concurrency: payload.c ?? DEFAULT_SETTINGS.concurrency,
 		autoPullOnStartup:
 			payload.u === 0 ? false : DEFAULT_SETTINGS.autoPullOnStartup,
 		autoPullIntervalMinutes:
@@ -261,7 +256,6 @@ function isTransferPayload(value: unknown): value is SettingsTransferPayload {
 		isOptionalSyncMask(payload.y) &&
 		isOptionalString(payload.i) &&
 		isOptionalNumber(payload.m) &&
-		isOptionalNumber(payload.c) &&
 		isOptionalZero(payload.u) &&
 		isOptionalNumber(payload.n)
 	);

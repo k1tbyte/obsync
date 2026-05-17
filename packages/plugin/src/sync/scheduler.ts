@@ -94,6 +94,7 @@ async function runVaultSync(
 	trackedPaths: ReadonlySet<string>,
 ): Promise<void> {
 	if (!isStorageConfigured(host.settings)) return;
+	if (!host.settings.autoRefreshOnFileChange) return;
 	await controller.refresh();
 	if (!host.settings.autoPushOnSave) return;
 	const snap = controller.getSnapshot();

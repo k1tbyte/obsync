@@ -145,6 +145,16 @@ export class SourceControlView extends ItemView {
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
+	/**
+	 * After a push, reload history only when a single file's history is open
+	 * (no-op for the Changes tab or the all-files list — avoids useless work).
+	 */
+	refreshHistoryAfterPush(): void {
+		if (this.tab !== ESourceTab.History || this.historyPath === null) return;
+		this.historyVersions = null;
+		this.render(this.plugin.controller.getSnapshot(), true);
+	}
+
 	private render(snapshot: SyncStatusSnapshot, force = false): void {
 		if (!this.root) return;
 		if (this.tab === ESourceTab.History) {
@@ -291,6 +301,13 @@ export class SourceControlView extends ItemView {
 				if (this.tab === tab) return;
 				this.tab = tab;
 				this.lastSignature = "";
+				if (tab === ESourceTab.History && this.historyPath === null) {
+					const active = this.plugin.app.workspace.getActiveFile();
+					if (active) {
+						this.historyPath = active.path;
+						this.historyVersions = null;
+					}
+				}
 				this.render(this.plugin.controller.getSnapshot(), true);
 			});
 		};
@@ -312,6 +329,17 @@ export class SourceControlView extends ItemView {
 			return;
 		}
 		this.renderHistoryList(pane);
+	}
+
+	/**
+	 * Resolves a device label, preferring the live current-device name when the
+	 * snapshot was written by this device (so it always matches Settings even
+	 * if an older snapshot stored a stale or empty name).
+	 */
+	private deviceText(deviceId: string, deviceName: string | undefined): string {
+		const current = this.plugin.controller.currentDevice();
+		if (current && current.id === deviceId) return current.name;
+		return deviceLabel(deviceId, deviceName);
 	}
 
 	private renderHistoryList(parent: HTMLElement): void {
@@ -399,7 +427,7 @@ export class SourceControlView extends ItemView {
 			}
 			row.createDiv({
 				cls: "obsync-history-row-meta",
-				text: `Last seen ${formatTimestamp(summary.latestCreatedAt)} · ${deviceLabel(
+				text: `Last seen ${formatTimestamp(summary.latestCreatedAt)} · ${this.deviceText(
 					summary.latestDeviceId,
 					summary.latestDeviceName,
 				)}`,
@@ -417,6 +445,15 @@ export class SourceControlView extends ItemView {
 		const back = header.createEl("button", { text: "← All files" });
 		back.addEventListener("click", () => {
 			this.historyPath = null;
+			this.historyVersions = null;
+			this.render(this.plugin.controller.getSnapshot(), true);
+		});
+		const refresh = header.createEl("button", {
+			text: "⟳ Refresh",
+			cls: "obsync-history-refresh",
+		});
+		refresh.setAttr("aria-label", "Reload history for this file");
+		refresh.addEventListener("click", () => {
 			this.historyVersions = null;
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
@@ -466,7 +503,7 @@ export class SourceControlView extends ItemView {
 				cls: "obsync-history-row-meta",
 				text: `${formatTimestamp(version.createdAt)} · ${formatBytes(
 					version.size,
-				)} · ${deviceLabel(version.deviceId, version.deviceName)}`,
+				)} · ${this.deviceText(version.deviceId, version.deviceName)}`,
 			});
 			const actions = row.createDiv({ cls: "obsync-history-row-actions" });
 			const viewBtn = actions.createEl("button", { text: "View diff" });

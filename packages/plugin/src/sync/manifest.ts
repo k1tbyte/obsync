@@ -11,6 +11,7 @@ import {
 } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 import type { LocalSnapshot, Manifest } from "../types";
+import { defaultDeviceName } from "./device";
 
 export async function fetchRemoteManifest(
 	storage: ObjectStorage,
@@ -119,7 +120,7 @@ export function buildManifest(
 		parentSnapshotId: parent?.snapshotId ?? null,
 		createdAt: Date.now(),
 		deviceId,
-		deviceName,
+		deviceName: deviceName?.trim() || defaultDeviceName(),
 		files: snapshot.files,
 		folders:
 			snapshot.emptyFolders.length > 0 ? snapshot.emptyFolders : undefined,

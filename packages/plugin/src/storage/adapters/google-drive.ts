@@ -2,7 +2,11 @@ import { type ObsidianProtocolData, requestUrl } from "obsidian";
 import { notifyError, notifyInfo } from "../../ui/notices";
 
 import { EStorageBackend, type GoogleDriveStorageConfig } from "../config";
-import { EFieldKind, type SettingsFieldSpec } from "../field-spec";
+import {
+	CONCURRENCY_FIELD,
+	EFieldKind,
+	type SettingsFieldSpec,
+} from "../field-spec";
 import type { StorageAdapter } from "../types";
 
 export async function handleGoogleDriveProtocol(
@@ -41,6 +45,7 @@ export function defaultGoogleDriveConfig(): GoogleDriveStorageConfig {
 		accessToken: "",
 		refreshToken: "",
 		expiresAt: 0,
+		concurrency: 8,
 	};
 }
 
@@ -82,6 +87,7 @@ export const GOOGLE_DRIVE_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 		kind: EFieldKind.Text,
 		placeholder: "https://obsync-auth...workers.dev",
 	},
+	CONCURRENCY_FIELD,
 ];
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
@@ -96,6 +102,9 @@ export function createGoogleDriveAdapter(
 	config: GoogleDriveStorageConfig,
 ): StorageAdapter {
 	let cachedFolderId: string | null = null;
+	// name -> file id (null = known-absent). Primed by list(), kept in sync by
+	// exists/get/put/delete so the engine's exists()+put() pair costs ~1 call.
+	const fileIdCache = new Map<string, string | null>();
 
 	const getHeaders = async () => {
 		// If token is expired or close to expiring (within 1 min), refresh it
@@ -176,6 +185,7 @@ export function createGoogleDriveAdapter(
 	};
 
 	const findFileId = async (key: string): Promise<string | null> => {
+		if (fileIdCache.has(key)) return fileIdCache.get(key) ?? null;
 		const folderId = await getFolderId();
 		const q = `name = '${key}' and '${folderId}' in parents and trashed = false`;
 		const res = await requestUrl({
@@ -186,8 +196,9 @@ export function createGoogleDriveAdapter(
 		});
 		if (res.status !== 200) return null;
 		const data = res.json as GoogleDriveListResponse;
-		if (!data.files || data.files.length === 0) return null;
-		return data.files[0]?.id ?? null;
+		const id = data.files?.[0]?.id ?? null;
+		fileIdCache.set(key, id);
+		return id;
 	};
 
 	return {
@@ -212,7 +223,10 @@ export function createGoogleDriveAdapter(
 				headers: await getHeaders(),
 				throw: false,
 			});
-			if (res.status === 404) return null;
+			if (res.status === 404) {
+				fileIdCache.set(key, null);
+				return null;
+			}
 			if (res.status !== 200) {
 				throw new Error(`Google Drive GET failed: ${res.status}`);
 			}
@@ -269,6 +283,8 @@ export function createGoogleDriveAdapter(
 			if (res.status !== 200) {
 				throw new Error(`Google Drive PUT failed: ${res.status} ${res.text}`);
 			}
+			const id = existingId ?? (res.json as { id?: string } | null)?.id ?? null;
+			fileIdCache.set(key, id);
 		},
 
 		async delete(key: string): Promise<void> {
@@ -283,6 +299,7 @@ export function createGoogleDriveAdapter(
 			if (res.status !== 204 && res.status !== 200) {
 				throw new Error(`Google Drive DELETE failed: ${res.status}`);
 			}
+			fileIdCache.set(key, null);
 		},
 
 		async list(prefix: string): Promise<string[]> {
@@ -297,7 +314,7 @@ export function createGoogleDriveAdapter(
 			do {
 				const url = new URL(DRIVE_API);
 				url.searchParams.set("q", q);
-				url.searchParams.set("fields", "nextPageToken, files(name)");
+				url.searchParams.set("fields", "nextPageToken, files(id,name)");
 				if (pageToken) url.searchParams.set("pageToken", pageToken);
 
 				const res = await requestUrl({
@@ -313,9 +330,10 @@ export function createGoogleDriveAdapter(
 
 				const data = res.json as GoogleDriveListResponse;
 				for (const f of data.files || []) {
-					if (f.name?.startsWith(prefix)) {
-						files.push(f.name);
-					}
+					if (!f.name) continue;
+					// Prime the id cache so later exists()/put() avoid a lookup.
+					fileIdCache.set(f.name, f.id ?? null);
+					if (f.name.startsWith(prefix)) files.push(f.name);
 				}
 				pageToken = data.nextPageToken;
 			} while (pageToken);

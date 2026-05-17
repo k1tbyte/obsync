@@ -22,6 +22,7 @@ import {
 	loadRemoteText,
 	textToBytes,
 } from "./content";
+import { defaultDeviceName } from "./device";
 import { diff } from "./diff";
 import { DiffCache } from "./diff-cache";
 import {
@@ -159,6 +160,16 @@ export class SyncController {
 			result: this.result,
 			progressText: this.progressText,
 			staleReason: this.staleReason,
+		};
+	}
+
+	/** Current device identity for live-resolving history labels. */
+	currentDevice(): { id: string; name: string } | null {
+		const state = this.host.getState();
+		if (!state) return null;
+		return {
+			id: state.deviceId,
+			name: state.deviceName?.trim() || defaultDeviceName(),
 		};
 	}
 
@@ -312,6 +323,7 @@ export class SyncController {
 		path: string,
 		hash: string,
 		label: string,
+		forceText = false,
 	): Promise<FileDiffModel | null> {
 		const deps = await this.host.openSession();
 		if (!deps) return null;
@@ -320,6 +332,7 @@ export class SyncController {
 			path,
 			hash,
 			label,
+			forceText,
 		);
 	}
 
@@ -451,13 +464,31 @@ export class SyncController {
 	}
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
+		return this.fileDiff(path, false);
+	}
+
+	/** Like {@link getFileDiff} but decodes size-capped (non-binary) files. */
+	async getForcedFileDiff(path: string): Promise<FileDiffModel | null> {
+		return this.fileDiff(path, true);
+	}
+
+	private async fileDiff(
+		path: string,
+		forceText: boolean,
+	): Promise<FileDiffModel | null> {
 		const status = this.getStatusForPath(path);
 		if (!status) return null;
 		const result = this.result;
 		if (!result) return null;
 		const deps = await this.host.openSession();
 		if (!deps) return null;
-		return this.diffCache.get({ path, status, deps, remote: result.remote });
+		return this.diffCache.get({
+			path,
+			status,
+			deps,
+			remote: result.remote,
+			forceText,
+		});
 	}
 
 	clearDiffCache(): void {

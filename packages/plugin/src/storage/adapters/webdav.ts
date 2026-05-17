@@ -1,7 +1,11 @@
 import { requestUrl } from "obsidian";
 
 import { EStorageBackend, type WebDAVStorageConfig } from "../config";
-import { EFieldKind, type SettingsFieldSpec } from "../field-spec";
+import {
+	CONCURRENCY_FIELD,
+	EFieldKind,
+	type SettingsFieldSpec,
+} from "../field-spec";
 import type { StorageAdapter } from "../types";
 
 const PROPFIND_BODY =
@@ -30,6 +34,7 @@ export const WEBDAV_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	},
 	{ kind: EFieldKind.Text, key: "username", name: "Username" },
 	{ kind: EFieldKind.Password, key: "password", name: "Password" },
+	CONCURRENCY_FIELD,
 ];
 
 export function defaultWebDAVConfig(): WebDAVStorageConfig {
@@ -39,6 +44,7 @@ export function defaultWebDAVConfig(): WebDAVStorageConfig {
 		basePath: "obsync/",
 		username: "",
 		password: "",
+		concurrency: 4,
 	};
 }
 

@@ -44,6 +44,8 @@ export const AUTO_PULL_BUSY_COOLDOWN_MS = 30_000;
 
 export const HUNK_TEXT_MAX_BYTES = 2 * 1024 * 1024;
 export const TEXT_SNIFF_BYTES = 8 * 1024;
+/** Hard ceiling for an on-demand ("show anyway") diff of a size-capped file. */
+export const FORCE_DIFF_MAX_BYTES = 16 * 1024 * 1024;
 
 export const CONFIG_CORE_FILES: ReadonlyArray<string> = [
 	"app.json",

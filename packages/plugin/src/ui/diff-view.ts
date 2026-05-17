@@ -10,6 +10,7 @@ import {
 } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import { formatBytes } from "../shared/format";
 import {
 	buildMergedConflict,
 	hasUnresolvedMarkers,
@@ -40,6 +41,7 @@ export class DiffView extends ItemView {
 	private merge: MergeView | null = null;
 	private mergeEditor: EditorView | null = null;
 	private mergeEditing = false;
+	private forceText = false;
 	private headerEl: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
 	private summaryEl: HTMLElement | null = null;
@@ -79,6 +81,7 @@ export class DiffView extends ItemView {
 			this.historyLabel = state.historyLabel ?? "Version";
 			this.currentHunkIndex = -1;
 			this.mergeEditing = false;
+			this.forceText = false;
 			await this.refreshModel();
 		}
 		await super.setState(state, result);
@@ -126,6 +129,7 @@ export class DiffView extends ItemView {
 					this.path,
 					this.historyHash,
 					this.historyLabel,
+					this.forceText,
 				);
 				if (!this.model) {
 					this.renderError("This version is no longer available.");
@@ -134,7 +138,9 @@ export class DiffView extends ItemView {
 				this.renderShell();
 				return;
 			}
-			this.model = await this.plugin.controller.getFileDiff(this.path);
+			this.model = this.forceText
+				? await this.plugin.controller.getForcedFileDiff(this.path)
+				: await this.plugin.controller.getFileDiff(this.path);
 
 			if (!this.model) {
 				// The file has no differences (e.g. it was pushed/pulled).
@@ -315,10 +321,7 @@ export class DiffView extends ItemView {
 			return;
 		}
 		if (model.isBinary) {
-			body.createDiv({
-				cls: "obsync-diff-binary",
-				text: `Binary file — ${model.leftSize} bytes vs ${model.rightSize} bytes`,
-			});
+			this.renderBinaryBody(body, model);
 			return;
 		}
 		if (this.mergeEditing) {
@@ -333,6 +336,9 @@ export class DiffView extends ItemView {
 	}
 
 	private renderSplit(parent: HTMLElement, model: FileDiffModel): void {
+		const labels = parent.createDiv({ cls: "obsync-merge-labels" });
+		labels.createSpan({ text: model.leftLabel });
+		labels.createSpan({ text: model.rightLabel });
 		const host = parent.createDiv({ cls: "obsync-merge-host" });
 		this.merge = new MergeView({
 			a: {
@@ -349,6 +355,37 @@ export class DiffView extends ItemView {
 			cls: "obsync-diff-hint",
 			text: "Switch to unified mode to act on individual hunks.",
 		});
+	}
+
+	private renderBinaryBody(parent: HTMLElement, model: FileDiffModel): void {
+		const wrap = parent.createDiv({ cls: "obsync-diff-binary" });
+		const delta = model.rightSize - model.leftSize;
+		const sign = delta > 0 ? "+" : delta < 0 ? "−" : "";
+		const deltaText =
+			delta === 0 ? "no size change" : `${sign}${formatBytes(Math.abs(delta))}`;
+		wrap.createDiv({
+			text: `Not shown as a text diff — ${formatBytes(
+				model.leftSize,
+			)} → ${formatBytes(model.rightSize)} (${deltaText})`,
+		});
+
+		if (model.forceTextAvailable && !this.forceText) {
+			const btn = wrap.createEl("button", {
+				cls: "obsync-icon-btn",
+				text: "Show differences anyway",
+			});
+			btn.addEventListener("click", () => {
+				this.forceText = true;
+				void this.refreshModel();
+			});
+			return;
+		}
+		if (this.forceText) {
+			wrap.createDiv({
+				cls: "obsync-diff-hint",
+				text: "File is too large or not text to diff.",
+			});
+		}
 	}
 
 	private renderUnified(parent: HTMLElement, model: FileDiffModel): void {

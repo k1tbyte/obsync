@@ -1,11 +1,10 @@
 import {
-	DEFAULT_CONCURRENCY,
 	DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
 	DEFAULT_MAX_FILE_BYTES,
 } from "../constants";
 import { defaultS3Config } from "../storage/adapters/s3";
 import type { EStorageBackend, StorageAdapterConfig } from "../storage/config";
-import { isAdapterConfigured } from "../storage/registry";
+import { getDescriptor, isAdapterConfigured } from "../storage/registry";
 
 export interface SettingsSyncCategories {
 	coreSettings: boolean;
@@ -32,13 +31,14 @@ export interface ObsyncSettings {
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
 	maxFileBytes: number;
-	concurrency: number;
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
+	autoRefreshOnFileChange: boolean;
 	autoPushOnSave: boolean;
 	autoPushOnSaveCurrentFileOnly: boolean;
 	fileHistoryEnabled: boolean;
 	fileHistoryMaxSnapshots: number;
+	historyAutoRefresh: boolean;
 	realtimeSync: boolean;
 	realtimeServerUrl: string;
 	realtimeToken: string;
@@ -57,13 +57,14 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
-	concurrency: DEFAULT_CONCURRENCY,
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
+	autoRefreshOnFileChange: true,
 	autoPushOnSave: false,
 	autoPushOnSaveCurrentFileOnly: false,
 	fileHistoryEnabled: false,
 	fileHistoryMaxSnapshots: DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
+	historyAutoRefresh: true,
 	realtimeSync: false,
 	realtimeServerUrl: "",
 	realtimeToken: "",
@@ -102,6 +103,16 @@ export function mergeSettings(
 	}
 	if (Object.keys(storageConfigs).length === 0) {
 		storageConfigs[DEFAULT_STORAGE.kind] = DEFAULT_STORAGE;
+	}
+	// Backfill fields added after a config was first saved (e.g. per-storage
+	// concurrency) from that backend's defaults, so older configs pick up
+	// new defaults without a re-save.
+	for (const [kind, config] of Object.entries(storageConfigs)) {
+		if (typeof config.concurrency !== "number" || config.concurrency < 1) {
+			config.concurrency = getDescriptor(
+				kind as EStorageBackend,
+			).defaults().concurrency;
+		}
 	}
 	const requested = stored?.activeStorageKind ?? legacy?.kind;
 	const activeStorageKind =

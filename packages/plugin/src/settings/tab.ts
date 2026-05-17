@@ -84,8 +84,6 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
 const BACKEND_SETTINGS_CHANGED = "Storage backend changed.";
 const BYTES_PER_MB = 1024 * 1024;
-const MAX_CONCURRENCY = 16;
-const MIN_CONCURRENCY = 1;
 const MIN_MAX_FILE_MB = 1;
 
 interface UpdateOptions {
@@ -262,6 +260,23 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			);
 			return;
 		}
+		if (field.kind === EFieldKind.Number) {
+			const numberField = field;
+			setting.addText((t) => {
+				t.inputEl.type = "number";
+				t.inputEl.min = String(numberField.min);
+				const raw = storage[numberField.key];
+				const value = typeof raw === "number" ? raw : numberField.fallback;
+				t.setValue(String(value)).onChange((v) => {
+					const parsed = Number.parseInt(v, 10);
+					const next = Number.isFinite(parsed)
+						? Math.max(numberField.min, parsed)
+						: numberField.fallback;
+					this.updateStorage({ [numberField.key]: next });
+				});
+			});
+			return;
+		}
 		setting.addText((t) => {
 			if (field.kind === EFieldKind.Password) t.inputEl.type = "password";
 			if (field.placeholder) t.setPlaceholder(field.placeholder);
@@ -394,6 +409,17 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		});
 
 		new Setting(parent)
+			.setName("Auto-refresh on file change")
+			.setDesc(
+				"Recompare with the remote shortly after a file changes, keeping the Changes list current. Disable to refresh only when you click compare. (Auto-push on save also requires this.)",
+			)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.autoRefreshOnFileChange)
+					.onChange((v) => this.update({ autoRefreshOnFileChange: v })),
+			);
+
+		new Setting(parent)
 			.setName("Auto-push on save")
 			.setDesc(
 				"Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
@@ -449,6 +475,18 @@ export class ObsyncSettingTab extends PluginSettingTab {
 						),
 				);
 			historyLimit.settingEl.addClass("obsync-sub-setting");
+
+			const autoRefresh = new Setting(parent)
+				.setName("Auto-refresh history after push")
+				.setDesc(
+					"Reload the open file-history view automatically when a push completes. Disable to refresh only via the ⟳ button.",
+				)
+				.addToggle((t) =>
+					t
+						.setValue(this.plugin.settings.historyAutoRefresh)
+						.onChange((v) => this.update({ historyAutoRefresh: v })),
+				);
+			autoRefresh.settingEl.addClass("obsync-sub-setting");
 		}
 
 		this.renderToggleField(parent, {
@@ -535,21 +573,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
 			set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
 			refreshScope: true,
-		});
-
-		this.renderNumberField(parent, {
-			name: "Transfer concurrency",
-			desc: "Maximum parallel uploads or downloads.",
-			get: (s) => String(s.concurrency),
-			parse: (raw) =>
-				Math.max(
-					MIN_CONCURRENCY,
-					Math.min(
-						MAX_CONCURRENCY,
-						Number.parseInt(raw, 10) || MIN_CONCURRENCY,
-					),
-				),
-			set: (value) => ({ concurrency: value }),
 		});
 	}
 

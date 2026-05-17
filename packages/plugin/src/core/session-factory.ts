@@ -97,7 +97,7 @@ async function openSession(
 				null,
 		},
 		maxFileBytes: settings.maxFileBytes,
-		concurrency: settings.concurrency,
+		concurrency: activeStorage(settings).concurrency,
 		history: settings.fileHistoryEnabled
 			? { maxSnapshots: settings.fileHistoryMaxSnapshots }
 			: undefined,
