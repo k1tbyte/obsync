@@ -30,9 +30,9 @@ export async function autoMergeOp(
 			continue;
 
 		const regions = diff3Merge(
-			localText.split("\n"),
-			baseText.split("\n"),
-			remoteText.split("\n"),
+			toLines(localText),
+			toLines(baseText),
+			toLines(remoteText),
 		);
 
 		// If any region is a true conflict, leave it for manual resolution
@@ -67,4 +67,10 @@ export async function autoMergeOp(
 		mergedPaths.slice(0, 50),
 	);
 	return { newRemote: result.remote, touchedPaths: new Set(mergedPaths) };
+}
+
+/** Splits text into lines after normalising CRLF so a mixed-EOL pair does not
+ * produce a spurious whole-file diff in the three-way merge. */
+function toLines(value: string): string[] {
+	return value.replace(/\r\n/g, "\n").split("\n");
 }

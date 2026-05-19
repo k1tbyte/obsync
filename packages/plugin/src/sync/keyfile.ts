@@ -54,7 +54,17 @@ export async function readKeyfile(
 ): Promise<Keyfile | null> {
 	const bytes = await storage.get(REMOTE_KEYFILE_KEY);
 	if (!bytes) return null;
-	return JSON.parse(decoder.decode(bytes)) as Keyfile;
+	try {
+		return JSON.parse(decoder.decode(bytes)) as Keyfile;
+	} catch (err) {
+		// Present but unparseable. Returning null would make the caller mint a
+		// fresh data key and orphan every encrypted object — fail loudly.
+		throw new Error(
+			`Keyfile present but unreadable; refusing to treat it as absent: ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+		);
+	}
 }
 
 export async function writeKeyfile(

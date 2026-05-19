@@ -88,6 +88,7 @@ export async function scanVault(
 					reason: `Case-insensitive collision with "${existing}"`,
 				});
 				delete files[path];
+				delete updatedCache[path];
 			} else {
 				lower.set(lc, path);
 			}

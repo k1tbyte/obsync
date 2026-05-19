@@ -18,15 +18,19 @@ import type * as Party from "partykit/server";
 export default class SyncRelay implements Party.Server {
 	constructor(readonly room: Party.Room) {}
 
+	private authorized(request: { url: string }): boolean {
+		const expected = this.room.env.TOKEN as string | undefined;
+		if (!expected) return true;
+		return new URL(request.url).searchParams.get("token") === expected;
+	}
+
 	onConnect(
 		connection: Party.Connection,
 		{ request }: Party.ConnectionContext,
 	): void {
-		const expected = this.room.env.TOKEN as string | undefined;
-		if (!expected) return;
-		const url = new URL(request.url);
-		if (url.searchParams.get("token") !== expected) {
+		if (!this.authorized(request)) {
 			connection.close(4001, "Unauthorized");
+			return;
 		}
 	}
 
@@ -40,12 +44,8 @@ export default class SyncRelay implements Party.Server {
 	}
 
 	async onRequest(request: Party.Request): Promise<Response> {
-		const expected = this.room.env.TOKEN as string | undefined;
-		if (expected) {
-			const url = new URL(request.url);
-			if (url.searchParams.get("token") !== expected) {
-				return new Response("Unauthorized", { status: 401 });
-			}
+		if (!this.authorized(request)) {
+			return new Response("Unauthorized", { status: 401 });
 		}
 
 		// POST = HTTP fallback for notify (when WebSocket is not connected)

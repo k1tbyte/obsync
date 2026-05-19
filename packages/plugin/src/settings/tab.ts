@@ -699,8 +699,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					.setButtonText("Forget")
 					.setWarning()
 					.setDisabled(!this.plugin.hasPassphrase())
-					.onClick(() => {
-						this.plugin.forgetPassphrase();
+					.onClick(async () => {
+						await this.plugin.forgetPassphrase();
 						notifyInfo("passphrase forgotten.");
 						this.display();
 					}),

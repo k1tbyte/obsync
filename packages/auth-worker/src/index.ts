@@ -46,14 +46,30 @@ export default {
 				}),
 			});
 
-			const tokenData = await tokenRes.json();
-			return new Response(JSON.stringify(tokenData), {
-				status: tokenRes.status,
-				headers: {
-					"Content-Type": "application/json",
-					"Access-Control-Allow-Origin": "*",
-				},
-			});
+			const tokenData = (await tokenRes.json()) as {
+				access_token?: string;
+				expires_in?: number;
+			};
+			const corsJson = {
+				"Content-Type": "application/json",
+				"Access-Control-Allow-Origin": "*",
+			};
+			if (!tokenRes.ok || !tokenData.access_token) {
+				console.error("token refresh failed", tokenRes.status);
+				return new Response(JSON.stringify({ error: "token_refresh_failed" }), {
+					status: 502,
+					headers: corsJson,
+				});
+			}
+			// Return only the fields the client needs — never echo Google's raw
+			// response (may contain a rotated refresh_token or error details).
+			return new Response(
+				JSON.stringify({
+					access_token: tokenData.access_token,
+					expires_in: tokenData.expires_in,
+				}),
+				{ status: 200, headers: corsJson },
+			);
 		}
 
 		if (url.pathname === "/auth") {
@@ -98,10 +114,10 @@ export default {
 			const tokenData = (await tokenRes.json()) as any;
 
 			if (!tokenRes.ok || !tokenData.access_token) {
-				return new Response(
-					`Failed to exchange token: ${JSON.stringify(tokenData)}`,
-					{ status: 400 },
-				);
+				console.error("token exchange failed", tokenRes.status);
+				return new Response("Authentication failed. Please try again.", {
+					status: 400,
+				});
 			}
 
 			// Redirect to Obsidian with the tokens

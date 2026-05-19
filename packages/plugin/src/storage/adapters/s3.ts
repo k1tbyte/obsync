@@ -128,7 +128,7 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 						),
 					);
 					const body = out.Body;
-					if (!body) return new Uint8Array(0);
+					if (!body) return null;
 					return await readBodyToBytes(body);
 				} catch (err) {
 					if (isNotFound(err)) return null;

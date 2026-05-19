@@ -16,6 +16,7 @@ const HTTP_NOT_FOUND = 404;
 const HTTP_METHOD_NOT_ALLOWED = 405;
 const HTTP_CONFLICT = 409;
 const HTTP_MULTI_STATUS = 207;
+const WEBDAV_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
 export const WEBDAV_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -94,7 +95,7 @@ export function createWebDAVAdapter(
 			cursor = `${cursor}${part}/`;
 			if (knownDirs.has(cursor)) continue;
 			const url = baseUrl + encodeKey(cursor);
-			const res = await requestUrl({
+			const res = await davRequest({
 				url,
 				method: "MKCOL",
 				headers: buildHeaders(),
@@ -118,7 +119,7 @@ export function createWebDAVAdapter(
 			return webdavIdentity(config);
 		},
 		async exists(key) {
-			const res = await requestUrl({
+			const res = await davRequest({
 				url: urlForKey(key),
 				method: "HEAD",
 				headers: buildHeaders(),
@@ -129,7 +130,7 @@ export function createWebDAVAdapter(
 			throw new Error(`WebDAV HEAD ${key} failed: ${res.status}`);
 		},
 		async get(key) {
-			const res = await requestUrl({
+			const res = await davRequest({
 				url: urlForKey(key),
 				method: "GET",
 				headers: buildHeaders(),
@@ -147,7 +148,7 @@ export function createWebDAVAdapter(
 				body.byteOffset,
 				body.byteOffset + body.byteLength,
 			) as ArrayBuffer;
-			const res = await requestUrl({
+			const res = await davRequest({
 				url: urlForKey(key),
 				method: "PUT",
 				headers: buildHeaders({
@@ -161,7 +162,7 @@ export function createWebDAVAdapter(
 			}
 		},
 		async delete(key) {
-			const res = await requestUrl({
+			const res = await davRequest({
 				url: urlForKey(key),
 				method: "DELETE",
 				headers: buildHeaders(),
@@ -172,7 +173,7 @@ export function createWebDAVAdapter(
 		},
 		async list(keyPrefix) {
 			const dir = keyPrefix.endsWith("/") ? keyPrefix : `${keyPrefix}/`;
-			const res = await requestUrl({
+			const res = await davRequest({
 				url: rootUrl + encodeKey(dir),
 				method: "PROPFIND",
 				headers: buildHeaders({
@@ -189,6 +190,36 @@ export function createWebDAVAdapter(
 			return parsePropfindResponse(res.text, rootUrl);
 		},
 	};
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/**
+ * `requestUrl` with bounded retry/backoff. All WebDAV verbs used here are
+ * idempotent, so retrying a thrown network error or a 5xx is safe. Non-5xx
+ * statuses are returned as-is for the caller to interpret.
+ */
+async function davRequest(
+	params: Parameters<typeof requestUrl>[0],
+): Promise<Awaited<ReturnType<typeof requestUrl>>> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= WEBDAV_RETRY_DELAYS_MS.length; attempt++) {
+		try {
+			const res = await requestUrl(params);
+			if (res.status >= 500 && attempt < WEBDAV_RETRY_DELAYS_MS.length) {
+				await delay(WEBDAV_RETRY_DELAYS_MS[attempt] as number);
+				continue;
+			}
+			return res;
+		} catch (err) {
+			lastErr = err;
+			if (attempt === WEBDAV_RETRY_DELAYS_MS.length) break;
+			await delay(WEBDAV_RETRY_DELAYS_MS[attempt] as number);
+		}
+	}
+	throw lastErr;
 }
 
 function assertConfig(config: WebDAVStorageConfig): void {

@@ -98,6 +98,15 @@ interface GoogleDriveListResponse {
 	nextPageToken?: string;
 }
 
+/**
+ * Escapes a value for interpolation into a Google Drive `q` string literal.
+ * Drive query syntax wraps literals in single quotes; an unescaped quote or
+ * backslash in (e.g.) a folder name would break the query or alter its meaning.
+ */
+function escapeDriveQueryValue(value: string): string {
+	return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 export function createGoogleDriveAdapter(
 	config: GoogleDriveStorageConfig,
 ): StorageAdapter {
@@ -141,7 +150,7 @@ export function createGoogleDriveAdapter(
 	const getFolderId = async (): Promise<string> => {
 		if (cachedFolderId) return cachedFolderId;
 
-		const q = `name = '${config.folderName}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+		const q = `name = '${escapeDriveQueryValue(config.folderName)}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
 		const res = await requestUrl({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
@@ -187,7 +196,7 @@ export function createGoogleDriveAdapter(
 	const findFileId = async (key: string): Promise<string | null> => {
 		if (fileIdCache.has(key)) return fileIdCache.get(key) ?? null;
 		const folderId = await getFolderId();
-		const q = `name = '${key}' and '${folderId}' in parents and trashed = false`;
+		const q = `name = '${escapeDriveQueryValue(key)}' and '${escapeDriveQueryValue(folderId)}' in parents and trashed = false`;
 		const res = await requestUrl({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
@@ -309,7 +318,7 @@ export function createGoogleDriveAdapter(
 
 			// We fetch all files in the folder and filter by prefix locally
 			// since Google Drive API does not support "startsWith" in queries.
-			const q = `'${folderId}' in parents and trashed = false`;
+			const q = `'${escapeDriveQueryValue(folderId)}' in parents and trashed = false`;
 
 			do {
 				const url = new URL(DRIVE_API);

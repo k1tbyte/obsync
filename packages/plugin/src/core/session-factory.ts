@@ -6,12 +6,12 @@ import {
 	type ObsyncSettings,
 } from "../settings/model";
 import { createStorageAdapter } from "../storage/registry";
-import type { ObjectStorage } from "../storage/types";
+import type { ObjectStorage, StorageAdapter } from "../storage/types";
 import type { EngineDependencies } from "../sync/engine";
 import { PassphraseRotatedError } from "../sync/keyfile";
 import { fetchRemoteManifest } from "../sync/manifest";
 import { loadState, saveState } from "../sync/state";
-import type { LocalState } from "../types";
+import type { LocalState, Manifest } from "../types";
 import { notifyInfo } from "../ui/notices";
 import { confirmVaultAdoption } from "../ui/vault-adoption-modal";
 import { loadIgnoreMatcher } from "../vault/ignore";
@@ -31,11 +31,26 @@ export interface SessionFactoryDeps {
 export function createSessionOpener(
 	deps: SessionFactoryDeps,
 ): () => Promise<EngineDependencies | null> {
-	return () => openSession(deps);
+	// Memoise the storage adapter by its full config. Adapters hold per-session
+	// caches (e.g. the Google Drive folder id and name→id map); rebuilding one
+	// per operation discards those and forces a fresh Drive folder-resolve +
+	// cold lookups on every push. Any config change (creds, folder, token
+	// refresh) changes the key and rebuilds.
+	let cached: { key: string; adapter: StorageAdapter } | null = null;
+	const getStorage = (): StorageAdapter => {
+		const config = activeStorage(deps.settings);
+		const key = JSON.stringify(config);
+		if (cached && cached.key === key) return cached.adapter;
+		const adapter = createStorageAdapter(config);
+		cached = { key, adapter };
+		return adapter;
+	};
+	return () => openSession(deps, getStorage);
 }
 
 async function openSession(
 	deps: SessionFactoryDeps,
+	getStorage: () => StorageAdapter,
 ): Promise<EngineDependencies | null> {
 	const { app, settings, passphrase, state, logs } = deps;
 	if (!isStorageConfigured(settings)) {
@@ -55,7 +70,7 @@ async function openSession(
 		return null;
 	}
 	const adapter = app.vault.adapter;
-	const storage = createStorageAdapter(activeStorage(settings));
+	const storage = getStorage();
 	const key = await resolveKeyWithRotationRetry(deps, storage);
 	if (!key) return null;
 	let currentState =
@@ -123,7 +138,7 @@ async function resolveKeyWithRotationRetry(
 			"Passphrase no longer matches the remote (rotated elsewhere); re-prompting.",
 		);
 		notifyInfo("Passphrase changed on another device. Enter the new one.");
-		passphrase.forget();
+		await passphrase.forget();
 		if (!(await passphrase.prompt(true))) return null;
 		try {
 			return await passphrase.resolveKey(storage);
@@ -146,7 +161,7 @@ async function confirmAdoptionIfNeeded(
 ): Promise<string | false> {
 	const localFileCount = app.vault.getFiles().length;
 	if (localFileCount === 0) return "";
-	let remote: any;
+	let remote: Manifest | null;
 	try {
 		remote = await fetchRemoteManifest(storage, key);
 	} catch (err) {

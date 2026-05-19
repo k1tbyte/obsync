@@ -94,11 +94,15 @@ export class RealtimeClient {
 	/** Notify other devices that we just pushed changes. */
 	notifySync(): void {
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-			this.ws.send("sync");
-		} else {
-			// Fallback: fire HTTP POST to the notify endpoint
-			void this.notifyViaHttp();
+			try {
+				this.ws.send("sync");
+				return;
+			} catch {
+				// send() can throw if the socket is closing; fall through to HTTP.
+			}
 		}
+		// Fallback: fire HTTP POST to the notify endpoint
+		void this.notifyViaHttp();
 	}
 
 	dispose(): void {

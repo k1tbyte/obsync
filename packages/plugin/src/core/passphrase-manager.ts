@@ -37,10 +37,14 @@ export class PassphraseManager {
 		return this.passphrase;
 	}
 
-	forget(): void {
+	async forget(): Promise<void> {
 		this.passphrase = null;
 		this.cachedKey = null;
-		void clearCachedPassphrase(this.adapter, this.configDir);
+		try {
+			await clearCachedPassphrase(this.adapter, this.configDir);
+		} catch (err) {
+			console.warn("[obsync] failed to clear cached passphrase", err);
+		}
 	}
 
 	dispose(): void {

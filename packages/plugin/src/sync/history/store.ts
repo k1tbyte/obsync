@@ -18,16 +18,24 @@ export async function readSnapshotIndex(
 ): Promise<SnapshotIndex> {
 	const blob = await storage.get(REMOTE_SNAPSHOT_INDEX_KEY);
 	if (!blob) return { version: SNAPSHOT_INDEX_VERSION, entries: [] };
+	let parsed: SnapshotIndex;
 	try {
-		const parsed = await decryptJson<SnapshotIndex>(key, blob);
-		if (!Array.isArray(parsed.entries)) {
-			return { version: SNAPSHOT_INDEX_VERSION, entries: [] };
-		}
-		return parsed;
+		parsed = await decryptJson<SnapshotIndex>(key, blob);
 	} catch (err) {
-		console.warn("[obsync] snapshot index unreadable; starting fresh", err);
+		// The index object exists but could not be decrypted/parsed (transient
+		// fetch corruption, wrong key mid-rotation, etc.). Returning a fresh
+		// index here would let the caller overwrite the real one and orphan all
+		// history. Fail loudly instead so the update is skipped this round.
+		throw new Error(
+			`Snapshot index present but unreadable; refusing to reset it: ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+		);
+	}
+	if (!Array.isArray(parsed.entries)) {
 		return { version: SNAPSHOT_INDEX_VERSION, entries: [] };
 	}
+	return parsed;
 }
 
 export async function writeSnapshotIndex(

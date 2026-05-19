@@ -156,6 +156,7 @@ export default class ObsyncPlugin extends Plugin {
 		this.initRealtime();
 
 		this.registerIgnoreFileEvents();
+		this.registerStatePersistenceFlush();
 		this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
 			void this.handleSettingsTransferProtocol(params);
 		});
@@ -301,8 +302,8 @@ export default class ObsyncPlugin extends Plugin {
 		return this.passphraseManager.has();
 	}
 
-	forgetPassphrase(): void {
-		this.passphraseManager.forget();
+	async forgetPassphrase(): Promise<void> {
+		await this.passphraseManager.forget();
 	}
 
 	async promptPassphrase(replace: boolean): Promise<boolean> {
@@ -361,6 +362,22 @@ export default class ObsyncPlugin extends Plugin {
 		} catch (err) {
 			notifyError("settings transfer failed", err);
 		}
+	}
+
+	/**
+	 * Flush the debounced state (hash cache) at lifecycle points that still run
+	 * while the app is alive. `onunload` is synchronous and Obsidian does not
+	 * await it, so relying on it alone can lose the cache and force a full vault
+	 * re-hash on next launch.
+	 */
+	private registerStatePersistenceFlush(): void {
+		const flush = (): void => {
+			void this.statePersister.flush();
+		};
+		this.registerDomEvent(document, "visibilitychange", () => {
+			if (document.visibilityState === "hidden") flush();
+		});
+		this.registerDomEvent(window, "beforeunload", flush);
 	}
 
 	private registerIgnoreFileEvents(): void {

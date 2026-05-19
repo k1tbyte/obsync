@@ -53,8 +53,8 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
 		id: "forget-passphrase",
 		name: "Forget cached passphrase",
-		callback: () => {
-			plugin.forgetPassphrase();
+		callback: async () => {
+			await plugin.forgetPassphrase();
 			notifyInfo("passphrase forgotten.");
 		},
 	});

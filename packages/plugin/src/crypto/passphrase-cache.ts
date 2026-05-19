@@ -80,7 +80,10 @@ async function loadDeviceKey(
 			if (bytes.length !== DEVICE_KEY_BYTES) return null;
 			return importAesKey(bytes);
 		} catch {
-			if (!createIfMissing) return null;
+			// The key file exists but is unreadable. Regenerating it here would
+			// overwrite a possibly-recoverable key and permanently destroy the
+			// encrypted passphrase cache. Treat as "no usable key" instead.
+			return null;
 		}
 	}
 	if (!createIfMissing) return null;

@@ -34,7 +34,12 @@ export class DiffCache {
 		const forceText = input.forceText === true;
 		const cacheKey = keyFor(input.path, input.status, forceText);
 		const hit = this.entries.get(cacheKey);
-		if (hit) return hit;
+		if (hit) {
+			// Move to most-recent so eviction is LRU rather than FIFO.
+			this.entries.delete(cacheKey);
+			this.entries.set(cacheKey, hit);
+			return hit;
+		}
 		const projection: ProjectionDeps = {
 			adapter: input.deps.adapter,
 			storage: input.deps.storage,
