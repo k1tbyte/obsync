@@ -15,6 +15,11 @@
 
 import type * as Party from "partykit/server";
 
+interface PresenceDevice {
+	id: string;
+	name: string;
+}
+
 export default class SyncRelay implements Party.Server {
 	constructor(readonly room: Party.Room) {}
 
@@ -32,9 +37,20 @@ export default class SyncRelay implements Party.Server {
 			connection.close(4001, "Unauthorized");
 			return;
 		}
+		connection.setState(readPresenceDevice(request, connection));
+		this.broadcastPresence();
 	}
 
-	onMessage(message: string, sender: Party.Connection): void {
+	onClose(): void {
+		this.broadcastPresence();
+	}
+
+	onError(): void {
+		this.broadcastPresence();
+	}
+
+	onMessage(message: string | ArrayBuffer, sender: Party.Connection): void {
+		if (typeof message !== "string") return;
 		if (message === "ping") return; // Keepalive, ignore.
 
 		if (message === "sync") {
@@ -58,6 +74,40 @@ export default class SyncRelay implements Party.Server {
 			status: 200,
 		});
 	}
+
+	private broadcastPresence(): void {
+		this.room.broadcast(
+			JSON.stringify({
+				type: "presence",
+				devices: collectPresenceDevices(this.room),
+			}),
+		);
+	}
 }
 
 SyncRelay satisfies Party.Worker;
+
+function readPresenceDevice(
+	request: { url: string },
+	connection: Party.Connection,
+): PresenceDevice {
+	const params = new URL(request.url).searchParams;
+	return {
+		id: params.get("deviceId")?.trim() || connection.id,
+		name: params.get("deviceName")?.trim() || "Unknown device",
+	};
+}
+
+function collectPresenceDevices(room: Party.Room): PresenceDevice[] {
+	const devices = new Map<string, PresenceDevice>();
+	for (const connection of room.getConnections()) {
+		const state = connection.state as Partial<PresenceDevice> | undefined;
+		const id = state?.id?.trim() || connection.id;
+		const name = state?.name?.trim() || "Unknown device";
+		devices.set(id, { id, name });
+	}
+	return [...devices.values()].sort(
+		(left, right) =>
+			left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+	);
+}

@@ -307,13 +307,10 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private async handleExportSettings(): Promise<void> {
-		try {
-			const url = await this.plugin.createSettingsTransferUrl();
-			if (!url) return;
-			showSettingsTransferExport(this.app, url);
-		} catch (err) {
-			this.notifyError(err);
-		}
+		showSettingsTransferExport(this.app, {
+			createPackage: (options) =>
+				this.plugin.createSettingsTransferPackage(options),
+		});
 	}
 
 	private async handleImportSettings(): Promise<void> {

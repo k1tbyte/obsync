@@ -180,7 +180,10 @@ export function renderAutomationSection(
 		});
 
 	const statusSetting = new Setting(parent).setName("Relay status");
-	const updateStatus = (connected: boolean): void => {
+	const devicesSetting = new Setting(parent).setName("Connected devices");
+	let connected = plugin.isRealtimeConnected();
+	let devices = [...plugin.getRealtimeDevices()];
+	const renderRealtimeState = (): void => {
 		statusSetting.setDesc(
 			!plugin.settings.realtimeSync
 				? "Relay is disabled."
@@ -188,7 +191,42 @@ export function renderAutomationSection(
 					? "● Connected"
 					: "○ Not connected",
 		);
+		devicesSetting.setDesc(
+			describeConnectedDevices(
+				plugin.settings.realtimeSync,
+				connected,
+				devices,
+			),
+		);
 	};
-	updateStatus(plugin.isRealtimeConnected());
-	return plugin.subscribeRealtimeStatus(updateStatus);
+	renderRealtimeState();
+	const unsubscribeStatus = plugin.subscribeRealtimeStatus((value) => {
+		connected = value;
+		renderRealtimeState();
+	});
+	const unsubscribeDevices = plugin.subscribeRealtimeDevices((value) => {
+		devices = [...value];
+		renderRealtimeState();
+	});
+	return () => {
+		unsubscribeStatus();
+		unsubscribeDevices();
+	};
+}
+
+function describeConnectedDevices(
+	realtimeEnabled: boolean,
+	connected: boolean,
+	devices: readonly { name: string }[],
+): string {
+	if (!realtimeEnabled) {
+		return "Enable real-time sync to see connected devices.";
+	}
+	if (!connected) {
+		return "Connect to the relay to see other devices.";
+	}
+	if (devices.length === 0) {
+		return "No other devices connected.";
+	}
+	return devices.map((device) => device.name).join(", ");
 }

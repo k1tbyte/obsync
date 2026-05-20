@@ -13,15 +13,20 @@ import {
 } from "@/settings/model";
 import type { ObsyncSettingTab } from "@/settings/tab";
 import {
+	createSettingsTransferPackage as buildSettingsTransferPackage,
 	createSettingsTransferUrl,
+	mergeTransferredSettings,
 	type ObsyncTransferSettings,
 	readSettingsTransfer,
+	type SettingsTransferExportOptions,
+	type SettingsTransferPackage,
 	settingsTransferAction,
 } from "@/settings/transfer";
 import { createStorageAdapter, handleStorageProtocol } from "@/storage";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { defaultDeviceName } from "@/sync/device";
 import { rotatePassphrase } from "@/sync/keyfile";
+import type { RealtimePresenceDevice } from "@/sync/realtime";
 import { registerScheduler } from "@/sync/scheduler";
 import { loadState } from "@/sync/state";
 import type { LocalState } from "@/types";
@@ -159,11 +164,19 @@ export default class ObsyncPlugin extends Plugin {
 		return createSettingsTransferUrl(this.settings, passphrase);
 	}
 
+	async createSettingsTransferPackage(
+		options: SettingsTransferExportOptions,
+	): Promise<SettingsTransferPackage | null> {
+		const passphrase = await this.requireTransferPassphrase();
+		if (!passphrase) return null;
+		return buildSettingsTransferPackage(this.settings, passphrase, options);
+	}
+
 	async importSettingsTransfer(input: string): Promise<boolean> {
 		const passphrase = await this.requireTransferPassphrase();
 		if (!passphrase) return false;
 		const imported = await readSettingsTransfer(input, passphrase);
-		const settings = mergeSettings({ ...this.settings, ...imported });
+		const settings = mergeTransferredSettings(this.settings, imported);
 		const confirmed = await confirmSettingsTransferImport(this.app, settings);
 		if (!confirmed) return false;
 		await this.applyImportedSettings(imported);
@@ -181,6 +194,7 @@ export default class ObsyncPlugin extends Plugin {
 			(await loadState(this.app.vault.adapter, this.app.vault.configDir));
 		this.statePersister.setInitial(base);
 		await this.statePersister.persist({ ...base, deviceName: trimmed });
+		this.realtime?.restart();
 	}
 
 	async loadSettings(): Promise<void> {
@@ -242,7 +256,7 @@ export default class ObsyncPlugin extends Plugin {
 	private async applyImportedSettings(
 		settings: ObsyncTransferSettings,
 	): Promise<void> {
-		const nextSettings = mergeSettings({ ...this.settings, ...settings });
+		const nextSettings = mergeTransferredSettings(this.settings, settings);
 		Object.assign(this.settings, nextSettings);
 		this.passphraseManager.invalidateKey();
 		await this.saveSettings();
@@ -273,6 +287,17 @@ export default class ObsyncPlugin extends Plugin {
 	subscribeRealtimeStatus(fn: (connected: boolean) => void): () => void {
 		if (!this.realtime) return () => undefined;
 		return this.realtime.subscribe(fn);
+	}
+
+	getRealtimeDevices(): readonly RealtimePresenceDevice[] {
+		return this.realtime?.getDevices() ?? [];
+	}
+
+	subscribeRealtimeDevices(
+		fn: (devices: readonly RealtimePresenceDevice[]) => void,
+	): () => void {
+		if (!this.realtime) return () => undefined;
+		return this.realtime.subscribeDevices(fn);
 	}
 
 	/** Start or restart the realtime WebSocket connection based on current settings. */

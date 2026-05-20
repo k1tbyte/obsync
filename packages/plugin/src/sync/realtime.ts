@@ -19,11 +19,30 @@ const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 const PING_INTERVAL_MS = 30_000;
 
+export interface RealtimePresenceDevice {
+	id: string;
+	name: string;
+}
+
+interface RealtimePresenceMessage {
+	type: "presence";
+	devices?: unknown;
+}
+
+interface RealtimeSyncMessage {
+	type: "sync";
+}
+
+type RealtimeServerMessage = RealtimePresenceMessage | RealtimeSyncMessage;
+
 export interface RealtimeClientOptions {
 	serverUrl: string;
 	channelId: string;
 	token?: string;
+	deviceId?: string;
+	deviceName?: string;
 	onRemoteSync: () => void;
+	onPresenceChange?: (devices: readonly RealtimePresenceDevice[]) => void;
 	onConnectionChange?: (connected: boolean) => void;
 }
 
@@ -43,12 +62,7 @@ export class RealtimeClient {
 		if (this.disposed) return;
 		this.cleanup();
 
-		const baseUrl = this.options.serverUrl.replace(/\/$/, "");
-		const roomId = encodeURIComponent(this.options.channelId);
-		const token = this.options.token;
-		const wsUrl = token
-			? `${baseUrl}/party/${roomId}?token=${encodeURIComponent(token)}`
-			: `${baseUrl}/party/${roomId}`;
+		const wsUrl = buildRoomUrl(this.options.serverUrl, this.options);
 
 		let socket: WebSocket;
 		try {
@@ -70,9 +84,15 @@ export class RealtimeClient {
 			if (this.ws !== socket) return;
 			const data = typeof event.data === "string" ? event.data : "";
 			try {
-				const msg = JSON.parse(data) as { type?: string };
+				const msg = JSON.parse(data) as RealtimeServerMessage;
 				if (msg.type === "sync") {
 					this.options.onRemoteSync();
+					return;
+				}
+				if (msg.type === "presence") {
+					this.options.onPresenceChange?.(
+						normalizePresenceDevices(msg.devices),
+					);
 				}
 			} catch {
 				// Ignore non-JSON messages
@@ -82,6 +102,7 @@ export class RealtimeClient {
 		socket.addEventListener("close", () => {
 			if (this.ws !== socket) return;
 			this.stopPing();
+			this.options.onPresenceChange?.([]);
 			this.options.onConnectionChange?.(false);
 			if (!this.disposed) this.scheduleReconnect();
 		});
@@ -115,14 +136,8 @@ export class RealtimeClient {
 	}
 
 	private async notifyViaHttp(): Promise<void> {
-		const baseUrl = this.options.serverUrl
-			.replace(/^ws(s)?:/, "http$1:")
-			.replace(/\/$/, "");
-		const roomId = encodeURIComponent(this.options.channelId);
-		const token = this.options.token;
-		const url = token
-			? `${baseUrl}/party/${roomId}?token=${encodeURIComponent(token)}`
-			: `${baseUrl}/party/${roomId}`;
+		const baseUrl = this.options.serverUrl.replace(/^ws(s)?:/, "http$1:");
+		const url = buildRoomUrl(baseUrl, this.options);
 		try {
 			await requestUrl({ url, method: "POST", throw: false });
 		} catch {
@@ -174,4 +189,45 @@ export class RealtimeClient {
 			this.pingTimer = null;
 		}
 	}
+}
+
+export function normalizePresenceDevices(
+	value: unknown,
+): RealtimePresenceDevice[] {
+	if (!Array.isArray(value)) return [];
+	const devices = new Map<string, RealtimePresenceDevice>();
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object") continue;
+		const id = (entry as { id?: unknown }).id;
+		const name = (entry as { name?: unknown }).name;
+		if (typeof id !== "string" || id.trim().length === 0) continue;
+		if (typeof name !== "string" || name.trim().length === 0) continue;
+		devices.set(id, { id, name: name.trim() });
+	}
+	return [...devices.values()].sort(
+		(left, right) =>
+			left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+	);
+}
+
+function buildRoomUrl(
+	serverUrl: string,
+	options: Pick<
+		RealtimeClientOptions,
+		"channelId" | "token" | "deviceId" | "deviceName"
+	>,
+): string {
+	const baseUrl = serverUrl.replace(/\/$/, "");
+	const roomId = encodeURIComponent(options.channelId);
+	const url = new URL(`${baseUrl}/party/${roomId}`);
+	if (options.token) {
+		url.searchParams.set("token", options.token);
+	}
+	if (options.deviceId) {
+		url.searchParams.set("deviceId", options.deviceId);
+	}
+	if (options.deviceName) {
+		url.searchParams.set("deviceName", options.deviceName);
+	}
+	return url.toString();
 }

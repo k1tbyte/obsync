@@ -7,60 +7,269 @@ import {
 	QR_SIZE,
 } from "@/constants";
 import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import {
+	DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
+	ESettingsTransferStorageMode,
+	hasSettingsTransferSelection,
+	type SettingsTransferExportOptions,
+	type SettingsTransferPackage,
+} from "@/settings/transfer";
 import { describeStorageTarget } from "@/storage";
 
-export class SettingsTransferExportModal extends Modal {
-	private readonly transferUrl: string;
+interface SettingsTransferExportModalOptions {
+	createPackage: (
+		options: SettingsTransferExportOptions,
+	) => Promise<SettingsTransferPackage | null>;
+}
 
-	constructor(app: App, transferUrl: string) {
+export class SettingsTransferExportModal extends Modal {
+	private readonly createPackage: SettingsTransferExportModalOptions["createPackage"];
+	private options: SettingsTransferExportOptions = {
+		...DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
+	};
+	private exportPackage: SettingsTransferPackage | null = null;
+	private note = "Select what to export, then generate the encrypted link.";
+	private generating = false;
+	private entireConfig = false;
+
+	constructor(app: App, options: SettingsTransferExportModalOptions) {
 		super(app);
-		this.transferUrl = transferUrl;
+		this.createPackage = options.createPackage;
 	}
 
 	onOpen(): void {
-		const { contentEl, titleEl } = this;
+		const { titleEl } = this;
 		titleEl.setText("Export Obsync setup");
-		contentEl.createEl("p", {
-			text: "This QR contains the main sync settings in a compact encrypted format. The same Obsync passphrase is required to import it.",
-		});
-		contentEl.createEl("p", {
-			text: "Local-only display preferences and the cached passphrase are not transferred.",
-		});
+		this.render();
+	}
 
-		const canvas = contentEl.createEl("canvas");
-		canvas.addClass("obsync-transfer-qr");
-		void QRCode.toCanvas(canvas, this.transferUrl, {
-			errorCorrectionLevel: QR_ERROR_CORRECTION,
-			margin: 1,
-			width: QR_SIZE,
-		}).catch(() => {
-			canvas.remove();
-			contentEl.createEl("p", {
-				text: "QR code unavailable on this platform. Use the link below.",
-				cls: "obsync-transfer-qr-fallback",
+	onClose(): void {
+		this.contentEl.empty();
+	}
+
+	private render(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		contentEl.createEl("p", {
+			text: "Generate an encrypted setup link for another device. The same Obsync passphrase is required to import it.",
+		});
+		contentEl.createEl("p", {
+			text: "Local-only display preferences and passphrase cache settings are never transferred.",
+		});
+		contentEl.createEl("h3", { text: "What to export" });
+
+		new Setting(contentEl)
+			.setName("Entire transferable config")
+			.setDesc(
+				"Includes all saved storage setups plus sync scope, automation, history, and live sync settings.",
+			)
+			.addToggle((toggle) => {
+				toggle.setValue(this.entireConfig).onChange((value) => {
+					this.entireConfig = value;
+					if (value) {
+						this.options = {
+							storageMode: ESettingsTransferStorageMode.All,
+							includeSyncScope: true,
+							includeAutomation: true,
+							includeRealtime: true,
+						};
+					}
+					this.markSelectionChanged();
+				});
 			});
-		});
 
-		const textarea = contentEl.createEl("textarea", {
-			cls: "obsync-transfer-url",
-		});
-		textarea.value = this.transferUrl;
-		textarea.rows = 4;
-		textarea.readOnly = true;
+		new Setting(contentEl)
+			.setName("Current storage setup")
+			.setDesc(
+				"Transfer credentials and connection details for the currently selected backend so sync works right away.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(
+						this.options.storageMode !== ESettingsTransferStorageMode.None,
+					)
+					.setDisabled(
+						this.entireConfig ||
+							this.options.storageMode === ESettingsTransferStorageMode.All,
+					)
+					.onChange((value) => {
+						this.entireConfig = false;
+						this.options = {
+							...this.options,
+							storageMode: value
+								? ESettingsTransferStorageMode.Active
+								: ESettingsTransferStorageMode.None,
+						};
+						this.markSelectionChanged();
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("All saved storage setups")
+			.setDesc(
+				"Also include every saved backend configuration, not just the currently selected one.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(
+						this.options.storageMode === ESettingsTransferStorageMode.All,
+					)
+					.setDisabled(this.entireConfig)
+					.onChange((value) => {
+						this.entireConfig = false;
+						this.options = {
+							...this.options,
+							storageMode: value
+								? ESettingsTransferStorageMode.All
+								: this.options.storageMode === ESettingsTransferStorageMode.None
+									? ESettingsTransferStorageMode.None
+									: ESettingsTransferStorageMode.Active,
+						};
+						this.markSelectionChanged();
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("Sync scope and ignore rules")
+			.setDesc(
+				"Include Obsidian sync categories, ignore patterns, and the max file size limit.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.options.includeSyncScope)
+					.setDisabled(this.entireConfig)
+					.onChange((value) => {
+						this.entireConfig = false;
+						this.options = { ...this.options, includeSyncScope: value };
+						this.markSelectionChanged();
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("Automation and history")
+			.setDesc(
+				"Include auto-pull, auto-push, file history, and related automation settings.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.options.includeAutomation)
+					.setDisabled(this.entireConfig)
+					.onChange((value) => {
+						this.entireConfig = false;
+						this.options = { ...this.options, includeAutomation: value };
+						this.markSelectionChanged();
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("Live sync relay settings")
+			.setDesc("Include the real-time sync toggle, relay URL, and relay token.")
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.options.includeRealtime)
+					.setDisabled(this.entireConfig)
+					.onChange((value) => {
+						this.entireConfig = false;
+						this.options = { ...this.options, includeRealtime: value };
+						this.markSelectionChanged();
+					});
+			});
+
+		contentEl.createEl("h3", { text: "Export preview" });
+		contentEl.createEl("p", { text: this.note });
+
+		if (this.exportPackage) {
+			contentEl.createEl("p", {
+				text: `Transfer size: ${this.exportPackage.byteLength.toLocaleString()} bytes.`,
+			});
+
+			if (this.exportPackage.qrEligible) {
+				const canvas = contentEl.createEl("canvas");
+				canvas.addClass("obsync-transfer-qr");
+				void QRCode.toCanvas(canvas, this.exportPackage.url, {
+					errorCorrectionLevel: QR_ERROR_CORRECTION,
+					margin: 1,
+					width: QR_SIZE,
+				}).catch(() => {
+					canvas.remove();
+					contentEl.createEl("p", {
+						text: "QR code unavailable on this platform. Use the link below.",
+						cls: "obsync-transfer-qr-fallback",
+					});
+				});
+			} else {
+				contentEl.createEl("p", {
+					text: "This export is too large for a reliable QR code. Use the encrypted link below.",
+					cls: "obsync-transfer-qr-fallback",
+				});
+			}
+
+			const textarea = contentEl.createEl("textarea", {
+				cls: "obsync-transfer-url",
+			});
+			textarea.value = this.exportPackage.url;
+			textarea.rows = 4;
+			textarea.readOnly = true;
+		}
 
 		new Setting(contentEl)
 			.addButton((button) =>
 				button
+					.setButtonText(
+						this.exportPackage ? "Refresh export" : "Generate export",
+					)
+					.setCta()
+					.setDisabled(
+						this.generating || !hasSettingsTransferSelection(this.options),
+					)
+					.onClick(() => void this.generateExport()),
+			)
+			.addButton((button) =>
+				button
 					.setButtonText("Copy link")
-					.onClick(() => void navigator.clipboard.writeText(this.transferUrl)),
+					.setDisabled(this.exportPackage === null)
+					.onClick(() => void this.copyLink()),
 			)
 			.addButton((button) =>
 				button.setButtonText("Close").onClick(() => this.close()),
 			);
 	}
 
-	onClose(): void {
-		this.contentEl.empty();
+	private markSelectionChanged(): void {
+		this.exportPackage = null;
+		this.note = "Selection changed. Generate a new encrypted link.";
+		this.render();
+	}
+
+	private async generateExport(): Promise<void> {
+		if (this.generating || !hasSettingsTransferSelection(this.options)) return;
+		this.generating = true;
+		this.note = "Generating encrypted transfer...";
+		this.render();
+		try {
+			const exportPackage = await this.createPackage(this.options);
+			if (!exportPackage) {
+				this.exportPackage = null;
+				this.note = "Export canceled.";
+				return;
+			}
+			this.exportPackage = exportPackage;
+			this.note = exportPackage.qrEligible
+				? "QR code ready. Import it on the other device with the same Obsync passphrase."
+				: "Link ready. The QR code was skipped because this export is too large to scan reliably.";
+		} catch (err) {
+			this.exportPackage = null;
+			this.note = err instanceof Error ? err.message : String(err);
+		} finally {
+			this.generating = false;
+			this.render();
+		}
+	}
+
+	private async copyLink(): Promise<void> {
+		if (!this.exportPackage) return;
+		await navigator.clipboard.writeText(this.exportPackage.url);
 	}
 }
 
@@ -145,10 +354,10 @@ export class SettingsTransferConfirmModal extends Modal {
 		const { contentEl, titleEl } = this;
 		titleEl.setText("Import Obsync setup");
 		contentEl.createEl("p", {
-			text: "Imported setup replaces the current storage, sync scope, ignore, and automation settings on this device.",
+			text: "Imported setup updates the included storage and main sync settings on this device.",
 		});
 		contentEl.createEl("p", {
-			text: "Local-only display preferences and passphrase cache settings stay unchanged.",
+			text: "Unselected sections, local-only display preferences, and passphrase cache settings stay unchanged.",
 		});
 		contentEl.createEl("p", {
 			text: describeStorageTarget(activeStorage(this.settings)),
@@ -204,9 +413,9 @@ export class SettingsTransferConfirmModal extends Modal {
 
 export function showSettingsTransferExport(
 	app: App,
-	transferUrl: string,
+	options: SettingsTransferExportModalOptions,
 ): void {
-	new SettingsTransferExportModal(app, transferUrl).open();
+	new SettingsTransferExportModal(app, options).open();
 }
 
 export function askSettingsTransferInput(app: App): Promise<string | null> {
