@@ -35,10 +35,20 @@ export async function saveState(
 	await writeAtomic(adapter, path, JSON.stringify(state, null, 2));
 }
 
-function createEmptyState(): LocalState {
+export async function resetState(
+	adapter: DataAdapter,
+	configDir: string,
+	previous: LocalState | null,
+): Promise<LocalState> {
+	const next = createEmptyState(previous ?? undefined);
+	await saveState(adapter, configDir, next);
+	return next;
+}
+
+export function createEmptyState(previous?: Partial<LocalState>): LocalState {
 	return {
-		deviceId: randomId(),
-		deviceName: defaultDeviceName(),
+		deviceId: previous?.deviceId ?? randomId(),
+		deviceName: previous?.deviceName ?? defaultDeviceName(),
 		storages: {},
 		hashCache: {},
 	};

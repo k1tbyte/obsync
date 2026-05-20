@@ -214,6 +214,11 @@ export default class ObsyncPlugin extends Plugin {
 		await this.logs.clear();
 	}
 
+	async resetLocalState(): Promise<void> {
+		await this.statePersister.reset();
+		this.controller.invalidate("Local state reset.");
+	}
+
 	hasPassphrase(): boolean {
 		return this.passphraseManager.has();
 	}

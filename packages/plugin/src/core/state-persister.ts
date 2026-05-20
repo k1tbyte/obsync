@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 
 import { PERSIST_STATE_DEBOUNCE_MS } from "../constants";
-import { saveState } from "../sync/state";
+import { resetState, saveState } from "../sync/state";
 import type { LocalState } from "../types";
 
 export class StatePersister {
@@ -42,6 +42,13 @@ export class StatePersister {
 	async flush(): Promise<void> {
 		const pending = this.takePending();
 		if (pending) await saveState(this.adapter, this.configDir, pending);
+	}
+
+	async reset(): Promise<LocalState> {
+		this.cancelTimer();
+		const next = await resetState(this.adapter, this.configDir, this.current);
+		this.current = next;
+		return next;
 	}
 
 	dispose(): void {

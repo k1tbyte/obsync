@@ -127,6 +127,80 @@ describe("settings transfer", () => {
 		expect(imported.realtimeToken).toBe("relay-secret");
 	});
 
+	it("round-trips every transferable field when each differs from defaults", async () => {
+		const settings = buildSettings({
+			activeStorageKind: EStorageBackend.WebDAV,
+			settingsSync: {
+				coreSettings: true,
+				hotkeys: true,
+				pluginList: true,
+				pluginConfigs: true,
+				snippets: false,
+				themes: true,
+			},
+			ignorePatterns: "*.tmp\n*.swp",
+			maxFileBytes: DEFAULT_SETTINGS.maxFileBytes + 1024,
+			autoPullOnStartup: !DEFAULT_SETTINGS.autoPullOnStartup,
+			autoPullIntervalMinutes: DEFAULT_SETTINGS.autoPullIntervalMinutes + 5,
+			autoRefreshOnFileChange: !DEFAULT_SETTINGS.autoRefreshOnFileChange,
+			autoPushOnSave: !DEFAULT_SETTINGS.autoPushOnSave,
+			autoPushOnSaveCurrentFileOnly:
+				!DEFAULT_SETTINGS.autoPushOnSaveCurrentFileOnly,
+			fileHistoryEnabled: !DEFAULT_SETTINGS.fileHistoryEnabled,
+			fileHistoryMaxSnapshots: DEFAULT_SETTINGS.fileHistoryMaxSnapshots + 7,
+			historyAutoRefresh: !DEFAULT_SETTINGS.historyAutoRefresh,
+			realtimeSync: !DEFAULT_SETTINGS.realtimeSync,
+			realtimeServerUrl: "wss://relay.example.com",
+			realtimeToken: "relay-secret",
+			storageConfigs: {
+				[EStorageBackend.WebDAV]: {
+					...defaultWebDAVConfig(),
+					baseUrl: "https://dav.example.com/dav/",
+					basePath: "vault/",
+					username: "kit",
+					password: "dav-pass",
+				},
+			},
+		});
+
+		const url = await createSettingsTransferUrl(settings, PASSPHRASE);
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+
+		expect(imported.activeStorageKind).toBe(EStorageBackend.WebDAV);
+		expect(imported.storageConfigs).toEqual({
+			[EStorageBackend.WebDAV]: settings.storageConfigs[EStorageBackend.WebDAV],
+		});
+		expect(imported.settingsSync).toEqual(settings.settingsSync);
+		expect(imported.ignorePatterns).toBe(settings.ignorePatterns);
+		expect(imported.maxFileBytes).toBe(settings.maxFileBytes);
+		expect(imported.autoPullOnStartup).toBe(settings.autoPullOnStartup);
+		expect(imported.autoPullIntervalMinutes).toBe(
+			settings.autoPullIntervalMinutes,
+		);
+		expect(imported.autoRefreshOnFileChange).toBe(
+			settings.autoRefreshOnFileChange,
+		);
+		expect(imported.autoPushOnSave).toBe(settings.autoPushOnSave);
+		expect(imported.autoPushOnSaveCurrentFileOnly).toBe(
+			settings.autoPushOnSaveCurrentFileOnly,
+		);
+		expect(imported.fileHistoryEnabled).toBe(settings.fileHistoryEnabled);
+		expect(imported.fileHistoryMaxSnapshots).toBe(
+			settings.fileHistoryMaxSnapshots,
+		);
+		expect(imported.historyAutoRefresh).toBe(settings.historyAutoRefresh);
+		expect(imported.realtimeSync).toBe(settings.realtimeSync);
+		expect(imported.realtimeServerUrl).toBe(settings.realtimeServerUrl);
+		expect(imported.realtimeToken).toBe(settings.realtimeToken);
+	});
+
+	it("rejects legacy v3 transfer tokens", async () => {
+		const v3Token = "obsidian://obsync?d=3.p.AAAA.BBBB";
+		await expect(readSettingsTransfer(v3Token, PASSPHRASE)).rejects.toThrow(
+			/Unsupported Obsync settings transfer token/,
+		);
+	});
+
 	it("marks oversized exports as link-only", async () => {
 		const settings = buildSettings({
 			realtimeSync: true,

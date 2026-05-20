@@ -13,6 +13,18 @@ export function renderMaintenanceSection(
 	new Setting(parent).setName("Maintenance").setHeading();
 
 	new Setting(parent)
+		.setName("Reset local state")
+		.setDesc(
+			"Clear the local sync baseline, adopted remote vault, and file hash cache on this device. Obsync settings stay unchanged.",
+		)
+		.addButton((button) =>
+			button
+				.setButtonText("Reset local")
+				.setWarning()
+				.onClick(() => void handleResetLocal(plugin)),
+		);
+
+	new Setting(parent)
 		.setName("Verify remote integrity")
 		.setDesc("Check every referenced object exists and decrypts to its hash.")
 		.addButton((button) =>
@@ -86,6 +98,26 @@ async function handleDeepClean(plugin: ObsyncPlugin): Promise<void> {
 		notifyInfo(
 			`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
 		);
+	} catch (err) {
+		reportError(err);
+	}
+}
+
+async function handleResetLocal(plugin: ObsyncPlugin): Promise<void> {
+	const confirmed = await openConfirmModal({
+		app: plugin.app,
+		title: "Reset local state?",
+		body: [
+			"This clears the local sync baseline, the adopted remote vault record, and the file hash cache on this device.",
+			"Remote storage, local vault files, cached passphrases, and Obsync settings are not deleted.",
+		],
+		confirmLabel: "Reset local",
+		confirmClass: "mod-warning",
+	});
+	if (!confirmed) return;
+	try {
+		await plugin.resetLocalState();
+		notifyInfo("local state reset.");
 	} catch (err) {
 		reportError(err);
 	}

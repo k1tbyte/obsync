@@ -1,6 +1,7 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
 import { getDescriptor } from "../storage";
 import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
+import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
@@ -11,7 +12,6 @@ import {
 } from "./model";
 
 const TRANSFER_VERSION = 4;
-const LEGACY_TRANSFER_VERSION = 3;
 const TRANSFER_SALT_BYTES = 16;
 const TRANSFER_PARTS = 4;
 const TRANSFER_ACTION = "obsync";
@@ -19,6 +19,7 @@ const TRANSFER_PARAM = "d";
 const TRANSFER_COMPRESSION_FORMAT: CompressionFormat = "deflate-raw";
 const SETTINGS_TRANSFER_MAX_QR_BYTES = 1024;
 const MAX_SYNC_MASK = 0b111111;
+const SYNC_MASK_KEY = "y";
 const TRANSFER_SYNC_KEYS: ReadonlyArray<keyof SettingsSyncCategories> = [
 	"coreSettings",
 	"hotkeys",
@@ -84,53 +85,124 @@ export const DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS: SettingsTransferExportOpt
 		includeRealtime: true,
 	};
 
+enum ETransferSection {
+	Storage = "s",
+	Scope = "q",
+	Automation = "a",
+	Realtime = "l",
+}
+
+enum ETransferFieldKind {
+	Bool = "bool",
+	Num = "num",
+	Str = "str",
+}
+
+interface FieldSpec {
+	section: ETransferSection;
+	settingsKey: keyof ObsyncSettings;
+	transferKey: string;
+	kind: ETransferFieldKind;
+}
+
+const TRANSFER_FIELDS: ReadonlyArray<FieldSpec> = [
+	{
+		section: ETransferSection.Scope,
+		settingsKey: "ignorePatterns",
+		transferKey: "i",
+		kind: ETransferFieldKind.Str,
+	},
+	{
+		section: ETransferSection.Scope,
+		settingsKey: "maxFileBytes",
+		transferKey: "m",
+		kind: ETransferFieldKind.Num,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPullOnStartup",
+		transferKey: "u",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPullIntervalMinutes",
+		transferKey: "n",
+		kind: ETransferFieldKind.Num,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoRefreshOnFileChange",
+		transferKey: "f",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPushOnSave",
+		transferKey: "p",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPushOnSaveCurrentFileOnly",
+		transferKey: "c",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "fileHistoryEnabled",
+		transferKey: "h",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "fileHistoryMaxSnapshots",
+		transferKey: "j",
+		kind: ETransferFieldKind.Num,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "historyAutoRefresh",
+		transferKey: "r",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Realtime,
+		settingsKey: "realtimeSync",
+		transferKey: "e",
+		kind: ETransferFieldKind.Bool,
+	},
+	{
+		section: ETransferSection.Realtime,
+		settingsKey: "realtimeServerUrl",
+		transferKey: "u",
+		kind: ETransferFieldKind.Str,
+	},
+	{
+		section: ETransferSection.Realtime,
+		settingsKey: "realtimeToken",
+		transferKey: "t",
+		kind: ETransferFieldKind.Str,
+	},
+];
+
 type TransferStorageConfig = { kind: EStorageBackend } & Record<
 	string,
 	unknown
 >;
 
-interface SettingsTransferPayload {
-	s?: TransferStoragePayload;
-	q?: TransferScopePayload;
-	a?: TransferAutomationPayload;
-	l?: TransferRealtimePayload;
-}
+type SectionPayload = Record<string, unknown>;
 
 interface TransferStoragePayload {
 	a: EStorageBackend;
 	c: Record<string, TransferStorageConfig>;
 }
 
-interface TransferScopePayload {
-	y?: number;
-	i?: string;
-	m?: number;
-}
-
-interface TransferAutomationPayload {
-	u?: 0;
-	n?: number;
-	f?: 0;
-	p?: 1;
-	c?: 1;
-	h?: 1;
-	j?: number;
-	r?: 0;
-}
-
-interface TransferRealtimePayload {
-	e?: 1;
-	u?: string;
-	t?: string;
-}
-
-interface LegacySettingsTransferPayload {
-	o: StorageAdapterConfig;
-	y?: number;
-	i?: string;
-	m?: number;
-	u?: 0;
-	n?: number;
+interface SettingsTransferPayload {
+	s?: TransferStoragePayload;
+	q?: SectionPayload;
+	a?: SectionPayload;
+	l?: SectionPayload;
 }
 
 interface EncodedTransferBytes {
@@ -139,7 +211,6 @@ interface EncodedTransferBytes {
 }
 
 interface ParsedTransferToken {
-	version: number;
 	encoding: ETransferEncoding;
 	salt: Uint8Array;
 	ciphertext: Uint8Array;
@@ -195,7 +266,13 @@ export async function createSettingsTransferUrl(
 	);
 	const encoded = await encodeTransferBytes(plaintext);
 	const ciphertext = await encryptBytes(key, encoded.bytes);
-	return `obsidian://${TRANSFER_ACTION}?${TRANSFER_PARAM}=${createTransferToken(encoded.encoding, salt, ciphertext)}`;
+	const token = [
+		String(TRANSFER_VERSION),
+		encoded.encoding,
+		bytesToBase64Url(salt),
+		bytesToBase64Url(ciphertext),
+	].join(".");
+	return `obsidian://${TRANSFER_ACTION}?${TRANSFER_PARAM}=${token}`;
 }
 
 export async function createSettingsTransferPackage(
@@ -221,12 +298,6 @@ export async function readSettingsTransfer(
 	const encoded = await decryptBytes(key, parsed.ciphertext);
 	const plaintext = await decodeTransferBytes(parsed.encoding, encoded);
 	const payload = JSON.parse(decoder.decode(plaintext)) as unknown;
-	if (parsed.version === LEGACY_TRANSFER_VERSION) {
-		if (!isLegacyTransferPayload(payload)) {
-			throw new Error("Invalid Obsync settings transfer payload");
-		}
-		return expandLegacyTransferPayload(payload);
-	}
 	if (!isTransferPayload(payload)) {
 		throw new Error("Invalid Obsync settings transfer payload");
 	}
@@ -260,13 +331,16 @@ function createTransferPayload(
 		payload.s = createStoragePayload(settings, options.storageMode);
 	}
 	if (options.includeSyncScope) {
-		payload.q = createScopePayload(settings);
+		const scope = createSectionPayload(settings, ETransferSection.Scope);
+		const syncMask = encodeSyncMask(settings.settingsSync);
+		if (syncMask !== DEFAULT_SYNC_MASK) scope[SYNC_MASK_KEY] = syncMask;
+		payload.q = scope;
 	}
 	if (options.includeAutomation) {
-		payload.a = createAutomationPayload(settings);
+		payload.a = createSectionPayload(settings, ETransferSection.Automation);
 	}
 	if (options.includeRealtime) {
-		payload.l = createRealtimePayload(settings);
+		payload.l = createSectionPayload(settings, ETransferSection.Realtime);
 	}
 	return payload;
 }
@@ -274,58 +348,81 @@ function createTransferPayload(
 function expandTransferPayload(
 	payload: SettingsTransferPayload,
 ): ObsyncTransferSettings {
-	const settings: ObsyncTransferSettings = {};
+	const result: ObsyncTransferSettings = {};
 	if (payload.s) {
-		settings.activeStorageKind = payload.s.a;
-		settings.storageConfigs = expandStorageConfigs(payload.s.c);
+		result.activeStorageKind = payload.s.a;
+		result.storageConfigs = expandStorageConfigs(payload.s.c);
 	}
 	if (payload.q) {
-		settings.settingsSync = decodeSyncMask(payload.q.y ?? DEFAULT_SYNC_MASK);
-		settings.ignorePatterns = payload.q.i ?? DEFAULT_SETTINGS.ignorePatterns;
-		settings.maxFileBytes = payload.q.m ?? DEFAULT_SETTINGS.maxFileBytes;
+		const rawMask = payload.q[SYNC_MASK_KEY];
+		result.settingsSync = decodeSyncMask(
+			typeof rawMask === "number" ? rawMask : DEFAULT_SYNC_MASK,
+		);
+		applySectionDefaults(result, payload.q, ETransferSection.Scope);
 	}
 	if (payload.a) {
-		settings.autoPullOnStartup =
-			payload.a.u === 0 ? false : DEFAULT_SETTINGS.autoPullOnStartup;
-		settings.autoPullIntervalMinutes =
-			payload.a.n ?? DEFAULT_SETTINGS.autoPullIntervalMinutes;
-		settings.autoRefreshOnFileChange =
-			payload.a.f === 0 ? false : DEFAULT_SETTINGS.autoRefreshOnFileChange;
-		settings.autoPushOnSave =
-			payload.a.p === 1 ? true : DEFAULT_SETTINGS.autoPushOnSave;
-		settings.autoPushOnSaveCurrentFileOnly =
-			payload.a.c === 1 ? true : DEFAULT_SETTINGS.autoPushOnSaveCurrentFileOnly;
-		settings.fileHistoryEnabled =
-			payload.a.h === 1 ? true : DEFAULT_SETTINGS.fileHistoryEnabled;
-		settings.fileHistoryMaxSnapshots =
-			payload.a.j ?? DEFAULT_SETTINGS.fileHistoryMaxSnapshots;
-		settings.historyAutoRefresh =
-			payload.a.r === 0 ? false : DEFAULT_SETTINGS.historyAutoRefresh;
+		applySectionDefaults(result, payload.a, ETransferSection.Automation);
 	}
 	if (payload.l) {
-		settings.realtimeSync =
-			payload.l.e === 1 ? true : DEFAULT_SETTINGS.realtimeSync;
-		settings.realtimeServerUrl =
-			payload.l.u ?? DEFAULT_SETTINGS.realtimeServerUrl;
-		settings.realtimeToken = payload.l.t ?? DEFAULT_SETTINGS.realtimeToken;
+		applySectionDefaults(result, payload.l, ETransferSection.Realtime);
 	}
-	return settings;
+	return result;
 }
 
-function expandLegacyTransferPayload(
-	payload: LegacySettingsTransferPayload,
-): ObsyncTransferSettings {
-	return {
-		activeStorageKind: payload.o.kind,
-		storageConfigs: { [payload.o.kind]: payload.o },
-		settingsSync: decodeSyncMask(payload.y ?? DEFAULT_SYNC_MASK),
-		ignorePatterns: payload.i ?? DEFAULT_SETTINGS.ignorePatterns,
-		maxFileBytes: payload.m ?? DEFAULT_SETTINGS.maxFileBytes,
-		autoPullOnStartup:
-			payload.u === 0 ? false : DEFAULT_SETTINGS.autoPullOnStartup,
-		autoPullIntervalMinutes:
-			payload.n ?? DEFAULT_SETTINGS.autoPullIntervalMinutes,
-	};
+function createSectionPayload(
+	settings: ObsyncSettings,
+	section: ETransferSection,
+): SectionPayload {
+	const out: SectionPayload = {};
+	for (const field of TRANSFER_FIELDS) {
+		if (field.section !== section) continue;
+		const value = settings[field.settingsKey];
+		if (value === DEFAULT_SETTINGS[field.settingsKey]) continue;
+		out[field.transferKey] = encodePrimitive(value, field.kind);
+	}
+	return out;
+}
+
+function applySectionDefaults(
+	result: ObsyncTransferSettings,
+	section: SectionPayload,
+	sectionKind: ETransferSection,
+): void {
+	const sink = result as Record<string, unknown>;
+	for (const field of TRANSFER_FIELDS) {
+		if (field.section !== sectionKind) continue;
+		sink[field.settingsKey] = decodePrimitive(
+			section[field.transferKey],
+			DEFAULT_SETTINGS[field.settingsKey],
+			field.kind,
+		);
+	}
+}
+
+function encodePrimitive(value: unknown, kind: ETransferFieldKind): unknown {
+	if (kind === ETransferFieldKind.Bool) return value ? 1 : 0;
+	return value;
+}
+
+function decodePrimitive(
+	transferred: unknown,
+	defaultValue: unknown,
+	kind: ETransferFieldKind,
+): unknown {
+	if (transferred === undefined) return defaultValue;
+	if (kind === ETransferFieldKind.Bool) return !defaultValue;
+	return transferred;
+}
+
+function isValidFieldValue(
+	value: unknown,
+	defaultValue: unknown,
+	kind: ETransferFieldKind,
+): boolean {
+	if (value === undefined) return true;
+	if (kind === ETransferFieldKind.Bool) return value === (defaultValue ? 0 : 1);
+	if (kind === ETransferFieldKind.Num) return typeof value === "number";
+	return typeof value === "string";
 }
 
 async function encodeTransferBytes(
@@ -366,19 +463,6 @@ async function decompressTransferBytes(bytes: Uint8Array): Promise<Uint8Array> {
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-function createTransferToken(
-	encoding: ETransferEncoding,
-	salt: Uint8Array,
-	ciphertext: Uint8Array,
-): string {
-	return [
-		String(TRANSFER_VERSION),
-		encoding,
-		bytesToBase64Url(salt),
-		bytesToBase64Url(ciphertext),
-	].join(".");
-}
-
 function parseTransferToken(token: string): ParsedTransferToken {
 	const parts = token.split(".");
 	if (parts.length !== TRANSFER_PARTS) {
@@ -390,8 +474,7 @@ function parseTransferToken(token: string): ParsedTransferToken {
 		string,
 		string,
 	];
-	const version = Number.parseInt(versionText, 10);
-	if (version !== TRANSFER_VERSION && version !== LEGACY_TRANSFER_VERSION) {
+	if (Number.parseInt(versionText, 10) !== TRANSFER_VERSION) {
 		throw new Error("Unsupported Obsync settings transfer token");
 	}
 	const encoding = TRANSFER_ENCODINGS[encodingText];
@@ -399,7 +482,6 @@ function parseTransferToken(token: string): ParsedTransferToken {
 		throw new Error("Unsupported Obsync settings transfer encoding");
 	}
 	return {
-		version,
 		encoding,
 		salt: base64UrlToBytes(saltText),
 		ciphertext: base64UrlToBytes(ciphertextText),
@@ -445,42 +527,63 @@ function isTransferPayload(value: unknown): value is SettingsTransferPayload {
 		payload.a !== undefined ||
 		payload.l !== undefined;
 	if (!hasSection) return false;
-	return (
-		isOptionalStoragePayload(payload.s) &&
-		isOptionalScopePayload(payload.q) &&
-		isOptionalAutomationPayload(payload.a) &&
-		isOptionalRealtimePayload(payload.l)
-	);
+	if (!isOptionalStoragePayload(payload.s)) return false;
+	if (!isOptionalScopePayload(payload.q)) return false;
+	if (!isOptionalSectionPayload(payload.a, ETransferSection.Automation)) {
+		return false;
+	}
+	if (!isOptionalSectionPayload(payload.l, ETransferSection.Realtime)) {
+		return false;
+	}
+	return true;
 }
 
-function isLegacyTransferPayload(
-	value: unknown,
-): value is LegacySettingsTransferPayload {
+function isOptionalStoragePayload(value: unknown): boolean {
+	if (value === undefined) return true;
 	if (!value || typeof value !== "object") return false;
-	const payload = value as Partial<LegacySettingsTransferPayload>;
-	if (!isTransferStorageConfig(payload.o)) return false;
-	return (
-		isOptionalSyncMask(payload.y) &&
-		isOptionalString(payload.i) &&
-		isOptionalNumber(payload.m) &&
-		isOptionalZero(payload.u) &&
-		isOptionalNumber(payload.n)
-	);
+	const payload = value as Partial<TransferStoragePayload>;
+	if (!isStorageBackend(payload.a)) return false;
+	if (!payload.c || typeof payload.c !== "object") return false;
+	return Object.values(payload.c).every(isTransferStorageConfig);
 }
 
-function isOptionalString(value: unknown): value is string | undefined {
-	return value === undefined || typeof value === "string";
+function isOptionalScopePayload(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== "object") return false;
+	const payload = value as SectionPayload;
+	if (!isValidSyncMask(payload[SYNC_MASK_KEY])) return false;
+	return isSectionShape(payload, ETransferSection.Scope);
 }
 
-function isOptionalNumber(value: unknown): value is number | undefined {
-	return value === undefined || typeof value === "number";
+function isOptionalSectionPayload(
+	value: unknown,
+	section: ETransferSection,
+): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== "object") return false;
+	return isSectionShape(value as SectionPayload, section);
 }
 
-function isOptionalZero(value: unknown): value is 0 | undefined {
-	return value === undefined || value === 0;
+function isSectionShape(
+	payload: SectionPayload,
+	section: ETransferSection,
+): boolean {
+	for (const field of TRANSFER_FIELDS) {
+		if (field.section !== section) continue;
+		if (
+			!isValidFieldValue(
+				payload[field.transferKey],
+				DEFAULT_SETTINGS[field.settingsKey],
+				field.kind,
+			)
+		) {
+			return false;
+		}
+	}
+	return true;
 }
 
-function isOptionalSyncMask(value: unknown): value is number | undefined {
+function isValidSyncMask(value: unknown): boolean {
 	return (
 		value === undefined ||
 		(typeof value === "number" &&
@@ -503,82 +606,7 @@ function createStoragePayload(
 	for (const [kind, config] of Object.entries(storageConfigs)) {
 		compactConfigs[kind] = compactStorageConfig(config);
 	}
-	return {
-		a: settings.activeStorageKind,
-		c: compactConfigs,
-	};
-}
-
-function createScopePayload(settings: ObsyncSettings): TransferScopePayload {
-	const payload: TransferScopePayload = {};
-	const syncMask = encodeSyncMask(settings.settingsSync);
-	if (syncMask !== DEFAULT_SYNC_MASK) payload.y = syncMask;
-	if (settings.ignorePatterns !== DEFAULT_SETTINGS.ignorePatterns) {
-		payload.i = settings.ignorePatterns;
-	}
-	if (settings.maxFileBytes !== DEFAULT_SETTINGS.maxFileBytes) {
-		payload.m = settings.maxFileBytes;
-	}
-	return payload;
-}
-
-function createAutomationPayload(
-	settings: ObsyncSettings,
-): TransferAutomationPayload {
-	const payload: TransferAutomationPayload = {};
-	if (settings.autoPullOnStartup !== DEFAULT_SETTINGS.autoPullOnStartup) {
-		payload.u = 0;
-	}
-	if (
-		settings.autoPullIntervalMinutes !==
-		DEFAULT_SETTINGS.autoPullIntervalMinutes
-	) {
-		payload.n = settings.autoPullIntervalMinutes;
-	}
-	if (
-		settings.autoRefreshOnFileChange !==
-		DEFAULT_SETTINGS.autoRefreshOnFileChange
-	) {
-		payload.f = 0;
-	}
-	if (settings.autoPushOnSave !== DEFAULT_SETTINGS.autoPushOnSave) {
-		payload.p = 1;
-	}
-	if (
-		settings.autoPushOnSaveCurrentFileOnly !==
-		DEFAULT_SETTINGS.autoPushOnSaveCurrentFileOnly
-	) {
-		payload.c = 1;
-	}
-	if (settings.fileHistoryEnabled !== DEFAULT_SETTINGS.fileHistoryEnabled) {
-		payload.h = 1;
-	}
-	if (
-		settings.fileHistoryMaxSnapshots !==
-		DEFAULT_SETTINGS.fileHistoryMaxSnapshots
-	) {
-		payload.j = settings.fileHistoryMaxSnapshots;
-	}
-	if (settings.historyAutoRefresh !== DEFAULT_SETTINGS.historyAutoRefresh) {
-		payload.r = 0;
-	}
-	return payload;
-}
-
-function createRealtimePayload(
-	settings: ObsyncSettings,
-): TransferRealtimePayload {
-	const payload: TransferRealtimePayload = {};
-	if (settings.realtimeSync !== DEFAULT_SETTINGS.realtimeSync) {
-		payload.e = 1;
-	}
-	if (settings.realtimeServerUrl !== DEFAULT_SETTINGS.realtimeServerUrl) {
-		payload.u = settings.realtimeServerUrl;
-	}
-	if (settings.realtimeToken !== DEFAULT_SETTINGS.realtimeToken) {
-		payload.t = settings.realtimeToken;
-	}
-	return payload;
+	return { a: settings.activeStorageKind, c: compactConfigs };
 }
 
 function compactStorageConfig(
@@ -599,80 +627,12 @@ function expandStorageConfigs(
 ): Record<string, StorageAdapterConfig> {
 	const expanded: Record<string, StorageAdapterConfig> = {};
 	for (const [kind, config] of Object.entries(configs)) {
-		expanded[kind] = expandStorageConfig(config);
+		expanded[kind] = {
+			...getStorageDefaults(config.kind),
+			...config,
+		} as unknown as StorageAdapterConfig;
 	}
 	return expanded;
-}
-
-function expandStorageConfig(
-	config: TransferStorageConfig,
-): StorageAdapterConfig {
-	const defaults = getStorageDefaults(config.kind);
-	return {
-		...defaults,
-		...config,
-	} as unknown as StorageAdapterConfig;
-}
-
-function isOptionalStoragePayload(
-	value: unknown,
-): value is TransferStoragePayload | undefined {
-	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
-	const payload = value as Partial<TransferStoragePayload>;
-	if (!isStorageBackend(payload.a)) return false;
-	if (!payload.c || typeof payload.c !== "object") return false;
-	return Object.values(payload.c).every((entry) =>
-		isTransferStorageConfig(entry),
-	);
-}
-
-function isOptionalScopePayload(
-	value: unknown,
-): value is TransferScopePayload | undefined {
-	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
-	const payload = value as Partial<TransferScopePayload>;
-	return (
-		isOptionalSyncMask(payload.y) &&
-		isOptionalString(payload.i) &&
-		isOptionalNumber(payload.m)
-	);
-}
-
-function isOptionalAutomationPayload(
-	value: unknown,
-): value is TransferAutomationPayload | undefined {
-	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
-	const payload = value as Partial<TransferAutomationPayload>;
-	return (
-		isOptionalZero(payload.u) &&
-		isOptionalNumber(payload.n) &&
-		isOptionalZero(payload.f) &&
-		isOptionalOne(payload.p) &&
-		isOptionalOne(payload.c) &&
-		isOptionalOne(payload.h) &&
-		isOptionalNumber(payload.j) &&
-		isOptionalZero(payload.r)
-	);
-}
-
-function isOptionalRealtimePayload(
-	value: unknown,
-): value is TransferRealtimePayload | undefined {
-	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
-	const payload = value as Partial<TransferRealtimePayload>;
-	return (
-		isOptionalOne(payload.e) &&
-		isOptionalString(payload.u) &&
-		isOptionalString(payload.t)
-	);
-}
-
-function isOptionalOne(value: unknown): value is 1 | undefined {
-	return value === undefined || value === 1;
 }
 
 function isTransferStorageConfig(
@@ -698,27 +658,4 @@ function isStorageBackend(value: unknown): value is EStorageBackend {
 
 function getStorageDefaults(kind: EStorageBackend): Record<string, unknown> {
 	return getDescriptor(kind).defaults() as unknown as Record<string, unknown>;
-}
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-	let binary = "";
-	for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-		const chunk = bytes.subarray(offset, offset + 0x8000);
-		binary += String.fromCharCode(...chunk);
-	}
-	return btoa(binary)
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/g, "");
-}
-
-function base64UrlToBytes(value: string): Uint8Array {
-	const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-	const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-	const binary = atob(padded);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	return bytes;
 }

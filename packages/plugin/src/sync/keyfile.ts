@@ -12,6 +12,7 @@ import {
 	randomBytes,
 } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
+import { base64ToBytes, bytesToBase64 } from "../utils/base64";
 import { loadOrCreateSalt } from "./session";
 
 const encoder = new TextEncoder();
@@ -152,21 +153,4 @@ async function unwrapRawKey(
 	} catch {
 		throw new PassphraseRotatedError();
 	}
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-	let binary = "";
-	for (let i = 0; i < bytes.length; i++) {
-		binary += String.fromCharCode(bytes[i] as number);
-	}
-	return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-	const binary = atob(value);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	return bytes;
 }
