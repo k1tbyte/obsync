@@ -1,16 +1,15 @@
 import type { App, DataAdapter } from "obsidian";
 
-import type { EncryptionKey } from "../crypto";
+import type { EncryptionKey } from "@/crypto";
 import {
 	clearCachedPassphrase,
 	loadCachedPassphrase,
 	saveCachedPassphrase,
-} from "../crypto/passphrase-cache";
-import { activeStorage, type ObsyncSettings } from "../settings/model";
-import { storageIdentity } from "../storage/registry";
-import type { ObjectStorage } from "../storage/types";
-import { resolveContentKey } from "../sync/keyfile";
-import { askPassphrase } from "../ui/passphrase-modal";
+} from "@/crypto/passphrase-cache";
+import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import { type ObjectStorage, storageIdentity } from "@/storage";
+import { resolveContentKey } from "@/sync/keyfile";
+import { askPassphrase } from "@/ui";
 
 interface CachedKey {
 	key: EncryptionKey;

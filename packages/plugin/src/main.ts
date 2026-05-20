@@ -1,61 +1,47 @@
 import "./polyfills";
-import {
-	debounce,
-	type ObsidianProtocolData,
-	Plugin,
-	type TAbstractFile,
-	TFile,
-} from "obsidian";
+import { type ObsidianProtocolData, Plugin } from "obsidian";
 
-import { registerCommands } from "./commands";
-import {
-	DIFF_VIEW_TYPE,
-	IGNORE_FILE_NAME,
-	REALTIME_SYNC_DEBOUNCE_MS,
-	SOURCE_CONTROL_VIEW_TYPE,
-} from "./constants";
-import { LogService } from "./core/log-service";
-import { PassphraseManager } from "./core/passphrase-manager";
-import { createSessionOpener } from "./core/session-factory";
-import { StatePersister } from "./core/state-persister";
-import type { SyncLogEntry } from "./logs/store";
+import { registerCommands } from "@/commands";
+import type { LogService, PassphraseManager, StatePersister } from "@/core";
+import type { SyncLogEntry } from "@/logs/store";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
 	isStorageConfigured,
 	mergeSettings,
 	type ObsyncSettings,
-} from "./settings/model";
-import { ObsyncSettingTab } from "./settings/tab";
+} from "@/settings/model";
+import type { ObsyncSettingTab } from "@/settings/tab";
 import {
 	createSettingsTransferUrl,
 	type ObsyncTransferSettings,
 	readSettingsTransfer,
 	settingsTransferAction,
-} from "./settings/transfer";
+} from "@/settings/transfer";
+import { createStorageAdapter, handleStorageProtocol } from "@/storage";
+import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
+import { defaultDeviceName } from "@/sync/device";
+import { rotatePassphrase } from "@/sync/keyfile";
+import { registerScheduler } from "@/sync/scheduler";
+import { loadState } from "@/sync/state";
+import type { LocalState } from "@/types";
 import {
-	createStorageAdapter,
-	handleStorageProtocol,
-	storageIdentity,
-} from "./storage/registry";
-import { SyncController, type SyncStatusSnapshot } from "./sync/controller";
-import { defaultDeviceName } from "./sync/device";
-import { rotatePassphrase } from "./sync/keyfile";
-import { RealtimeClient } from "./sync/realtime";
-import { registerScheduler } from "./sync/scheduler";
-import { loadState, stateFilePath } from "./sync/state";
-import type { LocalState } from "./types";
-import { DiffView } from "./ui/diff-view";
-import { registerFileExplorerIndicators } from "./ui/file-explorer-indicators";
-import { notifyError, notifyInfo } from "./ui/notices";
-import { type RealtimeStatusHandle, registerRibbon } from "./ui/ribbon";
-import { confirmSettingsTransferImport } from "./ui/settings-transfer-modal";
-import { confirmAdoptNewVault } from "./ui/source-control/modals";
+	confirmAdoptNewVault,
+	confirmSettingsTransferImport,
+	notifyError,
+	notifyInfo,
+} from "@/ui";
+import { bootstrapPluginRuntime } from "./plugin/bootstrap";
 import {
-	openSourceControlHistory,
-	SourceControlView,
-} from "./ui/source-control-view";
-import { registerStatusBar } from "./ui/status-bar";
+	registerFileHistoryMenu,
+	registerIgnoreFileRefresh,
+	registerStatePersistenceFlush,
+} from "./plugin/events";
+import { PluginRealtime } from "./plugin/realtime";
+import {
+	refreshOpenHistoryViewsAfterPush,
+	registerPluginUi,
+} from "./plugin/ui";
 
 const VAULT_MISMATCH_ERROR = "Remote vault id does not match local";
 
@@ -69,59 +55,24 @@ export default class ObsyncPlugin extends Plugin {
 	private statePersister!: StatePersister;
 	private passphraseManager!: PassphraseManager;
 	private scopeRefreshTimer: number | null = null;
-	private realtimeClient: RealtimeClient | null = null;
-	private realtimeConnected = false;
-	private readonly realtimeListeners = new Set<(connected: boolean) => void>();
+	private realtime: PluginRealtime | null = null;
 	private adoptPromptActive = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
-		this.logs = new LogService(
-			this.app.vault.adapter,
-			this.app.vault.configDir,
-		);
-		await this.logs.load();
-		this.statePersister = new StatePersister(
-			this.app.vault.adapter,
-			this.app.vault.configDir,
-		);
-		this.passphraseManager = new PassphraseManager(
-			this.app,
-			this.app.vault.adapter,
-			this.app.vault.configDir,
-			this.settings,
-		);
-		await this.ensureDeviceNamePersisted();
-
-		const openSession = createSessionOpener({
+		const runtime = await bootstrapPluginRuntime({
 			app: this.app,
 			settings: this.settings,
-			passphrase: this.passphraseManager,
-			state: this.statePersister,
-			logs: this.logs,
-		});
-
-		this.controller = new SyncController({
-			app: this.app,
-			settings: this.settings,
-			openSession,
-			persistState: (state) => this.statePersister.persist(state),
-			getState: () => this.statePersister.state,
-			logInfo: (op, msg, details) => this.logs.info(op, msg, details),
-			logWarn: (op, msg, details) => this.logs.warn(op, msg, details),
-			logError: (op, msg, details) => this.logs.error(op, msg, details),
 			onPushComplete: () => {
-				this.realtimeClient?.notifySync();
-				if (!this.settings.historyAutoRefresh) return;
-				for (const leaf of this.app.workspace.getLeavesOfType(
-					SOURCE_CONTROL_VIEW_TYPE,
-				)) {
-					if (leaf.view instanceof SourceControlView) {
-						leaf.view.refreshHistoryAfterPush();
-					}
-				}
+				this.realtime?.notifySync();
+				refreshOpenHistoryViewsAfterPush(this);
 			},
 		});
+		this.logs = runtime.logs;
+		this.statePersister = runtime.statePersister;
+		this.passphraseManager = runtime.passphraseManager;
+		this.controller = runtime.controller;
+		this.realtime = new PluginRealtime(this.controller, () => this.settings);
 
 		this.register(
 			this.controller.subscribe((snapshot) => {
@@ -129,34 +80,15 @@ export default class ObsyncPlugin extends Plugin {
 			}),
 		);
 
-		this.settingsTab = new ObsyncSettingTab(this.app, this);
-		this.addSettingTab(this.settingsTab);
-
-		this.registerView(
-			SOURCE_CONTROL_VIEW_TYPE,
-			(leaf) => new SourceControlView(leaf, this),
-		);
-		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this));
-
-		if (this.settings.showStatusBar) registerStatusBar(this, this.controller);
-		if (this.settings.showRibbonIcon) {
-			const realtimeHandle: RealtimeStatusHandle = {
-				isConnected: () => this.isRealtimeConnected(),
-				subscribe: (fn) => this.subscribeRealtimeStatus(fn),
-			};
-			registerRibbon(this, this.controller, realtimeHandle);
-		}
-		if (this.settings.showFileExplorerIndicators) {
-			registerFileExplorerIndicators(this, this.controller);
-		}
+		this.settingsTab = registerPluginUi(this, this.controller).settingsTab;
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
-		this.registerFileHistoryMenu();
+		registerFileHistoryMenu(this);
 		this.initRealtime();
 
-		this.registerIgnoreFileEvents();
-		this.registerStatePersistenceFlush();
+		registerIgnoreFileRefresh(this);
+		registerStatePersistenceFlush(this, this.statePersister);
 		this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
 			void this.handleSettingsTransferProtocol(params);
 		});
@@ -183,23 +115,8 @@ export default class ObsyncPlugin extends Plugin {
 		this.statePersister?.dispose();
 		this.controller?.dispose();
 		this.passphraseManager?.dispose();
-		this.realtimeClient?.dispose();
-		this.realtimeClient = null;
-	}
-
-	private registerFileHistoryMenu(): void {
-		this.registerEvent(
-			this.app.workspace.on("file-menu", (menu, file) => {
-				if (!this.settings.fileHistoryEnabled) return;
-				if (!(file instanceof TFile)) return;
-				menu.addItem((item) =>
-					item
-						.setTitle("Obsync: File history")
-						.setIcon("history")
-						.onClick(() => void openSourceControlHistory(this, file.path)),
-				);
-			}),
-		);
+		this.realtime?.dispose();
+		this.realtime = null;
 	}
 
 	private async maybePromptAdoptVault(
@@ -251,21 +168,6 @@ export default class ObsyncPlugin extends Plugin {
 		if (!confirmed) return false;
 		await this.applyImportedSettings(imported);
 		return true;
-	}
-
-	/**
-	 * Loads state into the persister at startup and writes it to disk once if
-	 * no state file exists yet, so the device name is durable and the value
-	 * shown in Settings matches what future pushes record.
-	 */
-	private async ensureDeviceNamePersisted(): Promise<void> {
-		const adapter = this.app.vault.adapter;
-		const configDir = this.app.vault.configDir;
-		const state = await loadState(adapter, configDir);
-		this.statePersister.setInitial(state);
-		if (!(await adapter.exists(stateFilePath(configDir)))) {
-			await this.statePersister.persist(state);
-		}
 	}
 
 	getDeviceName(): string {
@@ -364,87 +266,17 @@ export default class ObsyncPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * Flush the debounced state (hash cache) at lifecycle points that still run
-	 * while the app is alive. `onunload` is synchronous and Obsidian does not
-	 * await it, so relying on it alone can lose the cache and force a full vault
-	 * re-hash on next launch.
-	 */
-	private registerStatePersistenceFlush(): void {
-		const flush = (): void => {
-			void this.statePersister.flush();
-		};
-		this.registerDomEvent(document, "visibilitychange", () => {
-			if (document.visibilityState === "hidden") flush();
-		});
-		this.registerDomEvent(window, "beforeunload", flush);
-	}
-
-	private registerIgnoreFileEvents(): void {
-		const refreshIfIgnoreFile = (
-			file: TAbstractFile,
-			oldPath?: string,
-		): void => {
-			if (file.path !== IGNORE_FILE_NAME && oldPath !== IGNORE_FILE_NAME)
-				return;
-			this.scheduleScopeRefresh("Ignore rules changed.");
-		};
-
-		this.registerEvent(
-			this.app.vault.on("create", (file) => refreshIfIgnoreFile(file)),
-		);
-		this.registerEvent(
-			this.app.vault.on("modify", (file) => refreshIfIgnoreFile(file)),
-		);
-		this.registerEvent(
-			this.app.vault.on("delete", (file) => refreshIfIgnoreFile(file)),
-		);
-		this.registerEvent(
-			this.app.vault.on("rename", (file, oldPath) =>
-				refreshIfIgnoreFile(file, oldPath),
-			),
-		);
-	}
-
 	isRealtimeConnected(): boolean {
-		return this.realtimeConnected;
+		return this.realtime?.isConnected() ?? false;
 	}
 
 	subscribeRealtimeStatus(fn: (connected: boolean) => void): () => void {
-		this.realtimeListeners.add(fn);
-		return () => this.realtimeListeners.delete(fn);
+		if (!this.realtime) return () => undefined;
+		return this.realtime.subscribe(fn);
 	}
 
 	/** Start or restart the realtime WebSocket connection based on current settings. */
 	initRealtime(): void {
-		this.realtimeClient?.dispose();
-		this.realtimeClient = null;
-		this.notifyRealtimeStatus(false);
-
-		if (!this.settings.realtimeSync) return;
-		if (!this.settings.realtimeServerUrl) return;
-		if (!isStorageConfigured(this.settings)) return;
-
-		const channelId = storageIdentity(activeStorage(this.settings));
-
-		this.realtimeClient = new RealtimeClient({
-			serverUrl: this.settings.realtimeServerUrl,
-			channelId,
-			token: this.settings.realtimeToken || undefined,
-			onRemoteSync: debounce(
-				() => {
-					void this.controller.refreshAndAutoPull();
-				},
-				REALTIME_SYNC_DEBOUNCE_MS,
-				true,
-			),
-			onConnectionChange: (connected) => this.notifyRealtimeStatus(connected),
-		});
-		this.realtimeClient.connect();
-	}
-
-	private notifyRealtimeStatus(connected: boolean): void {
-		this.realtimeConnected = connected;
-		for (const fn of this.realtimeListeners) fn(connected);
+		this.realtime?.restart();
 	}
 }

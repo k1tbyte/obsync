@@ -1,8 +1,8 @@
 import { Setting } from "obsidian";
 import type ObsyncPlugin from "../../main";
 import { describeStorageTarget } from "../../storage/registry";
+import { confirmRemoteReset } from "../../ui/modals";
 import { notifyError, notifyInfo } from "../../ui/notices";
-import { confirmRemoteReset } from "../../ui/reset-modal";
 import { openConfirmModal } from "../../ui/source-control/modals";
 import { activeStorage } from "../model";
 

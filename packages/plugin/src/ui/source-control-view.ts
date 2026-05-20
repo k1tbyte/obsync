@@ -1,34 +1,17 @@
-import {
-	type App,
-	ItemView,
-	Menu,
-	Platform,
-	type WorkspaceLeaf,
-} from "obsidian";
-import {
-	BATCH_RESOLVE_CONFIRM_THRESHOLD,
-	DIFF_VIEW_TYPE,
-	SOURCE_CONTROL_VIEW_TYPE,
-} from "../constants";
+import { type App, ItemView, Platform, type WorkspaceLeaf } from "obsidian";
+import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
 import { EConflictStrategy, type SyncStatusSnapshot } from "../sync/controller";
-import type { FileDiffModel } from "../sync/projection";
-import { notifyError, notifyInfo } from "./notices";
-import { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
 import {
 	buildTree,
-	confirmAdoptNewVault,
-	confirmBatchResolve,
+	ConflictPreviewManager,
 	ESection,
-	emptySectionRefs,
-	emptySectionState,
 	type FileRow,
 	HistoryTab,
-	renderConflictPreview,
 	rowFromChange,
 	rowFromConflict,
-	type SectionRefs,
-	type SectionState,
+	SectionStateManager,
+	SourceControlActions,
 	showIgnoredFiles,
 	type TreeNode,
 } from "./source-control";
@@ -73,28 +56,28 @@ export async function openSourceControlView(
 export class SourceControlView extends ItemView {
 	private readonly plugin: ObsyncPlugin;
 	private layout: "tree" | "flat" = "tree";
-	private readonly sectionState: Record<ESection, SectionState> = {
-		[ESection.Conflicts]: emptySectionState(),
-		[ESection.Local]: emptySectionState(),
-		[ESection.Remote]: emptySectionState(),
-	};
-	private readonly refs: Record<ESection, SectionRefs> = {
-		[ESection.Conflicts]: emptySectionRefs(),
-		[ESection.Local]: emptySectionRefs(),
-		[ESection.Remote]: emptySectionRefs(),
-	};
+	private readonly sections = new SectionStateManager();
+	private readonly previews: ConflictPreviewManager;
+	private readonly actions: SourceControlActions;
 	private root: HTMLElement | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private lastSignature = "";
-	private readonly previewCache = new Map<string, FileDiffModel | null>();
-	private readonly loadingPreviews = new Set<string>();
-	private readonly expandedPreviews = new Set<string>();
 	private tab: ESourceTab = ESourceTab.Changes;
 	private historyTab!: HistoryTab;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
 		super(leaf);
 		this.plugin = plugin;
+		this.previews = new ConflictPreviewManager({
+			loadPreview: (path) => this.plugin.controller.getFileDiff(path),
+		});
+		this.actions = new SourceControlActions({
+			plugin,
+			sections: this.sections,
+			previews: this.previews,
+			showHistory: (path) => this.showHistory(path),
+			openDiff: (path) => openDiffView(this.plugin, path),
+		});
 		this.layout = plugin.settings.uiLayout;
 	}
 
@@ -171,8 +154,7 @@ export class SourceControlView extends ItemView {
 		const root = this.root;
 		root.empty();
 		if (signatureChanged) {
-			this.previewCache.clear();
-			this.loadingPreviews.clear();
+			this.previews.clearCache();
 		}
 		this.renderTabBar(root);
 		this.renderToolbar(root, snapshot);
@@ -186,17 +168,17 @@ export class SourceControlView extends ItemView {
 			});
 			return;
 		}
-		this.pruneSelections(
-			diff.conflicts.map((c) => c.path),
+		this.sections.pruneSelection(
 			ESection.Conflicts,
+			diff.conflicts.map((c) => c.path),
 		);
-		this.pruneSelections(
-			diff.localChanges.map((c) => c.path),
+		this.sections.pruneSelection(
 			ESection.Local,
+			diff.localChanges.map((c) => c.path),
 		);
-		this.pruneSelections(
-			diff.remoteChanges.map((c) => c.path),
+		this.sections.pruneSelection(
 			ESection.Remote,
+			diff.remoteChanges.map((c) => c.path),
 		);
 
 		this.renderSection(
@@ -265,12 +247,18 @@ export class SourceControlView extends ItemView {
 		const pushAll = bar.createEl("button", { text: "Push all" });
 		pushAll.addClass("is-primary");
 		pushAll.disabled = !canPushAll(snapshot);
-		pushAll.addEventListener("click", () => void this.handlePushAll(snapshot));
+		pushAll.addEventListener(
+			"click",
+			() => void this.actions.pushAll(snapshot),
+		);
 
 		const pullAll = bar.createEl("button", { text: "Pull all" });
 		pullAll.addClass("is-primary");
 		pullAll.disabled = !canPullAll(snapshot);
-		pullAll.addEventListener("click", () => void this.handlePullAll(snapshot));
+		pullAll.addEventListener(
+			"click",
+			() => void this.actions.pullAll(snapshot),
+		);
 
 		const layoutToggle = bar.createEl("button", {
 			text: this.layout === "tree" ? "Flat" : "Tree",
@@ -322,7 +310,7 @@ export class SourceControlView extends ItemView {
 				});
 				retryBtn.addEventListener(
 					"click",
-					() => void this.handleAdoptNewVault(),
+					() => void this.actions.adoptNewVault(),
 				);
 			}
 			return;
@@ -361,11 +349,10 @@ export class SourceControlView extends ItemView {
 		snapshot: SyncStatusSnapshot,
 		actionKind: SectionActionKind,
 	): void {
-		this.refs[section] = emptySectionRefs();
+		this.sections.resetRefs(section);
 		if (rows.length === 0) return;
-		const state = this.sectionState[section];
 		const sectionEl = parent.createDiv({ cls: "obsync-section" });
-		if (state.collapsed) sectionEl.addClass("is-collapsed");
+		if (this.sections.isCollapsed(section)) sectionEl.addClass("is-collapsed");
 
 		const header = sectionEl.createDiv({ cls: "obsync-section-header" });
 		const titleEl = header.createSpan({
@@ -373,11 +360,13 @@ export class SourceControlView extends ItemView {
 			text: title,
 		});
 		const counts = header.createSpan({ cls: "obsync-section-count" });
-		this.refs[section].counts = counts;
-		this.updateCountsLabel(section, rows.length);
+		this.sections.bindCounts(section, counts);
+		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
 		titleEl.addEventListener("click", () => {
-			state.collapsed = !state.collapsed;
-			sectionEl.toggleClass("is-collapsed", state.collapsed);
+			sectionEl.toggleClass(
+				"is-collapsed",
+				this.sections.toggleCollapsed(section),
+			);
 		});
 
 		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
@@ -387,20 +376,20 @@ export class SourceControlView extends ItemView {
 			const label = actionKind === "push" ? "Push selected" : "Pull selected";
 			const actionBtn = actions.createEl("button", { text: label });
 			actionBtn.addClass("is-primary");
-			this.refs[section].actionButton = actionBtn;
+			this.sections.bindActionButton(section, actionBtn);
 			actionBtn.addEventListener(
 				"click",
-				() => void this.handleSectionAction(section, actionKind),
+				() => void this.actions.runSectionAction(section, actionKind),
 			);
 		}
 
 		if (section === ESection.Local) {
 			const revertBtn = actions.createEl("button", { text: "Revert selected" });
 			revertBtn.addClass("is-warning");
-			this.refs[section].revertButton = revertBtn;
+			this.sections.bindRevertButton(section, revertBtn);
 			revertBtn.addEventListener(
 				"click",
-				() => void this.handleRevertSelected(section),
+				() => void this.actions.revertSelected(section),
 			);
 		}
 
@@ -410,7 +399,7 @@ export class SourceControlView extends ItemView {
 			keepAll.disabled = snapshot.busy || rows.length === 0;
 			keepAll.addEventListener(
 				"click",
-				() => void this.handleBatchResolve(EConflictStrategy.KeepLocal),
+				() => void this.actions.batchResolve(EConflictStrategy.KeepLocal),
 			);
 			const acceptAll = actions.createEl("button", {
 				text: "Accept all remote",
@@ -419,19 +408,19 @@ export class SourceControlView extends ItemView {
 			acceptAll.disabled = snapshot.busy || rows.length === 0;
 			acceptAll.addEventListener(
 				"click",
-				() => void this.handleBatchResolve(EConflictStrategy.AcceptRemote),
+				() => void this.actions.batchResolve(EConflictStrategy.AcceptRemote),
 			);
 		}
 
 		const selectAll = actions.createEl("button", { text: "Select all" });
 		selectAll.addEventListener("click", () => {
-			for (const row of rows) state.selected.add(row.path);
+			this.sections.selectAll(section, rows);
 			this.afterSelectionChange(section, rows.length);
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
 		const selectNone = actions.createEl("button", { text: "Clear" });
 		selectNone.addEventListener("click", () => {
-			state.selected.clear();
+			this.sections.clearSelection(section);
 			this.afterSelectionChange(section, rows.length);
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
@@ -442,10 +431,10 @@ export class SourceControlView extends ItemView {
 				this.renderFileRow(list, row, section, rows.length);
 		} else {
 			const tree = buildTree(rows);
-			this.renderTree(list, tree, section, rows.length, state);
+			this.renderTree(list, tree, section, rows.length);
 		}
 
-		this.updateSectionButtons(section, rows.length, snapshot);
+		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
 	}
 
 	private renderTree(
@@ -453,7 +442,6 @@ export class SourceControlView extends ItemView {
 		node: TreeNode,
 		section: ESection,
 		rowsLen: number,
-		state: SectionState,
 	): void {
 		for (const child of node.children) {
 			if (child.row) {
@@ -461,22 +449,19 @@ export class SourceControlView extends ItemView {
 				continue;
 			}
 			const folderPath = child.fullPath;
-			const collapsed = !state.expandedFolders.has(folderPath);
+			const collapsed = !this.sections.isFolderExpanded(section, folderPath);
 			const folder = parent.createDiv({ cls: "obsync-tree-folder" });
 			if (collapsed) folder.addClass("is-collapsed");
 			folder.setText(`${collapsed ? "▸" : "▾"} ${child.name}`);
 			const children = parent.createDiv({ cls: "obsync-tree-children" });
 			children.toggleClass("is-collapsed", collapsed);
 			folder.addEventListener("click", () => {
-				const isExpanded = state.expandedFolders.has(folderPath);
-				if (isExpanded) state.expandedFolders.delete(folderPath);
-				else state.expandedFolders.add(folderPath);
-				const nowCollapsed = !state.expandedFolders.has(folderPath);
+				const nowCollapsed = this.sections.toggleFolder(section, folderPath);
 				children.toggleClass("is-collapsed", nowCollapsed);
 				folder.toggleClass("is-collapsed", nowCollapsed);
 				folder.setText(`${nowCollapsed ? "▸" : "▾"} ${child.name}`);
 			});
-			this.renderTree(children, child, section, rowsLen, state);
+			this.renderTree(children, child, section, rowsLen);
 		}
 	}
 
@@ -486,16 +471,14 @@ export class SourceControlView extends ItemView {
 		section: ESection,
 		rowsLen: number,
 	): void {
-		const state = this.sectionState[section];
 		const item = parent.createDiv({ cls: "obsync-file-row" });
 		if (row.isConflict) item.addClass("is-conflict");
 
 		const checkbox = item.createEl("input", { type: "checkbox" });
-		checkbox.checked = state.selected.has(row.path);
+		checkbox.checked = this.sections.isSelected(section, row.path);
 		checkbox.addEventListener("click", (e) => e.stopPropagation());
 		checkbox.addEventListener("change", () => {
-			if (checkbox.checked) state.selected.add(row.path);
-			else state.selected.delete(row.path);
+			this.sections.setSelected(section, row.path, checkbox.checked);
 			this.afterSelectionChange(section, rowsLen);
 		});
 
@@ -512,7 +495,7 @@ export class SourceControlView extends ItemView {
 		});
 		item.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
-			this.showContextMenu(e, row.path, section);
+			this.actions.showContextMenu(e, row.path, section);
 		});
 	}
 
@@ -529,7 +512,7 @@ export class SourceControlView extends ItemView {
 		keepBtn.setAttr("title", "Keep local version");
 		keepBtn.addEventListener("click", (e) => {
 			e.stopPropagation();
-			void this.handleResolveKeepLocal(row.path);
+			void this.actions.resolveKeepLocal(row.path);
 		});
 
 		const acceptBtn = item.createEl("button", {
@@ -540,322 +523,49 @@ export class SourceControlView extends ItemView {
 		acceptBtn.setAttr("title", "Accept remote version");
 		acceptBtn.addEventListener("click", (e) => {
 			e.stopPropagation();
-			void this.handleResolveAcceptRemote(row.path);
+			void this.actions.resolveAcceptRemote(row.path);
 		});
 
-		const expanded = this.expandedPreviews.has(row.path);
+		const expanded = this.previews.isExpanded(row.path);
 		const expandBtn = item.createEl("button", {
 			cls: "obsync-expand-btn",
 			text: expanded ? "▾" : "▸",
 		});
 		expandBtn.addEventListener("click", (e) => {
 			e.stopPropagation();
-			if (this.expandedPreviews.has(row.path)) {
-				this.expandedPreviews.delete(row.path);
-			} else {
-				this.expandedPreviews.add(row.path);
-			}
+			this.previews.toggle(row.path);
 			this.render(this.plugin.controller.getSnapshot(), true);
 		});
 
-		if (expanded) this.renderInlinePreview(parent, row.path);
-	}
-
-	private renderInlinePreview(parent: HTMLElement, path: string): void {
-		const previewEl = parent.createDiv({ cls: "obsync-conflict-preview" });
-		const cached = this.previewCache.get(path);
-		if (cached === undefined && !this.loadingPreviews.has(path)) {
-			this.loadingPreviews.add(path);
-			previewEl.setText("Loading diff…");
-			void this.plugin.controller.getFileDiff(path).then((model) => {
-				this.previewCache.set(path, model);
-				this.loadingPreviews.delete(path);
-				this.renderPreviewInto(previewEl, model, path);
-			});
-			return;
-		}
-		if (cached === null) {
-			previewEl.setText("No diff available.");
-			return;
-		}
-		if (cached?.isBinary) {
-			previewEl.setText("Binary file — cannot preview diff.");
-			return;
-		}
-		if (cached) {
-			renderConflictPreview(previewEl, cached, path, this.previewHandlers());
-			return;
-		}
-		previewEl.setText("Loading diff…");
-	}
-
-	private renderPreviewInto(
-		previewEl: HTMLElement,
-		model: FileDiffModel | null,
-		path: string,
-	): void {
-		if (!previewEl.isConnected) return;
-		previewEl.empty();
-		if (model === null) {
-			previewEl.setText("No diff available.");
-			return;
-		}
-		if (model.isBinary) {
-			previewEl.setText("Binary file — cannot preview diff.");
-			return;
-		}
-		renderConflictPreview(previewEl, model, path, this.previewHandlers());
-	}
-
-	private previewHandlers(): {
-		keepLocal: (p: string) => Promise<void>;
-		acceptRemote: (p: string) => Promise<void>;
-	} {
-		return {
-			keepLocal: (p) => this.handleResolveKeepLocal(p),
-			acceptRemote: (p) => this.handleResolveAcceptRemote(p),
-		};
-	}
-
-	private showContextMenu(
-		event: MouseEvent,
-		path: string,
-		section: ESection,
-	): void {
-		const menu = new Menu();
-		menu.addItem((item) =>
-			item
-				.setTitle("Open diff")
-				.setIcon("git-compare")
-				.onClick(() => void openDiffView(this.plugin, path)),
-		);
-		menu.addItem((item) =>
-			item
-				.setTitle("Open in editor")
-				.setIcon("file-text")
-				.onClick(() => void openInEditor(this.plugin.app, path)),
-		);
-		menu.addItem((item) =>
-			item
-				.setTitle("Reveal in file explorer")
-				.setIcon("folder")
-				.onClick(() => void revealInFileExplorer(this.plugin.app, path)),
-		);
-		menu.addItem((item) =>
-			item
-				.setTitle("Copy path")
-				.setIcon("clipboard")
-				.onClick(() => void navigator.clipboard.writeText(path)),
-		);
-		if (this.plugin.settings.fileHistoryEnabled) {
-			menu.addItem((item) =>
-				item
-					.setTitle("File history")
-					.setIcon("history")
-					.onClick(() => this.showHistory(path)),
-			);
-		}
-		if (section === ESection.Local) {
-			menu.addSeparator();
-			menu.addItem((item) =>
-				item
-					.setTitle("Revert this file")
-					.setIcon("rotate-ccw")
-					.onClick(() => void this.handleRevertSingle(path)),
-			);
-		}
-		if (section === ESection.Conflicts) {
-			menu.addSeparator();
-			menu.addItem((item) =>
-				item
-					.setTitle("Keep local")
-					.setIcon("check")
-					.onClick(() => void this.handleResolveKeepLocal(path)),
-			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Accept remote")
-					.setIcon("download")
-					.onClick(() => void this.handleResolveAcceptRemote(path)),
-			);
-		}
-		menu.showAtMouseEvent(event);
-	}
-
-	private async handleRevertSingle(path: string): Promise<void> {
-		try {
-			await this.plugin.controller.revertPaths([path]);
-			notifyInfo(` reverted ${path}`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleResolveKeepLocal(path: string): Promise<void> {
-		this.expandedPreviews.delete(path);
-		try {
-			await this.plugin.controller.resolveConflictKeepLocal(path);
-			notifyInfo(` kept local version of ${path}`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleResolveAcceptRemote(path: string): Promise<void> {
-		this.expandedPreviews.delete(path);
-		try {
-			await this.plugin.controller.resolveConflictAcceptRemote(path);
-			notifyInfo(` accepted remote version of ${path}`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleBatchResolve(strategy: EConflictStrategy): Promise<void> {
-		const diff = this.plugin.controller.getSnapshot().result?.diff;
-		if (!diff || diff.conflicts.length === 0) return;
-		const paths = diff.conflicts.map((c) => c.path);
-		if (paths.length > BATCH_RESOLVE_CONFIRM_THRESHOLD) {
-			const ok = await confirmBatchResolve(this.app, paths.length, strategy);
-			if (!ok) return;
-		}
-		for (const p of paths) this.expandedPreviews.delete(p);
-		try {
-			await this.plugin.controller.resolveConflicts(paths, strategy);
-			notifyInfo(` resolved ${paths.length} conflict(s)`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleRevertSelected(section: ESection): Promise<void> {
-		const state = this.sectionState[section];
-		if (state.selected.size === 0) return;
-		const paths = Array.from(state.selected);
-		state.selected.clear();
-		try {
-			await this.plugin.controller.revertPaths(paths);
-			notifyInfo(` reverted ${paths.length} file(s)`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleSectionAction(
-		section: ESection,
-		kind: "push" | "pull",
-	): Promise<void> {
-		const state = this.sectionState[section];
-		if (state.selected.size === 0) return;
-		const paths = Array.from(state.selected);
-		state.selected.clear();
-		try {
-			if (kind === "push") {
-				await this.plugin.controller.pushPaths(paths);
-				notifyInfo(` pushed ${paths.length} file(s)`);
-			} else {
-				await this.plugin.controller.pullPaths(paths);
-				notifyInfo(` pulled ${paths.length} file(s)`);
-			}
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handleAdoptNewVault(): Promise<void> {
-		const ok = await confirmAdoptNewVault(this.plugin.app);
-		if (!ok) return;
-		try {
-			await this.plugin.controller.adoptNewVault();
-			notifyInfo(" adopted new remote vault.");
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handlePushAll(snapshot: SyncStatusSnapshot): Promise<void> {
-		const diff = snapshot.result?.diff;
-		if (!diff) return;
-		const paths = diff.localChanges.map((c) => c.path);
-		if (paths.length === 0) return;
-		try {
-			await this.plugin.controller.pushPaths(paths);
-			notifyInfo(` pushed ${paths.length} file(s)`);
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
-	}
-
-	private async handlePullAll(snapshot: SyncStatusSnapshot): Promise<void> {
-		const diff = snapshot.result?.diff;
-		if (!diff) return;
-		const paths = diff.remoteChanges.map((c) => c.path);
-		if (paths.length === 0) return;
-		try {
-			await this.plugin.controller.pullPaths(paths);
-			notifyInfo(` pulled ${paths.length} file(s)`);
-		} catch (err) {
-			notifyError("Operation failed", err);
+		if (expanded) {
+			this.previews.render(parent, row.path, this.actions.previewHandlers());
 		}
 	}
 
 	private afterSelectionChange(section: ESection, rowsLen: number): void {
 		const snapshot = this.plugin.controller.getSnapshot();
-		this.updateSectionButtons(section, rowsLen, snapshot);
-		this.updateCountsLabel(section, rowsLen);
+		this.sections.updateSectionUi(section, rowsLen, snapshot.busy);
 	}
 
 	private updateSelectionState(): void {
 		const snapshot = this.plugin.controller.getSnapshot();
 		const diff = snapshot.result?.diff;
 		if (!diff) return;
-		this.updateSectionButtons(
+		this.sections.updateSectionUi(
 			ESection.Conflicts,
 			diff.conflicts.length,
-			snapshot,
+			snapshot.busy,
 		);
-		this.updateSectionButtons(
+		this.sections.updateSectionUi(
 			ESection.Local,
 			diff.localChanges.length,
-			snapshot,
+			snapshot.busy,
 		);
-		this.updateSectionButtons(
+		this.sections.updateSectionUi(
 			ESection.Remote,
 			diff.remoteChanges.length,
-			snapshot,
+			snapshot.busy,
 		);
-	}
-
-	private updateSectionButtons(
-		section: ESection,
-		rowsLen: number,
-		snapshot: SyncStatusSnapshot,
-	): void {
-		const refs = this.refs[section];
-		const state = this.sectionState[section];
-		const empty = state.selected.size === 0;
-		const busy = snapshot.busy;
-		if (refs.actionButton) refs.actionButton.disabled = busy || empty;
-		if (refs.revertButton) refs.revertButton.disabled = busy || empty;
-		this.updateCountsLabel(section, rowsLen);
-	}
-
-	private updateCountsLabel(section: ESection, rowsLen: number): void {
-		const counts = this.refs[section].counts;
-		if (!counts) return;
-		const selected = this.sectionState[section].selected.size;
-		counts.setText(selected > 0 ? `${selected}/${rowsLen}` : `${rowsLen}`);
-	}
-
-	private pruneSelections(
-		paths: ReadonlyArray<string>,
-		section: ESection,
-	): void {
-		const valid = new Set(paths);
-		const state = this.sectionState[section];
-		for (const p of Array.from(state.selected)) {
-			if (!valid.has(p)) state.selected.delete(p);
-		}
 	}
 }
 

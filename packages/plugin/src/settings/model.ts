@@ -1,10 +1,14 @@
 import {
 	DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
 	DEFAULT_MAX_FILE_BYTES,
-} from "../constants";
-import { defaultS3Config } from "../storage/adapters/s3";
-import type { EStorageBackend, StorageAdapterConfig } from "../storage/config";
-import { getDescriptor, isAdapterConfigured } from "../storage/registry";
+} from "@/constants";
+import {
+	defaultS3Config,
+	type EStorageBackend,
+	getDescriptor,
+	isAdapterConfigured,
+	type StorageAdapterConfig,
+} from "@/storage";
 
 export interface SettingsSyncCategories {
 	coreSettings: boolean;

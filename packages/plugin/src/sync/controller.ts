@@ -3,48 +3,18 @@ import type { App } from "obsidian";
 import { STATUS_EVENT } from "../constants";
 import { ESyncLogOperation } from "../logs/store";
 import type { ObsyncSettings } from "../settings/model";
-import type {
-	Conflict,
-	EChangeType,
-	FileChange,
-	LocalState,
-	SessionState,
-} from "../types";
+import type { EChangeType, LocalState } from "../types";
 import { writeBinary } from "../vault/io";
 import { autoMergeOp } from "./auto-merge";
-import {
-	bytesToText,
-	isLikelyText,
-	loadLocalBytes,
-	loadLocalText,
-	loadRemoteText,
-	textToBytes,
-} from "./content";
+import { textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
-import { DiffCache } from "./diff-cache";
-import { type CompareResult, compare, type EngineDependencies } from "./engine";
-import {
-	type FileVersion,
-	loadVersionBytes,
-	type PathHistorySummary,
-	listFileHistories as queryAllHistories,
-	getFileHistory as queryFileHistory,
-	setSnapshotPinned as storeSetSnapshotPinned,
-} from "./history";
-import { applyHunks, computeHunks } from "./hunks";
-import {
-	type CleanResult,
-	deepCleanOrphans,
-	type VerifyResult,
-	verifyRemote,
-} from "./maintenance";
-import { ConcurrentPushError } from "./manifest";
+import type { EngineDependencies } from "./engine";
+import type { FileVersion, PathHistorySummary } from "./history";
+import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
 	batchKeepLocalOp,
 	type Operation,
-	type OperationContext,
-	type OperationOutcome,
 	pullHunksOp,
 	pullPathsOp,
 	pushHunksOp,
@@ -54,13 +24,17 @@ import {
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
 } from "./operations";
-import { buildHistoryDiff, type FileDiffModel } from "./projection";
+import type { FileDiffModel } from "./projection";
 import {
-	mergeSessionIntoLocal,
-	projectSession,
-	recomputeAfterWrite,
-} from "./session-state";
-import { StatusBroadcaster } from "./status-broadcaster";
+	SyncControllerRuntimeState,
+	type SyncStatusListener,
+	type SyncStatusSnapshot,
+} from "./runtime/controller-state";
+import { FileDiffService, type PathStatus } from "./runtime/file-diff-service";
+import { HistoryQueryService } from "./runtime/history-query-service";
+import { HistoryWriteService } from "./runtime/history-write-service";
+import { MaintenanceService } from "./runtime/maintenance-service";
+import { OperationRunner } from "./runtime/operation-runner";
 
 export enum EConflictStrategy {
 	KeepLocal = "keep-local",
@@ -91,24 +65,7 @@ export interface SyncControllerHost {
 	): Promise<void>;
 }
 
-export interface SyncStatusSnapshot {
-	pendingLocal: number;
-	pendingRemote: number;
-	conflicts: number;
-	lastCompareAt: number | null;
-	busy: boolean;
-	error: string | null;
-	result: CompareResult | null;
-	progressText: string | null;
-	staleReason: string | null;
-}
-
-export type SyncStatusListener = (snapshot: SyncStatusSnapshot) => void;
-
-interface PathStatus {
-	change?: FileChange;
-	conflict?: Conflict;
-}
+export type { SyncStatusListener, SyncStatusSnapshot };
 
 const CONFLICT_STRATEGY_OPS: Record<
 	EConflictStrategy,
@@ -126,38 +83,45 @@ const CONFLICT_STRATEGY_OPS: Record<
 
 export class SyncController {
 	private readonly host: SyncControllerHost;
-	private result: CompareResult | null = null;
-	private resultAt: number | null = null;
-	private pendingOps = 0;
-	private error: string | null = null;
-	private progressText: string | null = null;
-	private staleReason: string | null = null;
-	private readonly diffCache = new DiffCache();
-	private readonly broadcaster: StatusBroadcaster<SyncStatusSnapshot>;
-	private chain: Promise<void> = Promise.resolve();
+	private readonly runtimeState: SyncControllerRuntimeState;
+	private readonly fileDiffs: FileDiffService;
+	private readonly operations: OperationRunner;
+	private readonly historyQueries: HistoryQueryService;
+	private readonly historyWrites: HistoryWriteService;
+	private readonly maintenance: MaintenanceService;
 
 	constructor(host: SyncControllerHost) {
 		this.host = host;
-		this.broadcaster = new StatusBroadcaster<SyncStatusSnapshot>({
-			getSnapshot: () => this.getSnapshot(),
+		this.runtimeState = new SyncControllerRuntimeState({
 			emit: (snapshot) =>
 				this.host.app.workspace.trigger(STATUS_EVENT, snapshot),
+		});
+		this.fileDiffs = new FileDiffService({
+			openSession: () => this.host.openSession(),
+			getResult: () => this.runtimeState.getResult(),
+		});
+		this.operations = new OperationRunner({
+			host: this.host,
+			runtimeState: this.runtimeState,
+			clearFileDiffs: () => this.fileDiffs.clear(),
+		});
+		this.historyQueries = new HistoryQueryService({
+			openSession: () => this.host.openSession(),
+		});
+		this.historyWrites = new HistoryWriteService({
+			openSession: () => this.host.openSession(),
+			enqueue: (task) => this.runtimeState.enqueue(task),
+			refresh: () => this.operations.refreshNow(),
+		});
+		this.maintenance = new MaintenanceService({
+			openSession: () => this.host.openSession(),
+			logInfo: (operation, message, details) =>
+				this.host.logInfo(operation, message, details),
 		});
 	}
 
 	getSnapshot(): SyncStatusSnapshot {
-		const d = this.result?.diff;
-		return {
-			pendingLocal: d?.localChanges.length ?? 0,
-			pendingRemote: d?.remoteChanges.length ?? 0,
-			conflicts: d?.conflicts.length ?? 0,
-			lastCompareAt: this.resultAt,
-			busy: this.pendingOps > 0,
-			error: this.error,
-			result: this.result,
-			progressText: this.progressText,
-			staleReason: this.staleReason,
-		};
+		return this.runtimeState.getSnapshot();
 	}
 
 	/** Current device identity for live-resolving history labels. */
@@ -171,60 +135,41 @@ export class SyncController {
 	}
 
 	subscribe(listener: SyncStatusListener): () => void {
-		return this.broadcaster.subscribe(listener);
+		return this.runtimeState.subscribe(listener);
 	}
 
 	dispose(): void {
-		this.broadcaster.dispose();
-		this.diffCache.clear();
+		this.runtimeState.dispose();
+		this.fileDiffs.clear();
 	}
 
 	getStatusForPath(path: string): PathStatus | null {
-		const d = this.result?.diff;
-		if (!d) return null;
-		const change =
-			d.localChanges.find((c) => c.path === path) ??
-			d.remoteChanges.find((c) => c.path === path);
-		const conflict = d.conflicts.find((c) => c.path === path);
-		if (!change && !conflict) return null;
-		return { change, conflict };
+		return this.fileDiffs.getStatusForPath(path);
 	}
 
 	getChangedPathStatuses(): Map<string, EChangeType | "conflict"> {
-		const out = new Map<string, EChangeType | "conflict">();
-		const d = this.result?.diff;
-		if (!d) return out;
-		for (const c of d.localChanges) out.set(c.path, c.type);
-		for (const c of d.remoteChanges) out.set(c.path, c.type);
-		for (const c of d.conflicts) out.set(c.path, "conflict");
-		return out;
+		return this.fileDiffs.getChangedPathStatuses();
 	}
 
 	async refresh(): Promise<void> {
-		await this.enqueue(async () => {
-			await this.doRefresh();
-		});
+		await this.operations.refresh();
 	}
 
 	invalidate(reason: string): void {
-		this.result = null;
-		this.error = null;
-		this.progressText = null;
-		this.diffCache.clear();
-		this.staleReason = reason;
-		this.broadcaster.broadcast();
+		this.fileDiffs.clear();
+		this.runtimeState.invalidate(reason);
 	}
 
 	async refreshAndAutoPull(): Promise<void> {
 		await this.refresh();
-		const result = this.result;
+		const result = this.runtimeState.getResult();
 		if (!result) return;
 
 		if (result.diff.conflicts.length > 0) {
 			await this.autoMerge();
 		}
 
-		const afterMerge = this.result;
+		const afterMerge = this.runtimeState.getResult();
 		if (!afterMerge) return;
 		if (afterMerge.diff.conflicts.length > 0) return;
 		if (afterMerge.diff.localChanges.length > 0) return;
@@ -233,87 +178,50 @@ export class SyncController {
 	}
 
 	private async autoMerge(): Promise<void> {
-		await this.runOperation(ESyncLogOperation.Compare, (deps, result, ctx) =>
-			autoMergeOp(deps, result, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Compare,
+			(deps, result, ctx) => autoMergeOp(deps, result, ctx),
 		);
 	}
 
 	async resetRemoteStorage(): Promise<boolean> {
-		return this.runFlow(ESyncLogOperation.Reset, (deps, ctx) =>
+		return this.operations.runFlow(ESyncLogOperation.Reset, (deps, ctx) =>
 			runResetRemoteStorageFlow(deps, ctx),
 		);
 	}
 
 	async adoptNewVault(): Promise<boolean> {
-		return this.runFlow(ESyncLogOperation.Compare, (deps, ctx) =>
+		return this.operations.runFlow(ESyncLogOperation.Compare, (deps, ctx) =>
 			runAdoptNewVaultFlow(deps, ctx),
 		);
 	}
 
 	async getFileHistory(path: string): Promise<FileVersion[]> {
-		const deps = await this.host.openSession();
-		if (!deps) return [];
-		return queryFileHistory({
-			storage: deps.storage,
-			key: deps.key,
-			path,
-			concurrency: deps.concurrency,
-		});
+		return this.historyQueries.getFileHistory(path);
 	}
 
 	async listFileHistories(): Promise<PathHistorySummary[]> {
-		const deps = await this.host.openSession();
-		if (!deps) return [];
-		return queryAllHistories({
-			storage: deps.storage,
-			key: deps.key,
-			concurrency: deps.concurrency,
-		});
+		return this.historyQueries.listFileHistories();
 	}
 
 	async loadFileVersionBytes(hash: string): Promise<Uint8Array> {
-		const deps = await this.host.openSession();
-		if (!deps) throw new Error("Storage session unavailable");
-		return loadVersionBytes(deps.storage, deps.key, hash);
+		return this.historyQueries.loadFileVersionBytes(hash);
 	}
 
 	async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<void> {
-		const deps = await this.host.openSession();
-		if (!deps) throw new Error("Storage session unavailable");
-		await storeSetSnapshotPinned(deps.storage, deps.key, snapshotId, pinned);
+		await this.historyQueries.setSnapshotPinned(snapshotId, pinned);
 	}
 
 	async verifyRemote(deep: boolean): Promise<VerifyResult | null> {
-		const deps = await this.host.openSession();
-		if (!deps) return null;
-		const result = await verifyRemote(deps.storage, deps.key, deep);
-		await this.host.logInfo(
-			ESyncLogOperation.Compare,
-			`Integrity check: ${result.checked} object(s), ${result.missing.length} missing, ${result.corrupt.length} corrupt.`,
-			[...result.missing, ...result.corrupt].slice(0, 50),
-		);
-		return result;
+		return this.maintenance.verifyRemote(deep);
 	}
 
 	async deepCleanRemote(): Promise<CleanResult | null> {
-		const deps = await this.host.openSession();
-		if (!deps) return null;
-		const result = await deepCleanOrphans(deps.storage, deps.key);
-		await this.host.logInfo(
-			ESyncLogOperation.Reset,
-			`Deep-clean removed ${result.deletedObjects} object(s) and ${result.deletedSnapshots} snapshot(s).`,
-		);
-		return result;
+		return this.maintenance.deepCleanRemote();
 	}
 
 	async restoreFileVersion(path: string, hash: string): Promise<void> {
-		await this.enqueue(async () => {
-			const deps = await this.host.openSession();
-			if (!deps) throw new Error("Storage session unavailable");
-			const bytes = await loadVersionBytes(deps.storage, deps.key, hash);
-			await writeBinary(deps.adapter, path, bytes);
-			await this.doRefresh();
-		});
+		await this.historyWrites.restoreFileVersion(path, hash);
 	}
 
 	async getHistoryDiff(
@@ -322,15 +230,7 @@ export class SyncController {
 		label: string,
 		forceText = false,
 	): Promise<FileDiffModel | null> {
-		const deps = await this.host.openSession();
-		if (!deps) return null;
-		return buildHistoryDiff(
-			{ adapter: deps.adapter, storage: deps.storage, key: deps.key },
-			path,
-			hash,
-			label,
-			forceText,
-		);
+		return this.historyQueries.getHistoryDiff(path, hash, label, forceText);
 	}
 
 	async restoreHistoryHunks(
@@ -338,59 +238,44 @@ export class SyncController {
 		hash: string,
 		selected: ReadonlySet<number>,
 	): Promise<void> {
-		if (selected.size === 0) return;
-		await this.enqueue(async () => {
-			const deps = await this.host.openSession();
-			if (!deps) throw new Error("Storage session unavailable");
-			const versionBytes = await loadVersionBytes(deps.storage, deps.key, hash);
-			const currentBytes = await loadLocalBytes(deps.adapter, path);
-			if (
-				!isLikelyText(versionBytes) ||
-				!currentBytes ||
-				!isLikelyText(currentBytes)
-			) {
-				throw new Error("Per-hunk restore is only supported for text files");
-			}
-			const versionText = bytesToText(versionBytes);
-			const currentText = bytesToText(currentBytes);
-			// left = current, right = version: a selected hunk takes the version side.
-			const { hunks } = computeHunks(currentText, versionText);
-			const merged = applyHunks(currentText, hunks, selected);
-			await writeBinary(deps.adapter, path, textToBytes(merged));
-			await this.doRefresh();
-		});
+		await this.historyWrites.restoreHistoryHunks(path, hash, selected);
 	}
 
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {
 		if (paths.length === 0) return;
-		await this.runOperation(ESyncLogOperation.Push, (deps, result, ctx) =>
-			pushPathsOp(deps, result, paths, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Push,
+			(deps, result, ctx) => pushPathsOp(deps, result, paths, ctx),
 		);
 	}
 
 	async pullPaths(paths: ReadonlyArray<string>): Promise<void> {
 		if (paths.length === 0) return;
-		await this.runOperation(ESyncLogOperation.Pull, (deps, result, ctx) =>
-			pullPathsOp(deps, result, paths, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Pull,
+			(deps, result, ctx) => pullPathsOp(deps, result, paths, ctx),
 		);
 	}
 
 	async pushHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
-		await this.runOperation(ESyncLogOperation.Push, (deps, result, ctx) =>
-			pushHunksOp(deps, result, { path, selected }, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Push,
+			(deps, result, ctx) => pushHunksOp(deps, result, { path, selected }, ctx),
 		);
 	}
 
 	async pullHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
-		await this.runOperation(ESyncLogOperation.Pull, (deps, result, ctx) =>
-			pullHunksOp(deps, result, { path, selected }, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Pull,
+			(deps, result, ctx) => pullHunksOp(deps, result, { path, selected }, ctx),
 		);
 	}
 
 	async revertPaths(paths: ReadonlyArray<string>): Promise<void> {
 		if (paths.length === 0) return;
-		await this.runOperation(ESyncLogOperation.Compare, (deps, result, ctx) =>
-			revertPathsOp(deps, result, paths, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Compare,
+			(deps, result, ctx) => revertPathsOp(deps, result, paths, ctx),
 		);
 	}
 
@@ -399,8 +284,10 @@ export class SyncController {
 		selected: ReadonlySet<number>,
 	): Promise<void> {
 		if (selected.size === 0) return;
-		await this.runOperation(ESyncLogOperation.Compare, (deps, result, ctx) =>
-			revertHunksOp(deps, result, { path, selected }, ctx),
+		await this.operations.runOperation(
+			ESyncLogOperation.Compare,
+			(deps, result, ctx) =>
+				revertHunksOp(deps, result, { path, selected }, ctx),
 		);
 	}
 
@@ -419,7 +306,7 @@ export class SyncController {
 		const set = new Set(paths);
 		if (set.size === 0) return;
 		const { op, logOp } = CONFLICT_STRATEGY_OPS[strategy];
-		await this.runOperation(logOp, (deps, result, ctx) =>
+		await this.operations.runOperation(logOp, (deps, result, ctx) =>
 			op(deps, result, set, ctx),
 		);
 	}
@@ -432,20 +319,7 @@ export class SyncController {
 	async getConflictThreeWay(
 		path: string,
 	): Promise<{ base: string; local: string; remote: string } | null> {
-		const result = this.result;
-		if (!result) return null;
-		const conflict = result.diff.conflicts.find((c) => c.path === path);
-		if (!conflict?.baselineHash) return null;
-		const deps = await this.host.openSession();
-		if (!deps) return null;
-		const fetch = { storage: deps.storage, key: deps.key };
-		const [base, local, remote] = await Promise.all([
-			loadRemoteText(fetch, conflict.baselineHash),
-			loadLocalText(deps.adapter, path),
-			loadRemoteText(fetch, conflict.remoteHash),
-		]);
-		if (base === null || local === null || remote === null) return null;
-		return { base, local, remote };
+		return this.fileDiffs.getConflictThreeWay(path);
 	}
 
 	/**
@@ -454,209 +328,25 @@ export class SyncController {
 	 * same outcome as auto-merge.
 	 */
 	async resolveConflictMerged(path: string, content: string): Promise<void> {
-		await this.runOperation(ESyncLogOperation.Push, async (deps, res, ctx) => {
-			await writeBinary(deps.adapter, path, textToBytes(content));
-			return batchKeepLocalOp(deps, res, new Set([path]), ctx);
-		});
+		await this.operations.runOperation(
+			ESyncLogOperation.Push,
+			async (deps, res, ctx) => {
+				await writeBinary(deps.adapter, path, textToBytes(content));
+				return batchKeepLocalOp(deps, res, new Set([path]), ctx);
+			},
+		);
 	}
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
-		return this.fileDiff(path, false);
+		return this.fileDiffs.getFileDiff(path);
 	}
 
 	/** Like {@link getFileDiff} but decodes size-capped (non-binary) files. */
 	async getForcedFileDiff(path: string): Promise<FileDiffModel | null> {
-		return this.fileDiff(path, true);
-	}
-
-	private async fileDiff(
-		path: string,
-		forceText: boolean,
-	): Promise<FileDiffModel | null> {
-		const status = this.getStatusForPath(path);
-		if (!status) return null;
-		const result = this.result;
-		if (!result) return null;
-		const deps = await this.host.openSession();
-		if (!deps) return null;
-		return this.diffCache.get({
-			path,
-			status,
-			deps,
-			remote: result.remote,
-			forceText,
-		});
+		return this.fileDiffs.getForcedFileDiff(path);
 	}
 
 	clearDiffCache(): void {
-		this.diffCache.clear();
-	}
-
-	private buildContext(deps: EngineDependencies): OperationContext {
-		const identity = deps.storage.identity();
-		return {
-			setProgress: (text) => {
-				this.progressText = text;
-				this.broadcaster.broadcast();
-			},
-			reportProgressSoon: (text) => {
-				this.progressText = text;
-				this.broadcaster.broadcastSoon();
-			},
-			persistState: (session) =>
-				this.host.persistState(
-					mergeSessionIntoLocal(this.host.getState(), session, identity),
-				),
-			getFreshState: () => projectSession(this.host.getState(), identity),
-			logInfo: (op, msg, details) => this.host.logInfo(op, msg, details),
-		};
-	}
-
-	private enqueue<T>(task: () => Promise<T>): Promise<T> {
-		this.pendingOps++;
-		if (this.pendingOps === 1) this.broadcaster.broadcast();
-		const run = this.chain.then(
-			() => task(),
-			() => task(),
-		);
-		this.chain = run.then(
-			() => undefined,
-			() => undefined,
-		);
-		const finish = (): void => {
-			this.pendingOps--;
-			if (this.pendingOps === 0) this.broadcaster.broadcast();
-		};
-		run.then(finish, finish);
-		return run;
-	}
-
-	private async doRefresh(): Promise<void> {
-		this.error = null;
-		this.progressText = "Refreshing…";
-		this.broadcaster.broadcast();
-		try {
-			const deps = await this.host.openSession();
-			if (!deps) return;
-			const depsWithProgress: EngineDependencies = {
-				...deps,
-				onScanProgress: (scanned) => {
-					this.progressText = `Scanning… ${scanned} files`;
-					this.broadcaster.broadcastSoon();
-				},
-			};
-			const result = await compare(depsWithProgress);
-			this.result = result;
-			this.resultAt = Date.now();
-			this.diffCache.clear();
-			this.staleReason = null;
-			const identity = deps.storage.identity();
-			const session: SessionState = {
-				...deps.state,
-				hashCache: result.updatedCache,
-			};
-			await this.host.persistState(
-				mergeSessionIntoLocal(this.host.getState(), session, identity),
-			);
-		} catch (err) {
-			this.error = err instanceof Error ? err.message : String(err);
-			await this.host.logError(ESyncLogOperation.Compare, this.error);
-		} finally {
-			this.progressText = null;
-		}
-	}
-
-	private runFlow(
-		operation: ESyncLogOperation,
-		flow: (
-			deps: EngineDependencies,
-			ctx: OperationContext,
-		) => Promise<{ compareResult: CompareResult }>,
-	): Promise<boolean> {
-		return this.enqueue(async () => {
-			this.error = null;
-			this.broadcaster.broadcast();
-			try {
-				const deps = await this.host.openSession();
-				if (!deps) return false;
-				const ctx = this.buildContext(deps);
-				const { compareResult } = await flow(deps, ctx);
-				this.result = compareResult;
-				this.resultAt = Date.now();
-				this.diffCache.clear();
-				this.staleReason = null;
-				return true;
-			} catch (err) {
-				this.error = err instanceof Error ? err.message : String(err);
-				await this.host.logError(operation, this.error);
-				return false;
-			} finally {
-				this.progressText = null;
-			}
-		});
-	}
-
-	private runOperation(
-		operation: ESyncLogOperation,
-		fn: (
-			deps: EngineDependencies,
-			result: CompareResult,
-			ctx: OperationContext,
-		) => Promise<OperationOutcome>,
-	): Promise<void> {
-		return this.enqueue(async () => {
-			this.error = null;
-			try {
-				const deps = await this.host.openSession();
-				if (!deps) return;
-				let result = this.result;
-				if (!result) {
-					result = await compare(deps);
-					this.result = result;
-					this.resultAt = Date.now();
-				}
-				const ctx = this.buildContext(deps);
-				const outcome = await fn(deps, result, ctx);
-				const freshState =
-					projectSession(this.host.getState(), deps.storage.identity()) ??
-					deps.state;
-				const recomputed = recomputeAfterWrite(
-					result,
-					freshState,
-					outcome.newRemote,
-					outcome.touchedPaths,
-					deps.scope,
-				);
-				this.result = recomputed;
-				this.resultAt = Date.now();
-				this.diffCache.clear();
-				this.staleReason = null;
-				if (operation === ESyncLogOperation.Push) {
-					this.host.onPushComplete?.();
-				}
-			} catch (err) {
-				if (err instanceof ConcurrentPushError) {
-					this.error = null;
-					this.staleReason = "Remote changed concurrently — re-comparing…";
-					this.result = null;
-					this.diffCache.clear();
-					this.broadcaster.broadcast();
-					try {
-						await this.doRefresh();
-					} catch (refreshErr) {
-						this.error =
-							refreshErr instanceof Error
-								? refreshErr.message
-								: String(refreshErr);
-					}
-					await this.host.logWarn(operation, err.message);
-					return;
-				}
-				this.error = err instanceof Error ? err.message : String(err);
-				await this.host.logError(operation, this.error);
-			} finally {
-				this.progressText = null;
-			}
-		});
+		this.fileDiffs.clear();
 	}
 }

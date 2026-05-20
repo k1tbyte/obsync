@@ -1,7 +1,7 @@
 import { type App, Modal } from "obsidian";
-import type { CompareResult } from "../sync/engine";
-import { describeConflict } from "../sync/reporting";
-import type { FileChange } from "../types";
+import type { CompareResult } from "../../sync/engine";
+import { describeConflict } from "../../sync/reporting";
+import type { FileChange } from "../../types";
 
 export interface ReportActions {
 	canPush: boolean;

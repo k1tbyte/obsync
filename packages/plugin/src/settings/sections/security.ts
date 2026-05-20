@@ -2,8 +2,8 @@ import { Setting } from "obsidian";
 import { clearCachedPassphrase } from "../../crypto/passphrase-cache";
 import type ObsyncPlugin from "../../main";
 import { PassphraseRotatedError } from "../../sync/keyfile";
+import { askNewPassphrase } from "../../ui/modals";
 import { notifyError, notifyInfo } from "../../ui/notices";
-import { askNewPassphrase } from "../../ui/passphrase-modal";
 
 export function renderSecuritySection(
 	parent: HTMLElement,

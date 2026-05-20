@@ -1,16 +1,17 @@
 import { MarkdownView } from "obsidian";
-import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
-import type ObsyncPlugin from "../main";
-import { activeStorage } from "../settings/model";
-import { describeStorageTarget } from "../storage/registry";
-import { notifyError, notifyInfo } from "../ui/notices";
-import { confirmRemoteReset } from "../ui/reset-modal";
-import { openConfirmModal } from "../ui/source-control/modals";
+import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
+import type ObsyncPlugin from "@/main";
+import { activeStorage } from "@/settings/model";
+import { describeStorageTarget } from "@/storage";
 import {
+	confirmRemoteReset,
+	notifyError,
+	notifyInfo,
+	openConfirmModal,
 	openDiffView,
 	openSourceControlHistory,
 	openSourceControlView,
-} from "../ui/source-control-view";
+} from "@/ui";
 
 export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({

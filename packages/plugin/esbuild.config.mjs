@@ -1,5 +1,6 @@
 import { builtinModules } from "node:module";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
 
 const externalBuiltins = builtinModules.filter((name) => name !== "buffer");
@@ -15,6 +16,9 @@ const prod = process.argv[2] === "production";
 const context = await esbuild.context({
 	banner: {
 		js: banner,
+	},
+	alias: {
+		"@": fileURLToPath(new URL("./src", import.meta.url)),
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
@@ -39,6 +43,7 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
+	tsconfig: fileURLToPath(new URL("./tsconfig.json", import.meta.url)),
 	outfile: "main.js",
 	minify: prod,
 });

@@ -5,9 +5,9 @@ import {
 	IMPORT_CONFIRMATION_TEXT,
 	QR_ERROR_CORRECTION,
 	QR_SIZE,
-} from "../constants";
-import { activeStorage, type ObsyncSettings } from "../settings/model";
-import { describeStorageTarget } from "../storage/registry";
+} from "@/constants";
+import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import { describeStorageTarget } from "@/storage";
 
 export class SettingsTransferExportModal extends Modal {
 	private readonly transferUrl: string;

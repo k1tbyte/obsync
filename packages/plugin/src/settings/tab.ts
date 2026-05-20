@@ -1,11 +1,12 @@
 import { type App, PluginSettingTab, Setting } from "obsidian";
-import type ObsyncPlugin from "../main";
-import { defaultDeviceName } from "../sync/device";
-import { notifyError, notifyInfo } from "../ui/notices";
+import type ObsyncPlugin from "@/main";
+import { defaultDeviceName } from "@/sync/device";
 import {
 	askSettingsTransferInput,
+	notifyError,
+	notifyInfo,
 	showSettingsTransferExport,
-} from "../ui/settings-transfer-modal";
+} from "@/ui";
 import { renderLogsView } from "./logs-view";
 import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import {

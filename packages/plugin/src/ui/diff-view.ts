@@ -11,11 +11,12 @@ import {
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
 import { formatBytes } from "../shared/format";
-import type { SyncHunk } from "../sync/hunks";
-import { EDiffDirection, type FileDiffModel } from "../sync/projection";
+import type { FileDiffModel } from "../sync/projection";
 import {
+	type DiffHeaderActions,
 	type HunkCardCallbacks,
 	MergeEditorPanel,
+	renderDiffHeader,
 	renderHunkCard,
 } from "./diff";
 import { notifyError, notifyInfo } from "./notices";
@@ -44,7 +45,6 @@ export class DiffView extends ItemView {
 	private forceText = false;
 	private headerEl: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
-	private summaryEl: HTMLElement | null = null;
 	private hunkCards: HTMLElement[] = [];
 	private currentHunkIndex = -1;
 	private rendering = false;
@@ -182,143 +182,51 @@ export class DiffView extends ItemView {
 	private renderHeader(): void {
 		const header = this.headerEl;
 		if (!header) return;
-		header.empty();
 		const path = this.path ?? "";
-		header.createSpan({ cls: "obsync-diff-path", text: path });
-
-		const summary = header.createSpan({ cls: "obsync-diff-summary" });
-		this.summaryEl = summary;
-		this.updateSummaryText();
-
 		const model = this.model;
-		if (!model) return;
-
-		if (this.mergePanel.isEditing) {
-			const save = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Save resolution",
-			});
-			save.addEventListener(
-				"click",
-				() =>
-					void this.mergePanel.save(this.plugin, path, (resolved) =>
-						this.advanceAfterResolve(resolved),
-					),
-			);
-			const cancel = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Cancel",
-			});
-			cancel.addEventListener("click", () => {
+		const actions: DiffHeaderActions = {
+			saveResolution: () =>
+				void this.mergePanel.save(this.plugin, path, (resolved) =>
+					this.advanceAfterResolve(resolved),
+				),
+			cancelResolution: () => {
 				this.mergePanel.reset();
 				this.renderShell();
-			});
-			return;
-		}
-
-		if (model.direction === EDiffDirection.History) {
-			const restore = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Restore this version",
-			});
-			restore.addEventListener("click", () => void this.restoreVersion());
-			if (!model.isBinary && model.hunks.hunks.length > 0) {
-				const prev = header.createEl("button", {
-					cls: "obsync-icon-btn",
-					text: "↑",
-				});
-				prev.setAttr("aria-label", "Previous hunk");
-				prev.addEventListener("click", () => this.jumpHunk(-1));
-				const next = header.createEl("button", {
-					cls: "obsync-icon-btn",
-					text: "↓",
-				});
-				next.setAttr("aria-label", "Next hunk");
-				next.addEventListener("click", () => this.jumpHunk(1));
-			}
-			if (!Platform.isMobile) {
-				const modeBtn = header.createEl("button", {
-					cls: "obsync-icon-btn",
-					text: this.mode === EDiffMode.Split ? "Unified" : "Side-by-side",
-				});
-				modeBtn.addEventListener("click", () => {
-					this.mode =
-						this.mode === EDiffMode.Split ? EDiffMode.Unified : EDiffMode.Split;
-					this.renderShell();
-				});
-			}
-			return;
-		}
-
-		if (model.direction === EDiffDirection.Conflict) {
-			const keepLocal = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Keep local",
-			});
-			keepLocal.addEventListener("click", () => void this.resolveKeepLocal());
-			const acceptRemote = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Accept remote",
-			});
-			acceptRemote.addEventListener(
-				"click",
-				() => void this.resolveAcceptRemote(),
-			);
-			const mergeBtn = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Merge…",
-			});
-			mergeBtn.addEventListener(
-				"click",
-				() =>
-					void this.mergePanel.enter(this.plugin, path, () =>
-						this.renderShell(),
-					),
-			);
-		}
-
-		if (!model.isBinary && model.hunks.hunks.length > 0) {
-			const prev = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "↑",
-			});
-			prev.setAttr("aria-label", "Previous hunk");
-			prev.addEventListener("click", () => this.jumpHunk(-1));
-			const next = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "↓",
-			});
-			next.setAttr("aria-label", "Next hunk");
-			next.addEventListener("click", () => this.jumpHunk(1));
-		}
-
-		const prevFile = header.createEl("button", {
-			cls: "obsync-icon-btn",
-			text: "◀",
-		});
-		prevFile.setAttr("aria-label", "Previous file");
-		prevFile.disabled = this.getAdjacentPath(-1) === null;
-		prevFile.addEventListener("click", () => void this.navigateFile(-1));
-
-		const nextFile = header.createEl("button", {
-			cls: "obsync-icon-btn",
-			text: "▶",
-		});
-		nextFile.setAttr("aria-label", "Next file");
-		nextFile.disabled = this.getAdjacentPath(1) === null;
-		nextFile.addEventListener("click", () => void this.navigateFile(1));
-
-		if (!Platform.isMobile) {
-			const modeBtn = header.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: this.mode === EDiffMode.Split ? "Unified" : "Side-by-side",
-			});
-			modeBtn.addEventListener("click", () => {
+			},
+			restoreVersion: () => void this.restoreVersion(),
+			jumpPrevHunk: () => this.jumpHunk(-1),
+			jumpNextHunk: () => this.jumpHunk(1),
+			toggleMode: () => {
 				this.mode =
 					this.mode === EDiffMode.Split ? EDiffMode.Unified : EDiffMode.Split;
 				this.renderShell();
-			});
-		}
+			},
+			keepLocal: () => void this.resolveKeepLocal(),
+			acceptRemote: () => void this.resolveAcceptRemote(),
+			startMerge: () =>
+				void this.mergePanel.enter(this.plugin, path, () => this.renderShell()),
+			goPrevFile: () => void this.navigateFile(-1),
+			goNextFile: () => void this.navigateFile(1),
+		};
+		renderDiffHeader(
+			header,
+			{
+				path,
+				summaryText: this.summaryText(),
+				direction: model?.direction ?? null,
+				isBinary: model?.isBinary ?? false,
+				hunkCount: model?.hunks.hunks.length ?? 0,
+				isEditing: this.mergePanel.isEditing,
+				modeButtonLabel: Platform.isMobile
+					? null
+					: this.mode === EDiffMode.Split
+						? "Unified"
+						: "Side-by-side",
+				canGoPrevFile: this.getAdjacentPath(-1) !== null,
+				canGoNextFile: this.getAdjacentPath(1) !== null,
+			},
+			actions,
+		);
 	}
 
 	private renderBody(): void {
@@ -459,12 +367,10 @@ export class DiffView extends ItemView {
 		this.currentHunkIndex = next;
 	}
 
-	private updateSummaryText(): void {
-		if (!this.summaryEl) return;
+	private summaryText(): string {
 		const model = this.model;
 		if (!model) {
-			this.summaryEl.setText("");
-			return;
+			return "";
 		}
 		const totalAdded = model.hunks.hunks.reduce((acc, h) => acc + h.added, 0);
 		const totalRemoved = model.hunks.hunks.reduce(
@@ -472,9 +378,7 @@ export class DiffView extends ItemView {
 			0,
 		);
 		const hunkCount = model.hunks.hunks.length;
-		this.summaryEl.setText(
-			`${hunkCount} hunk(s) · +${totalAdded} −${totalRemoved}`,
-		);
+		return `${hunkCount} hunk(s) · +${totalAdded} −${totalRemoved}`;
 	}
 
 	private async restoreVersion(): Promise<void> {

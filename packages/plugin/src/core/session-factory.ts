@@ -1,19 +1,18 @@
 import type { App } from "obsidian";
-import { ESyncLogOperation } from "../logs/store";
+import { ESyncLogOperation } from "@/logs/store";
 import {
 	activeStorage,
 	isStorageConfigured,
 	type ObsyncSettings,
-} from "../settings/model";
-import { createStorageAdapter } from "../storage/registry";
-import type { StorageAdapter } from "../storage/types";
-import type { EngineDependencies } from "../sync/engine";
-import { PassphraseRotatedError } from "../sync/keyfile";
-import { loadState } from "../sync/state";
-import type { LocalState, SessionState } from "../types";
-import { notifyInfo } from "../ui/notices";
-import { loadIgnoreMatcher } from "../vault/ignore";
-import { createScopePolicy } from "../vault/scope";
+} from "@/settings/model";
+import { createStorageAdapter, type StorageAdapter } from "@/storage";
+import type { EngineDependencies } from "@/sync/engine";
+import { PassphraseRotatedError } from "@/sync/keyfile";
+import { loadState } from "@/sync/state";
+import type { LocalState, SessionState } from "@/types";
+import { notifyInfo } from "@/ui";
+import { loadIgnoreMatcher } from "@/vault/ignore";
+import { createScopePolicy } from "@/vault/scope";
 import type { LogService } from "./log-service";
 import type { PassphraseManager } from "./passphrase-manager";
 import type { StatePersister } from "./state-persister";
