@@ -39,8 +39,7 @@ function createEmptyState(): LocalState {
 	return {
 		deviceId: randomId(),
 		deviceName: defaultDeviceName(),
-		vaultId: null,
-		baseline: null,
+		storages: {},
 		hashCache: {},
 	};
 }
@@ -49,9 +48,7 @@ function normalizeState(parsed: Partial<LocalState>): LocalState {
 	return {
 		deviceId: parsed.deviceId ?? randomId(),
 		deviceName: parsed.deviceName ?? defaultDeviceName(),
-		vaultId: parsed.vaultId ?? null,
-		baseline: parsed.baseline ?? null,
-		baselines: parsed.baselines ?? {},
+		storages: parsed.storages ?? {},
 		hashCache: parsed.hashCache ?? {},
 	};
 }

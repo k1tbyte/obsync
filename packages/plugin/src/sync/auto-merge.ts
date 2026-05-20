@@ -1,7 +1,7 @@
 import { diff3Merge } from "node-diff3";
 
 import { ESyncLogOperation } from "../logs/store";
-import type { LocalState } from "../types";
+import type { SessionState } from "../types";
 import { writeBinary } from "../vault/io";
 import { loadLocalText, loadRemoteText, textToBytes } from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
@@ -50,7 +50,7 @@ export async function autoMergeOp(
 	// Advance the baseline entry for each merged path to the remote version.
 	// This means the merged local content is treated as a new local change
 	// (diverging from the acknowledged remote baseline) rather than a conflict.
-	const freshState: LocalState = ctx.getFreshState() ?? deps.state;
+	const freshState: SessionState = ctx.getFreshState() ?? deps.state;
 	const baseline = freshState.baseline;
 	if (baseline) {
 		const files = { ...baseline.files };

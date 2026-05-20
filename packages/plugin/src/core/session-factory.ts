@@ -6,14 +6,12 @@ import {
 	type ObsyncSettings,
 } from "../settings/model";
 import { createStorageAdapter } from "../storage/registry";
-import type { ObjectStorage, StorageAdapter } from "../storage/types";
+import type { StorageAdapter } from "../storage/types";
 import type { EngineDependencies } from "../sync/engine";
 import { PassphraseRotatedError } from "../sync/keyfile";
-import { fetchRemoteManifest } from "../sync/manifest";
-import { loadState, saveState } from "../sync/state";
-import type { LocalState, Manifest } from "../types";
+import { loadState } from "../sync/state";
+import type { LocalState, SessionState } from "../types";
 import { notifyInfo } from "../ui/notices";
-import { confirmVaultAdoption } from "../ui/vault-adoption-modal";
 import { loadIgnoreMatcher } from "../vault/ignore";
 import { createScopePolicy } from "../vault/scope";
 import type { LogService } from "./log-service";
@@ -73,26 +71,9 @@ async function openSession(
 	const storage = getStorage();
 	const key = await resolveKeyWithRotationRetry(deps, storage);
 	if (!key) return null;
-	let currentState =
+	const currentState =
 		state.state ?? (await loadState(adapter, app.vault.configDir));
 	state.setInitial(currentState);
-	await persistDeviceIdIfNew(app, currentState);
-
-	if (currentState.vaultId === null) {
-		const adoptedVaultId = await confirmAdoptionIfNeeded(app, storage, key);
-		if (adoptedVaultId === false) {
-			await logs.warn(
-				ESyncLogOperation.Session,
-				"Session cancelled: user declined to adopt remote vault.",
-			);
-			return null;
-		}
-		if (adoptedVaultId) {
-			currentState = { ...currentState, vaultId: adoptedVaultId };
-			state.setInitial(currentState);
-			await saveState(adapter, app.vault.configDir, currentState);
-		}
-	}
 
 	const ignore = await loadIgnoreMatcher(adapter, settings.ignorePatterns);
 	return {
@@ -104,18 +85,23 @@ async function openSession(
 			ignore,
 		}),
 		key,
-		state: {
-			...currentState,
-			baseline:
-				currentState.baselines?.[storage.identity()] ??
-				currentState.baseline ??
-				null,
-		},
+		state: buildSessionView(currentState, storage.identity()),
 		maxFileBytes: settings.maxFileBytes,
 		concurrency: activeStorage(settings).concurrency,
 		history: settings.fileHistoryEnabled
 			? { maxSnapshots: settings.fileHistoryMaxSnapshots }
 			: undefined,
+	};
+}
+
+function buildSessionView(local: LocalState, identity: string): SessionState {
+	const slot = local.storages[identity];
+	return {
+		deviceId: local.deviceId,
+		deviceName: local.deviceName,
+		vaultId: slot?.vaultId ?? null,
+		baseline: slot?.baseline ?? null,
+		hashCache: local.hashCache,
 	};
 }
 
@@ -126,7 +112,7 @@ async function openSession(
  */
 async function resolveKeyWithRotationRetry(
 	deps: SessionFactoryDeps,
-	storage: ObjectStorage,
+	storage: StorageAdapter,
 ): Promise<import("../crypto").EncryptionKey | null> {
 	const { passphrase, logs } = deps;
 	try {
@@ -152,34 +138,4 @@ async function resolveKeyWithRotationRetry(
 			return null;
 		}
 	}
-}
-
-async function confirmAdoptionIfNeeded(
-	app: App,
-	storage: ObjectStorage,
-	key: import("../crypto").EncryptionKey,
-): Promise<string | false> {
-	const localFileCount = app.vault.getFiles().length;
-	if (localFileCount === 0) return "";
-	let remote: Manifest | null;
-	try {
-		remote = await fetchRemoteManifest(storage, key);
-	} catch (err) {
-		console.warn("[obsync] adoption peek failed", err);
-		return "";
-	}
-	if (!remote) return "";
-	const confirmed = await confirmVaultAdoption(app, {
-		remoteVaultId: remote.vaultId,
-		localFileCount,
-	});
-	return confirmed ? remote.vaultId : false;
-}
-
-async function persistDeviceIdIfNew(
-	app: App,
-	state: LocalState,
-): Promise<void> {
-	if (state.vaultId !== null) return;
-	await saveState(app.vault.adapter, app.vault.configDir, state);
 }

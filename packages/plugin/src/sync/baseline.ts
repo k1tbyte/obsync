@@ -1,36 +1,36 @@
 import { randomId } from "../crypto";
 import type {
 	HashCacheEntry,
-	LocalState,
 	Manifest,
 	ManifestEntry,
+	SessionState,
 } from "../types";
 import type { CompareResult } from "./engine";
 
-export function buildLocalState(
-	previous: LocalState,
+export function buildSessionState(
+	previous: SessionState,
 	baseline: Manifest,
 	hashCache: Record<string, HashCacheEntry>,
-): LocalState {
+): SessionState {
 	return {
 		deviceId: previous.deviceId || randomId(),
+		deviceName: previous.deviceName,
 		vaultId: baseline.vaultId,
 		baseline,
-		baselines: previous.baselines,
 		hashCache,
 	};
 }
 
-export function advanceStateAfterPush(
-	state: LocalState,
+export function advanceSessionAfterPush(
+	state: SessionState,
 	result: CompareResult,
 	manifest: Manifest,
-): LocalState {
+): SessionState {
 	return {
 		deviceId: state.deviceId || randomId(),
+		deviceName: state.deviceName,
 		vaultId: manifest.vaultId,
 		baseline: manifest,
-		baselines: state.baselines,
 		hashCache: result.updatedCache,
 	};
 }
@@ -46,12 +46,15 @@ export function mergeBaselineIntoCache(
 	return next;
 }
 
-export function resetLocalState(state: LocalState): LocalState {
+/** Forgets the current storage's vaultId and baseline so the next compare
+ * treats it as a fresh slot. Local hashCache is preserved (it indexes the
+ * vault's own files, not the remote). */
+export function resetSessionState(state: SessionState): SessionState {
 	return {
 		deviceId: state.deviceId || randomId(),
+		deviceName: state.deviceName,
 		vaultId: null,
 		baseline: null,
-		baselines: state.baselines,
 		hashCache: state.hashCache,
 	};
 }

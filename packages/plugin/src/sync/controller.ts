@@ -11,6 +11,7 @@ import type {
 	LocalState,
 	Manifest,
 	ManifestEntry,
+	SessionState,
 } from "../types";
 import { writeBinary } from "../vault/io";
 import { autoMergeOp } from "./auto-merge";
@@ -496,6 +497,7 @@ export class SyncController {
 	}
 
 	private buildContext(deps: EngineDependencies): OperationContext {
+		const identity = deps.storage.identity();
 		return {
 			setProgress: (text) => {
 				this.progressText = text;
@@ -505,17 +507,11 @@ export class SyncController {
 				this.progressText = text;
 				this.broadcaster.broadcastSoon();
 			},
-			persistState: (state) => {
-				const baselines = { ...(state.baselines ?? {}) };
-				if (state.baseline) {
-					baselines[deps.storage.identity()] = state.baseline;
-				} else {
-					delete baselines[deps.storage.identity()];
-				}
-				const finalState = { ...state, baselines };
-				return this.host.persistState(finalState);
-			},
-			getFreshState: () => this.host.getState(),
+			persistState: (session) =>
+				this.host.persistState(
+					mergeSessionIntoLocal(this.host, session, identity),
+				),
+			getFreshState: () => projectSession(this.host.getState(), identity),
 			logInfo: (op, msg, details) => this.host.logInfo(op, msg, details),
 		};
 	}
@@ -558,12 +554,14 @@ export class SyncController {
 			this.resultAt = Date.now();
 			this.diffCache.clear();
 			this.staleReason = null;
-			const freshState = this.host.getState() ?? deps.state;
-			const state: LocalState = {
-				...freshState,
+			const identity = deps.storage.identity();
+			const session: SessionState = {
+				...deps.state,
 				hashCache: result.updatedCache,
 			};
-			await this.host.persistState(state);
+			await this.host.persistState(
+				mergeSessionIntoLocal(this.host, session, identity),
+			);
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : String(err);
 			await this.host.logError(ESyncLogOperation.Compare, this.error);
@@ -623,7 +621,9 @@ export class SyncController {
 				}
 				const ctx = this.buildContext(deps);
 				const outcome = await fn(deps, result, ctx);
-				const freshState = this.host.getState() ?? deps.state;
+				const freshState =
+					projectSession(this.host.getState(), deps.storage.identity()) ??
+					deps.state;
 				const recomputed = recomputeAfterWrite(
 					result,
 					freshState,
@@ -667,7 +667,7 @@ export class SyncController {
 
 function recomputeAfterWrite(
 	prevResult: CompareResult,
-	freshState: LocalState,
+	freshState: SessionState,
 	newRemote: Manifest | null,
 	touchedPaths: ReadonlySet<string>,
 	scope: EngineDependencies["scope"],
@@ -698,5 +698,54 @@ function recomputeAfterWrite(
 		remote: newRemote,
 		diff: result,
 		updatedCache: freshState.hashCache,
+	};
+}
+
+/** Flattens the persisted per-storage state into the session view the engine
+ * works with. */
+function projectSession(
+	local: LocalState | null,
+	identity: string,
+): SessionState | null {
+	if (!local) return null;
+	const slot = local.storages[identity];
+	return {
+		deviceId: local.deviceId,
+		deviceName: local.deviceName,
+		vaultId: slot?.vaultId ?? null,
+		baseline: slot?.baseline ?? null,
+		hashCache: local.hashCache,
+	};
+}
+
+/** Writes a session back into the persisted state under its own storage slot,
+ * leaving every other storage's remembered vaultId/baseline untouched. */
+function mergeSessionIntoLocal(
+	host: SyncControllerHost,
+	session: SessionState,
+	identity: string,
+): LocalState {
+	const current = host.getState();
+	const storages: LocalState["storages"] = { ...(current?.storages ?? {}) };
+	if (session.vaultId !== null) {
+		storages[identity] = {
+			vaultId: session.vaultId,
+			baseline: session.baseline,
+		};
+	} else if (current?.storages[identity] && session.baseline !== null) {
+		// Preserve the slot's vaultId if the engine returned a baseline without
+		// re-asserting vaultId (defensive — should not normally happen).
+		storages[identity] = {
+			vaultId: current.storages[identity].vaultId,
+			baseline: session.baseline,
+		};
+	} else {
+		delete storages[identity];
+	}
+	return {
+		deviceId: session.deviceId,
+		deviceName: session.deviceName,
+		storages,
+		hashCache: session.hashCache,
 	};
 }

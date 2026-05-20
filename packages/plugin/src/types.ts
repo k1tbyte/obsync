@@ -30,12 +30,37 @@ export interface HashCacheEntry {
 	hash: string;
 }
 
+/**
+ * Per-storage remembered state. One entry per `storage.identity()` so switching
+ * backends does not lose what we adopted/synced elsewhere.
+ */
+export interface StorageState {
+	vaultId: string;
+	baseline: Manifest | null;
+}
+
+/**
+ * What gets persisted to state.json. Device identity + a per-storage map +
+ * a local content cache that is storage-agnostic (it indexes the vault's own
+ * files by mtime/size/hash).
+ */
 export interface LocalState {
+	deviceId: string;
+	deviceName?: string;
+	storages: Record<string, StorageState>;
+	hashCache: Record<string, HashCacheEntry>;
+}
+
+/**
+ * The flat view the sync engine and operations work with. Built per session
+ * from the active storage's slot in {@link LocalState.storages}; the
+ * controller translates back when persisting.
+ */
+export interface SessionState {
 	deviceId: string;
 	deviceName?: string;
 	vaultId: string | null;
 	baseline: Manifest | null;
-	baselines?: Record<string, Manifest>;
 	hashCache: Record<string, HashCacheEntry>;
 }
 

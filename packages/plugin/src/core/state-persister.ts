@@ -85,14 +85,35 @@ function canDebounce(prev: LocalState | null, next: LocalState): boolean {
 	if (!prev) return false;
 	if (prev.deviceId !== next.deviceId) return false;
 	if (prev.deviceName !== next.deviceName) return false;
-	if (prev.vaultId !== next.vaultId) return false;
-	if (prev.baseline !== next.baseline) return false;
+	if (!storagesEqual(prev.storages, next.storages)) return false;
 	// Never debounce the first hash-cache population. Going from no cache to a
 	// full scan is the single most expensive thing to lose: dropping it forces
 	// a complete vault re-hash on the next launch. Subsequent deltas are cheap
 	// to recompute (mtime/size cache still skips unchanged files), so those
 	// stay debounced.
 	if (!hasHashCacheEntries(prev) && hasHashCacheEntries(next)) return false;
+	return true;
+}
+
+/** Shallow structural compare: same set of identities, each pointing at the
+ * same `vaultId` and the same `baseline` reference. The controller patches
+ * `storages` immutably, so per-slot reference equality is enough to tell
+ * "nothing critical changed" from "vaultId/baseline moved." */
+function storagesEqual(
+	prev: LocalState["storages"],
+	next: LocalState["storages"],
+): boolean {
+	if (prev === next) return true;
+	const prevKeys = Object.keys(prev);
+	const nextKeys = Object.keys(next);
+	if (prevKeys.length !== nextKeys.length) return false;
+	for (const key of prevKeys) {
+		const p = prev[key];
+		const n = next[key];
+		if (!p || !n) return false;
+		if (p.vaultId !== n.vaultId) return false;
+		if (p.baseline !== n.baseline) return false;
+	}
 	return true;
 }
 

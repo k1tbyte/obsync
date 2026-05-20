@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { REMOTE_MANIFEST_KEY, REMOTE_SNAPSHOTS_PREFIX } from "../src/constants";
 import { deriveKey, type EncryptionKey } from "../src/crypto";
 import { DEFAULT_SETTINGS_SYNC } from "../src/settings/model";
-import { advanceStateAfterPush } from "../src/sync/baseline";
+import { advanceSessionAfterPush } from "../src/sync/baseline";
 import {
 	compare,
 	type EngineDependencies,
@@ -10,7 +10,7 @@ import {
 	pushPaths,
 } from "../src/sync/engine";
 import { readSnapshotIndex } from "../src/sync/history/store";
-import type { LocalState } from "../src/types";
+import type { SessionState } from "../src/types";
 import { createScopePolicy } from "../src/vault/scope";
 import { FakeStorage } from "./helpers/fake-storage";
 import { InMemoryAdapter } from "./helpers/in-memory-adapter";
@@ -25,13 +25,12 @@ const scope = createScopePolicy({
 	configDir: ".obsidian",
 });
 
-function freshState(deviceId: string): LocalState {
+function freshState(deviceId: string): SessionState {
 	return {
 		deviceId,
 		deviceName: deviceId,
 		vaultId: null,
 		baseline: null,
-		baselines: {},
 		hashCache: {},
 	};
 }
@@ -39,7 +38,7 @@ function freshState(deviceId: string): LocalState {
 function deps(
 	adapter: InMemoryAdapter,
 	storage: FakeStorage,
-	state: LocalState,
+	state: SessionState,
 	history?: { maxSnapshots: number },
 ): EngineDependencies {
 	return {
@@ -71,7 +70,7 @@ describe("engine round-trip", () => {
 		expect(storage.map.has(REMOTE_MANIFEST_KEY)).toBe(true);
 		expect(manifest.files["note.md"]).toBeTruthy();
 
-		state = advanceStateAfterPush(state, cmp, manifest);
+		state = advanceSessionAfterPush(state, cmp, manifest);
 		const cmp2 = await compare(deps(adapter, storage, state));
 		expect(cmp2.diff.localChanges).toHaveLength(0);
 		expect(cmp2.diff.remoteChanges).toHaveLength(0);
@@ -85,7 +84,7 @@ describe("engine round-trip", () => {
 		let state = freshState("A");
 		let cmp = await compare(deps(adapter, storage, state));
 		const m1 = await pushPaths(deps(adapter, storage, state), cmp, ["note.md"]);
-		state = advanceStateAfterPush(state, cmp, m1);
+		state = advanceSessionAfterPush(state, cmp, m1);
 
 		adapter.putText("note.md", "v2");
 		cmp = await compare(deps(adapter, storage, state));
@@ -103,7 +102,7 @@ describe("engine round-trip", () => {
 		const m1 = await pushPaths(deps(adapterA, storage, stateA), cmpA, [
 			"note.md",
 		]);
-		stateA = advanceStateAfterPush(stateA, cmpA, m1);
+		stateA = advanceSessionAfterPush(stateA, cmpA, m1);
 
 		const adapterB = new InMemoryAdapter();
 		const stateB = freshState("B");
@@ -122,7 +121,7 @@ describe("engine round-trip", () => {
 		const m1 = await pushPaths(deps(adapterA, storage, stateA), cmpA, [
 			"note.md",
 		]);
-		stateA = advanceStateAfterPush(stateA, cmpA, m1);
+		stateA = advanceSessionAfterPush(stateA, cmpA, m1);
 
 		// Device B pulls, then pushes its own change → remote advances past m1.
 		const adapterB = new InMemoryAdapter();
@@ -152,7 +151,7 @@ describe("engine round-trip", () => {
 			const m = await pushPaths(deps(adapter, storage, state, history), cmp, [
 				"note.md",
 			]);
-			state = advanceStateAfterPush(state, cmp, m);
+			state = advanceSessionAfterPush(state, cmp, m);
 		}
 		const index = await readSnapshotIndex(storage, key);
 		// buffer floor is 10 → GC fires once count exceeds max(2)+10, prunes to 2.

@@ -3,8 +3,8 @@ import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
 import type { ManifestEntry } from "../../types";
 import {
-	advanceStateAfterPush,
-	buildLocalState,
+	advanceSessionAfterPush,
+	buildSessionState,
 	mergeFolderArrays,
 	updateBaselineEntry,
 } from "../baseline";
@@ -46,7 +46,7 @@ export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 		ctx.setProgress(`Pushing ${done}/${total}…`);
 	});
 	ctx.setProgress(null);
-	const state = advanceStateAfterPush(deps.state, result, manifest);
+	const state = advanceSessionAfterPush(deps.state, result, manifest);
 	await ctx.persistState(state);
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
@@ -89,7 +89,7 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 	);
 	const hashCache = { ...result.updatedCache };
 	hashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
-	await ctx.persistState(buildLocalState(deps.state, baseline, hashCache));
+	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
 		`Pushed ${selected.size} hunk(s) of ${path}.`,
@@ -147,7 +147,9 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 		result.remote?.snapshotId ?? null,
 		deps.history,
 	);
-	await ctx.persistState(buildLocalState(deps.state, manifest, nextHashCache));
+	await ctx.persistState(
+		buildSessionState(deps.state, manifest, nextHashCache),
+	);
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
 		`Resolved ${conflictPaths.length} conflict(s) by keeping local.`,

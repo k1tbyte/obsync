@@ -13,9 +13,9 @@ import {
 	type EFileKind,
 	type HashCacheEntry,
 	type LocalSnapshot,
-	type LocalState,
 	type Manifest,
 	type ManifestEntry,
+	type SessionState,
 } from "../types";
 import { runWithConcurrency } from "../utils/concurrency";
 import {
@@ -41,7 +41,7 @@ export interface EngineDependencies {
 	storage: StorageAdapter;
 	scope: ScopePolicy;
 	key: EncryptionKey;
-	state: LocalState;
+	state: SessionState;
 	maxFileBytes: number;
 	concurrency?: number;
 	onScanProgress?: (scanned: number) => void;
@@ -386,7 +386,7 @@ function collectUploads(
 }
 
 function assertVaultCompatibility(
-	state: LocalState,
+	state: SessionState,
 	remote: Manifest | null,
 ): void {
 	if (!remote) return;

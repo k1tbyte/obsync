@@ -1,5 +1,5 @@
 import { ESyncLogOperation } from "../../logs/store";
-import { resetLocalState } from "../baseline";
+import { resetSessionState } from "../baseline";
 import {
 	type CompareResult,
 	compare,
@@ -26,7 +26,7 @@ export async function runResetRemoteStorageFlow(
 			ctx.reportProgressSoon(`Deleting remote sync data ${done}/${total}…`);
 		},
 	);
-	const resetState = resetLocalState(deps.state);
+	const resetState = resetSessionState(deps.state);
 	await ctx.persistState(resetState);
 	ctx.setProgress("Refreshing…");
 	const refreshed = await compare({ ...deps, state: resetState });
@@ -44,11 +44,18 @@ export async function runAdoptNewVaultFlow(
 	ctx: OperationContext,
 ): Promise<FlowResult> {
 	ctx.setProgress("Adopting new vault…");
-	const resetState = resetLocalState(deps.state);
-	await ctx.persistState(resetState);
+	const cleared = resetSessionState(deps.state);
+	await ctx.persistState(cleared);
 	ctx.setProgress("Refreshing…");
-	const refreshed = await compare({ ...deps, state: resetState });
-	await ctx.persistState({ ...resetState, hashCache: refreshed.updatedCache });
+	const refreshed = await compare({ ...deps, state: cleared });
+	// Adopt whatever vaultId the remote currently carries so a subsequent
+	// compare no longer trips assertVaultCompatibility. If the remote is empty,
+	// vaultId stays null and the first push will mint one.
+	await ctx.persistState({
+		...cleared,
+		vaultId: refreshed.remote?.vaultId ?? null,
+		hashCache: refreshed.updatedCache,
+	});
 	await ctx.logInfo(ESyncLogOperation.Compare, "Adopted new remote vault.");
 	return { compareResult: refreshed };
 }

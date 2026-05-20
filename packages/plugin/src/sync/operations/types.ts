@@ -1,5 +1,5 @@
 import type { ESyncLogOperation } from "../../logs/store";
-import type { Manifest } from "../../types";
+import type { Manifest, SessionState } from "../../types";
 import type { CompareResult, EngineDependencies } from "../engine";
 
 export interface OperationOutcome {
@@ -12,8 +12,8 @@ export type ProgressReporter = (text: string | null) => void;
 export interface OperationContext {
 	setProgress: ProgressReporter;
 	reportProgressSoon: ProgressReporter;
-	persistState: (state: import("../../types").LocalState) => Promise<void>;
-	getFreshState: () => import("../../types").LocalState | null;
+	persistState: (state: SessionState) => Promise<void>;
+	getFreshState: () => SessionState | null;
 	logInfo: (
 		operation: ESyncLogOperation,
 		message: string,

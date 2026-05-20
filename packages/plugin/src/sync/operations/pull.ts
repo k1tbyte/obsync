@@ -4,7 +4,7 @@ import { formatBytes, sumBytes } from "../../shared/format";
 import type { Manifest, ManifestEntry } from "../../types";
 import { writeBinary } from "../../vault/io";
 import {
-	buildLocalState,
+	buildSessionState,
 	mergeBaselineIntoCache,
 	updateBaselineEntry,
 } from "../baseline";
@@ -35,7 +35,7 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 	});
 	ctx.setProgress(null);
 	const hashCache = mergeBaselineIntoCache(baseline, result.updatedCache);
-	await ctx.persistState(buildLocalState(deps.state, baseline, hashCache));
+	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
 		`Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
@@ -77,7 +77,7 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 		size: bytes.length,
 		hash: await sha256Hex(bytes),
 	};
-	await ctx.persistState(buildLocalState(deps.state, baseline, hashCache));
+	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
 		`Pulled ${selected.size} hunk(s) of ${path}.`,
@@ -122,7 +122,9 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 		files: baselineFiles,
 		parentSnapshotId: deps.state.baseline?.snapshotId ?? null,
 	};
-	await ctx.persistState(buildLocalState(deps.state, baseline, nextHashCache));
+	await ctx.persistState(
+		buildSessionState(deps.state, baseline, nextHashCache),
+	);
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
 		`Resolved ${conflictPaths.length} conflict(s) by accepting remote.`,
