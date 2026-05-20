@@ -99,6 +99,14 @@ export class SourceControlView extends ItemView {
 			() => this.render(this.plugin.controller.getSnapshot(), true),
 			(path, history) => openDiffView(this.plugin, path, history),
 		);
+		this.registerEvent(
+			this.app.workspace.on("file-open", () => {
+				if (this.tab !== ESourceTab.History) return;
+				if (!this.historyTab.isFollowingCurrentFile()) return;
+				this.historyTab.clearVersions();
+				this.render(this.plugin.controller.getSnapshot(), true);
+			}),
+		);
 		this.root = this.contentEl;
 		this.root.empty();
 		this.root.addClass("obsync-source-control");
@@ -124,8 +132,7 @@ export class SourceControlView extends ItemView {
 	}
 
 	/**
-	 * After a push, reload history only when a single file's history is open
-	 * (no-op for the Changes tab or the all-files list — avoids useless work).
+	 * After a push, reload history only when the History tab is showing a file.
 	 */
 	refreshHistoryAfterPush(): void {
 		if (this.tab !== ESourceTab.History || !this.historyTab.hasPath) return;

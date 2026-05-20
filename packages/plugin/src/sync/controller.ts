@@ -9,7 +9,7 @@ import { autoMergeOp } from "./auto-merge";
 import { textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
 import type { EngineDependencies } from "./engine";
-import type { FileVersion, PathHistorySummary } from "./history";
+import type { FileVersion } from "./history";
 import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
@@ -198,10 +198,6 @@ export class SyncController {
 
 	async getFileHistory(path: string): Promise<FileVersion[]> {
 		return this.historyQueries.getFileHistory(path);
-	}
-
-	async listFileHistories(): Promise<PathHistorySummary[]> {
-		return this.historyQueries.listFileHistories();
 	}
 
 	async loadFileVersionBytes(hash: string): Promise<Uint8Array> {

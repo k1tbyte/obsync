@@ -62,22 +62,11 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 
 	plugin.addCommand({
 		id: "file-history",
-		name: "Show file history (current file)",
+		name: "Show file history",
 		checkCallback: (checking) => {
 			if (!plugin.settings.fileHistoryEnabled) return false;
 			const file = plugin.app.workspace.getActiveFile();
 			if (!file) return false;
-			if (checking) return true;
-			void openSourceControlHistory(plugin, file.path);
-			return true;
-		},
-	});
-
-	plugin.addCommand({
-		id: "browse-file-history",
-		name: "Browse file history (all files)",
-		checkCallback: (checking) => {
-			if (!plugin.settings.fileHistoryEnabled) return false;
 			if (checking) return true;
 			void openSourceControlHistory(plugin);
 			return true;

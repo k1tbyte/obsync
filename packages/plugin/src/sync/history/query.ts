@@ -5,18 +5,12 @@ import type { Manifest } from "../../types";
 import { runWithConcurrency } from "../../utils/concurrency";
 import { objectKey } from "../manifest";
 import { fetchArchivedManifest, readSnapshotIndex } from "./store";
-import type { FileVersion, PathHistorySummary } from "./types";
+import type { FileVersion } from "./types";
 
 export interface FileHistoryQuery {
 	storage: ObjectStorage;
 	key: EncryptionKey;
 	path: string;
-	concurrency?: number;
-}
-
-export interface ListHistoryQuery {
-	storage: ObjectStorage;
-	key: EncryptionKey;
 	concurrency?: number;
 }
 
@@ -70,69 +64,6 @@ export async function getFileHistory(
 	}
 	return versions;
 }
-
-/**
- * Lists every path that appears in any retained snapshot, including files that
- * were later deleted upstream (so their history is still reachable). Sorted by
- * most-recently-seen first.
- */
-export async function listFileHistories(
-	query: ListHistoryQuery,
-): Promise<PathHistorySummary[]> {
-	const { storage, key } = query;
-	const index = await readSnapshotIndex(storage, key);
-	if (index.entries.length === 0) return [];
-
-	const manifests = new Map<string, Manifest | null>();
-	await runWithConcurrency(
-		index.entries,
-		query.concurrency ?? DEFAULT_CONCURRENCY,
-		async (entry) => {
-			manifests.set(
-				entry.snapshotId,
-				await fetchArchivedManifest(storage, key, entry.snapshotId),
-			);
-		},
-	);
-
-	const headEntry = index.entries[0];
-	const headManifest = headEntry
-		? manifests.get(headEntry.snapshotId)
-		: undefined;
-	const headPaths = new Set(
-		headManifest ? Object.keys(headManifest.files) : [],
-	);
-
-	const latest = new Map<
-		string,
-		{ createdAt: number; deviceId: string; deviceName?: string }
-	>();
-	for (const entry of index.entries) {
-		const manifest = manifests.get(entry.snapshotId);
-		if (!manifest) continue;
-		for (const path of Object.keys(manifest.files)) {
-			const prev = latest.get(path);
-			if (prev === undefined || entry.createdAt > prev.createdAt) {
-				latest.set(path, {
-					createdAt: entry.createdAt,
-					deviceId: entry.deviceId,
-					deviceName: entry.deviceName,
-				});
-			}
-		}
-	}
-
-	return [...latest.entries()]
-		.map(([path, info]) => ({
-			path,
-			latestCreatedAt: info.createdAt,
-			latestDeviceId: info.deviceId,
-			latestDeviceName: info.deviceName,
-			deleted: !headPaths.has(path),
-		}))
-		.sort((a, b) => b.latestCreatedAt - a.latestCreatedAt);
-}
-
 export async function loadVersionBytes(
 	storage: ObjectStorage,
 	key: EncryptionKey,

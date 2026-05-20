@@ -1,17 +1,14 @@
 import type ObsyncPlugin from "../../main";
 import { formatBytes } from "../../shared/format";
 import { deviceLabel } from "../../sync/device";
-import type { FileVersion, PathHistorySummary } from "../../sync/history";
+import type { FileVersion } from "../../sync/history";
 import { notifyError, notifyInfo } from "../notices";
 
-const HISTORY_SEARCH_MIN_CHARS = 2;
-
 export class HistoryTab {
-	private historyPath: string | null = null;
-	private historySummaries: PathHistorySummary[] | null = null;
+	private explicitPath: string | null = null;
 	private historyVersions: FileVersion[] | null = null;
-	private historyFilter = "";
-	private historyLoading = false;
+	private loadedPath: string | null = null;
+	private loadingPath: string | null = null;
 
 	constructor(
 		private readonly plugin: ObsyncPlugin,
@@ -23,16 +20,22 @@ export class HistoryTab {
 	) {}
 
 	get hasPath(): boolean {
-		return this.historyPath !== null;
+		return this.resolvedPath() !== null;
 	}
 
 	setPath(path: string | null): void {
-		this.historyPath = path;
-		this.historyVersions = null;
+		this.explicitPath = path;
+		this.clearVersions();
+	}
+
+	isFollowingCurrentFile(): boolean {
+		return this.explicitPath === null;
 	}
 
 	clearVersions(): void {
 		this.historyVersions = null;
+		this.loadedPath = null;
+		this.loadingPath = null;
 	}
 
 	render(parent: HTMLElement): void {
@@ -44,11 +47,15 @@ export class HistoryTab {
 			});
 			return;
 		}
-		if (this.historyPath !== null) {
-			this.renderHistoryVersions(pane, this.historyPath);
+		const path = this.resolvedPath();
+		if (path === null) {
+			pane.createDiv({
+				cls: "obsync-status-line",
+				text: "Open a file to view its history.",
+			});
 			return;
 		}
-		this.renderHistoryList(pane);
+		this.renderHistoryVersions(pane, path);
 	}
 
 	private deviceText(deviceId: string, deviceName: string | undefined): string {
@@ -57,112 +64,9 @@ export class HistoryTab {
 		return deviceLabel(deviceId, deviceName);
 	}
 
-	private renderHistoryList(parent: HTMLElement): void {
-		const search = parent.createEl("input", {
-			cls: "obsync-history-search",
-			attr: { type: "text", placeholder: "Search by path (2+ chars)…" },
-		});
-		search.value = this.historyFilter;
-		const listBody = parent.createDiv({ cls: "obsync-history-list" });
-		search.addEventListener("input", () => {
-			this.historyFilter = search.value;
-			this.renderHistoryListState(listBody);
-		});
-		this.renderHistoryListState(listBody);
-	}
-
-	private renderHistoryListState(listBody: HTMLElement): void {
-		listBody.empty();
-		const query = this.historyFilter.trim();
-		if (query.length < HISTORY_SEARCH_MIN_CHARS) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: `Type ${HISTORY_SEARCH_MIN_CHARS}+ characters to search file history.`,
-			});
-			return;
-		}
-		if (this.historySummaries === null) {
-			listBody.createDiv({ cls: "obsync-status-line", text: "Loading…" });
-			if (this.historyLoading) return;
-			this.historyLoading = true;
-			this.plugin.controller
-				.listFileHistories()
-				.then((summaries) => {
-					this.historySummaries = summaries;
-					this.historyLoading = false;
-					if (listBody.isConnected) this.renderHistoryListState(listBody);
-				})
-				.catch((err) => {
-					this.historyLoading = false;
-					if (!listBody.isConnected) return;
-					listBody.empty();
-					listBody.createDiv({
-						cls: "obsync-history-error",
-						text: `Could not load history: ${errorText(err)}`,
-					});
-				});
-			return;
-		}
-		this.renderHistoryListBody(listBody);
-	}
-
-	private renderHistoryListBody(listBody: HTMLElement): void {
-		listBody.empty();
-		const summaries = this.historySummaries ?? [];
-		if (summaries.length === 0) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: "No stored history yet. Push some changes first.",
-			});
-			return;
-		}
-		const needle = this.historyFilter.trim().toLowerCase();
-		const matches = summaries.filter((s) =>
-			s.path.toLowerCase().includes(needle),
-		);
-		if (matches.length === 0) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: "No matching files.",
-			});
-			return;
-		}
-		for (const summary of matches) {
-			const row = listBody.createDiv({
-				cls: ["obsync-history-row", "is-clickable"],
-			});
-			row.setAttr("title", summary.path);
-			const title = row.createDiv({ cls: "obsync-history-row-title" });
-			title.setText(summary.path);
-			if (summary.deleted) {
-				title.createSpan({
-					cls: "obsync-history-deleted-badge",
-					text: " (deleted)",
-				});
-			}
-			row.createDiv({
-				cls: "obsync-history-row-meta",
-				text: `Last seen ${formatTimestamp(summary.latestCreatedAt)} · ${this.deviceText(
-					summary.latestDeviceId,
-					summary.latestDeviceName,
-				)}`,
-			});
-			row.addEventListener("click", () => {
-				this.historyPath = summary.path;
-				this.historyVersions = null;
-				this.onRerender();
-			});
-		}
-	}
-
 	private renderHistoryVersions(parent: HTMLElement, path: string): void {
 		const header = parent.createDiv({ cls: "obsync-history-versions-head" });
-		const back = header.createEl("button", { text: "← All files" });
-		back.addEventListener("click", () => {
-			this.historyPath = null;
-			this.historyVersions = null;
-			this.onRerender();
-		});
+		this.renderBackButton(header, path);
 		const refresh = header.createEl("button", {
 			text: "⟳ Refresh",
 			cls: "obsync-history-refresh",
@@ -175,15 +79,25 @@ export class HistoryTab {
 		header.createSpan({ cls: "obsync-history-path", text: path });
 
 		const body = parent.createDiv({ cls: "obsync-history-list" });
+		if (this.loadedPath !== path) {
+			this.historyVersions = null;
+			this.loadedPath = path;
+		}
 		if (this.historyVersions === null) {
 			body.createDiv({ cls: "obsync-status-line", text: "Loading…" });
+			if (this.loadingPath === path) return;
+			this.loadingPath = path;
 			this.plugin.controller
 				.getFileHistory(path)
 				.then((versions) => {
+					if (this.resolvedPath() !== path) return;
 					this.historyVersions = versions;
+					this.loadingPath = null;
 					this.onRerender();
 				})
 				.catch((err) => {
+					if (this.resolvedPath() !== path) return;
+					this.loadingPath = null;
 					body.empty();
 					body.createDiv({
 						cls: "obsync-history-error",
@@ -260,6 +174,28 @@ export class HistoryTab {
 		} catch (err) {
 			notifyError("Could not update pin", err);
 		}
+	}
+
+	private renderBackButton(header: HTMLElement, path: string): void {
+		const currentPath = this.currentFilePath();
+		const canGoBack =
+			this.explicitPath !== null &&
+			currentPath !== null &&
+			currentPath !== path;
+		if (!canGoBack) return;
+		const back = header.createEl("button", { text: "← Back to current file" });
+		back.addEventListener("click", () => {
+			this.setPath(null);
+			this.onRerender();
+		});
+	}
+
+	private currentFilePath(): string | null {
+		return this.plugin.app.workspace.getActiveFile()?.path ?? null;
+	}
+
+	private resolvedPath(): string | null {
+		return this.explicitPath ?? this.currentFilePath();
 	}
 
 	private async handleRestoreVersion(

@@ -2,8 +2,6 @@ import type { EngineDependencies } from "@/sync/engine";
 import {
 	type FileVersion,
 	loadVersionBytes,
-	type PathHistorySummary,
-	listFileHistories as queryAllHistories,
 	getFileHistory as queryFileHistory,
 	setSnapshotPinned as storeSetSnapshotPinned,
 } from "@/sync/history";
@@ -23,16 +21,6 @@ export class HistoryQueryService {
 			storage: session.storage,
 			key: session.key,
 			path,
-			concurrency: session.concurrency,
-		});
-	}
-
-	async listFileHistories(): Promise<PathHistorySummary[]> {
-		const session = await this.deps.openSession();
-		if (!session) return [];
-		return queryAllHistories({
-			storage: session.storage,
-			key: session.key,
 			concurrency: session.concurrency,
 		});
 	}

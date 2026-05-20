@@ -20,15 +20,6 @@ export interface SnapshotIndex {
 	entries: SnapshotIndexEntry[];
 }
 
-export interface PathHistorySummary {
-	path: string;
-	latestCreatedAt: number;
-	latestDeviceId: string;
-	latestDeviceName?: string;
-	/** Not present in the newest snapshot (file was deleted upstream). */
-	deleted: boolean;
-}
-
 export interface FileVersion {
 	snapshotId: string;
 	hash: string;
