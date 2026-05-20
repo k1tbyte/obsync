@@ -11,30 +11,27 @@ import {
 	SOURCE_CONTROL_VIEW_TYPE,
 } from "../constants";
 import type ObsyncPlugin from "../main";
-import { formatBytes } from "../shared/format";
 import { EConflictStrategy, type SyncStatusSnapshot } from "../sync/controller";
-import { deviceLabel } from "../sync/device";
-import type { FileVersion, PathHistorySummary } from "../sync/history";
 import type { FileDiffModel } from "../sync/projection";
 import { notifyError, notifyInfo } from "./notices";
 import { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
-import { renderConflictPreview } from "./source-control/conflict-preview";
 import {
+	buildTree,
 	confirmAdoptNewVault,
 	confirmBatchResolve,
-	showIgnoredFiles,
-} from "./source-control/modals";
-import { rowFromChange, rowFromConflict } from "./source-control/row-formatter";
-import { buildTree } from "./source-control/tree-builder";
-import {
 	ESection,
 	emptySectionRefs,
 	emptySectionState,
 	type FileRow,
+	HistoryTab,
+	renderConflictPreview,
+	rowFromChange,
+	rowFromConflict,
 	type SectionRefs,
 	type SectionState,
+	showIgnoredFiles,
 	type TreeNode,
-} from "./source-control/types";
+} from "./source-control";
 
 type SectionActionKind = "push" | "pull" | "none";
 
@@ -42,8 +39,6 @@ enum ESourceTab {
 	Changes = "changes",
 	History = "history",
 }
-
-const HISTORY_SEARCH_MIN_CHARS = 2;
 
 export async function openSourceControlHistory(
 	plugin: ObsyncPlugin,
@@ -95,11 +90,7 @@ export class SourceControlView extends ItemView {
 	private readonly loadingPreviews = new Set<string>();
 	private readonly expandedPreviews = new Set<string>();
 	private tab: ESourceTab = ESourceTab.Changes;
-	private historyPath: string | null = null;
-	private historySummaries: PathHistorySummary[] | null = null;
-	private historyVersions: FileVersion[] | null = null;
-	private historyFilter = "";
-	private historyLoading = false;
+	private historyTab!: HistoryTab;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
 		super(leaf);
@@ -120,6 +111,11 @@ export class SourceControlView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.historyTab = new HistoryTab(
+			this.plugin,
+			() => this.render(this.plugin.controller.getSnapshot(), true),
+			(path, history) => openDiffView(this.plugin, path, history),
+		);
 		this.root = this.contentEl;
 		this.root.empty();
 		this.root.addClass("obsync-source-control");
@@ -140,8 +136,7 @@ export class SourceControlView extends ItemView {
 
 	showHistory(path: string | null): void {
 		this.tab = ESourceTab.History;
-		this.historyPath = path;
-		this.historyVersions = null;
+		this.historyTab.setPath(path);
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
@@ -150,8 +145,8 @@ export class SourceControlView extends ItemView {
 	 * (no-op for the Changes tab or the all-files list — avoids useless work).
 	 */
 	refreshHistoryAfterPush(): void {
-		if (this.tab !== ESourceTab.History || this.historyPath === null) return;
-		this.historyVersions = null;
+		if (this.tab !== ESourceTab.History || !this.historyTab.hasPath) return;
+		this.historyTab.clearVersions();
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
@@ -163,7 +158,7 @@ export class SourceControlView extends ItemView {
 			const historyRoot = this.root;
 			historyRoot.empty();
 			this.renderTabBar(historyRoot);
-			this.renderHistoryTab(historyRoot);
+			this.historyTab.render(historyRoot);
 			return;
 		}
 		const signature = this.signatureOf(snapshot);
@@ -301,262 +296,15 @@ export class SourceControlView extends ItemView {
 				if (this.tab === tab) return;
 				this.tab = tab;
 				this.lastSignature = "";
-				if (tab === ESourceTab.History && this.historyPath === null) {
+				if (tab === ESourceTab.History && !this.historyTab.hasPath) {
 					const active = this.plugin.app.workspace.getActiveFile();
-					if (active) {
-						this.historyPath = active.path;
-						this.historyVersions = null;
-					}
+					if (active) this.historyTab.setPath(active.path);
 				}
 				this.render(this.plugin.controller.getSnapshot(), true);
 			});
 		};
 		make(ESourceTab.Changes, "Changes");
 		make(ESourceTab.History, "History");
-	}
-
-	private renderHistoryTab(parent: HTMLElement): void {
-		const pane = parent.createDiv({ cls: "obsync-history-pane" });
-		if (!this.plugin.settings.fileHistoryEnabled) {
-			pane.createDiv({
-				cls: "obsync-status-line",
-				text: "File version history is disabled. Enable it in settings.",
-			});
-			return;
-		}
-		if (this.historyPath !== null) {
-			this.renderHistoryVersions(pane, this.historyPath);
-			return;
-		}
-		this.renderHistoryList(pane);
-	}
-
-	/**
-	 * Resolves a device label, preferring the live current-device name when the
-	 * snapshot was written by this device (so it always matches Settings even
-	 * if an older snapshot stored a stale or empty name).
-	 */
-	private deviceText(deviceId: string, deviceName: string | undefined): string {
-		const current = this.plugin.controller.currentDevice();
-		if (current && current.id === deviceId) return current.name;
-		return deviceLabel(deviceId, deviceName);
-	}
-
-	private renderHistoryList(parent: HTMLElement): void {
-		const search = parent.createEl("input", {
-			cls: "obsync-history-search",
-			attr: { type: "text", placeholder: "Search by path (2+ chars)…" },
-		});
-		search.value = this.historyFilter;
-		const listBody = parent.createDiv({ cls: "obsync-history-list" });
-		search.addEventListener("input", () => {
-			this.historyFilter = search.value;
-			this.renderHistoryListState(listBody);
-		});
-		this.renderHistoryListState(listBody);
-	}
-
-	private renderHistoryListState(listBody: HTMLElement): void {
-		listBody.empty();
-		const query = this.historyFilter.trim();
-		if (query.length < HISTORY_SEARCH_MIN_CHARS) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: `Type ${HISTORY_SEARCH_MIN_CHARS}+ characters to search file history.`,
-			});
-			return;
-		}
-		if (this.historySummaries === null) {
-			listBody.createDiv({ cls: "obsync-status-line", text: "Loading…" });
-			if (this.historyLoading) return;
-			this.historyLoading = true;
-			this.plugin.controller
-				.listFileHistories()
-				.then((summaries) => {
-					this.historySummaries = summaries;
-					this.historyLoading = false;
-					if (listBody.isConnected) this.renderHistoryListState(listBody);
-				})
-				.catch((err) => {
-					this.historyLoading = false;
-					if (!listBody.isConnected) return;
-					listBody.empty();
-					listBody.createDiv({
-						cls: "obsync-history-error",
-						text: `Could not load history: ${errorText(err)}`,
-					});
-				});
-			return;
-		}
-		this.renderHistoryListBody(listBody);
-	}
-
-	private renderHistoryListBody(listBody: HTMLElement): void {
-		listBody.empty();
-		const summaries = this.historySummaries ?? [];
-		if (summaries.length === 0) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: "No stored history yet. Push some changes first.",
-			});
-			return;
-		}
-		const needle = this.historyFilter.trim().toLowerCase();
-		const matches = summaries.filter((s) =>
-			s.path.toLowerCase().includes(needle),
-		);
-		if (matches.length === 0) {
-			listBody.createDiv({
-				cls: "obsync-status-line",
-				text: "No matching files.",
-			});
-			return;
-		}
-		for (const summary of matches) {
-			const row = listBody.createDiv({
-				cls: ["obsync-history-row", "is-clickable"],
-			});
-			row.setAttr("title", summary.path);
-			const title = row.createDiv({ cls: "obsync-history-row-title" });
-			title.setText(summary.path);
-			if (summary.deleted) {
-				title.createSpan({
-					cls: "obsync-history-deleted-badge",
-					text: " (deleted)",
-				});
-			}
-			row.createDiv({
-				cls: "obsync-history-row-meta",
-				text: `Last seen ${formatTimestamp(summary.latestCreatedAt)} · ${this.deviceText(
-					summary.latestDeviceId,
-					summary.latestDeviceName,
-				)}`,
-			});
-			row.addEventListener("click", () => {
-				this.historyPath = summary.path;
-				this.historyVersions = null;
-				this.render(this.plugin.controller.getSnapshot(), true);
-			});
-		}
-	}
-
-	private renderHistoryVersions(parent: HTMLElement, path: string): void {
-		const header = parent.createDiv({ cls: "obsync-history-versions-head" });
-		const back = header.createEl("button", { text: "← All files" });
-		back.addEventListener("click", () => {
-			this.historyPath = null;
-			this.historyVersions = null;
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
-		const refresh = header.createEl("button", {
-			text: "⟳ Refresh",
-			cls: "obsync-history-refresh",
-		});
-		refresh.setAttr("aria-label", "Reload history for this file");
-		refresh.addEventListener("click", () => {
-			this.historyVersions = null;
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
-		header.createSpan({ cls: "obsync-history-path", text: path });
-
-		const body = parent.createDiv({ cls: "obsync-history-list" });
-		if (this.historyVersions === null) {
-			body.createDiv({ cls: "obsync-status-line", text: "Loading…" });
-			this.plugin.controller
-				.getFileHistory(path)
-				.then((versions) => {
-					this.historyVersions = versions;
-					this.render(this.plugin.controller.getSnapshot(), true);
-				})
-				.catch((err) => {
-					body.empty();
-					body.createDiv({
-						cls: "obsync-history-error",
-						text: `Could not load history: ${errorText(err)}`,
-					});
-				});
-			return;
-		}
-		if (this.historyVersions.length === 0) {
-			body.createDiv({
-				cls: "obsync-status-line",
-				text: "No stored history for this file yet.",
-			});
-			return;
-		}
-		const versions = this.historyVersions;
-		versions.forEach((version, index) => {
-			const row = body.createDiv({ cls: "obsync-history-row" });
-			const label =
-				index === 0 ? "Latest" : `Version ${versions.length - index}`;
-			const titleEl = row.createDiv({
-				cls: "obsync-history-row-title",
-				text: label,
-			});
-			if (version.pinned) {
-				titleEl.createSpan({
-					cls: "obsync-history-pinned-badge",
-					text: " (pinned)",
-				});
-			}
-			row.createDiv({
-				cls: "obsync-history-row-meta",
-				text: `${formatTimestamp(version.createdAt)} · ${formatBytes(
-					version.size,
-				)} · ${this.deviceText(version.deviceId, version.deviceName)}`,
-			});
-			const actions = row.createDiv({ cls: "obsync-history-row-actions" });
-			const viewBtn = actions.createEl("button", { text: "View diff" });
-			viewBtn.addEventListener(
-				"click",
-				() =>
-					void openDiffView(this.plugin, path, {
-						hash: version.hash,
-						label: `${label} · ${formatTimestamp(version.createdAt)}`,
-					}),
-			);
-			const restoreBtn = actions.createEl("button", {
-				text: "Restore",
-				cls: "mod-cta",
-			});
-			restoreBtn.addEventListener(
-				"click",
-				() => void this.handleRestoreVersion(path, version.hash),
-			);
-			const pinBtn = actions.createEl("button", {
-				text: version.pinned ? "Unpin" : "Pin",
-			});
-			pinBtn.addEventListener(
-				"click",
-				() => void this.handleTogglePin(version.snapshotId, !version.pinned),
-			);
-		});
-	}
-
-	private async handleTogglePin(
-		snapshotId: string,
-		pinned: boolean,
-	): Promise<void> {
-		try {
-			await this.plugin.controller.setSnapshotPinned(snapshotId, pinned);
-			this.historyVersions = null;
-			this.render(this.plugin.controller.getSnapshot(), true);
-			notifyInfo(pinned ? "Snapshot pinned." : "Snapshot unpinned.");
-		} catch (err) {
-			notifyError("Could not update pin", err);
-		}
-	}
-
-	private async handleRestoreVersion(
-		path: string,
-		hash: string,
-	): Promise<void> {
-		try {
-			await this.plugin.controller.restoreFileVersion(path, hash);
-			notifyInfo("Restored. Review and push the change when ready.");
-		} catch (err) {
-			notifyError("Restore failed", err);
-		}
 	}
 
 	private renderStatusLine(
@@ -1146,12 +894,4 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
-}
-
-function formatTimestamp(ms: number): string {
-	return new Date(ms).toLocaleString();
-}
-
-function errorText(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }

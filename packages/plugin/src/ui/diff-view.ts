@@ -11,12 +11,13 @@ import {
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
 import { formatBytes } from "../shared/format";
-import {
-	buildMergedConflict,
-	hasUnresolvedMarkers,
-} from "../sync/conflict-merge";
 import type { SyncHunk } from "../sync/hunks";
 import { EDiffDirection, type FileDiffModel } from "../sync/projection";
+import {
+	type HunkCardCallbacks,
+	MergeEditorPanel,
+	renderHunkCard,
+} from "./diff";
 import { notifyError, notifyInfo } from "./notices";
 import { openSourceControlView } from "./source-control-view";
 
@@ -39,8 +40,7 @@ export class DiffView extends ItemView {
 	private model: FileDiffModel | null = null;
 	private mode: EDiffMode = EDiffMode.Unified;
 	private merge: MergeView | null = null;
-	private mergeEditor: EditorView | null = null;
-	private mergeEditing = false;
+	private readonly mergePanel = new MergeEditorPanel();
 	private forceText = false;
 	private headerEl: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
@@ -80,7 +80,7 @@ export class DiffView extends ItemView {
 			this.historyHash = state.historyHash ?? null;
 			this.historyLabel = state.historyLabel ?? "Version";
 			this.currentHunkIndex = -1;
-			this.mergeEditing = false;
+			this.mergePanel.reset();
 			this.forceText = false;
 			await this.refreshModel();
 		}
@@ -98,7 +98,7 @@ export class DiffView extends ItemView {
 
 		const handleStatus = debounce(
 			() => {
-				if (this.path && !this.mergeEditing) void this.refreshModel();
+				if (this.path && !this.mergePanel.isEditing) void this.refreshModel();
 			},
 			200,
 			true,
@@ -114,7 +114,7 @@ export class DiffView extends ItemView {
 			this.unsubStatus();
 			this.unsubStatus = null;
 		}
-		this.destroyMerge();
+		this.destroyViews();
 		this.contentEl.empty();
 	}
 
@@ -159,14 +159,14 @@ export class DiffView extends ItemView {
 
 	private renderLoading(): void {
 		if (!this.bodyEl) return;
-		this.destroyMerge();
+		this.destroyViews();
 		this.bodyEl.empty();
 		this.bodyEl.createDiv({ cls: "obsync-diff-empty", text: "Loading…" });
 	}
 
 	private renderError(message: string): void {
 		if (!this.bodyEl) return;
-		this.destroyMerge();
+		this.destroyViews();
 		this.bodyEl.empty();
 		this.bodyEl.createDiv({
 			cls: "obsync-diff-empty",
@@ -193,18 +193,24 @@ export class DiffView extends ItemView {
 		const model = this.model;
 		if (!model) return;
 
-		if (this.mergeEditing) {
+		if (this.mergePanel.isEditing) {
 			const save = header.createEl("button", {
 				cls: "obsync-icon-btn",
 				text: "Save resolution",
 			});
-			save.addEventListener("click", () => void this.saveMerge());
+			save.addEventListener(
+				"click",
+				() =>
+					void this.mergePanel.save(this.plugin, path, (resolved) =>
+						this.advanceAfterResolve(resolved),
+					),
+			);
 			const cancel = header.createEl("button", {
 				cls: "obsync-icon-btn",
 				text: "Cancel",
 			});
 			cancel.addEventListener("click", () => {
-				this.mergeEditing = false;
+				this.mergePanel.reset();
 				this.renderShell();
 			});
 			return;
@@ -262,7 +268,13 @@ export class DiffView extends ItemView {
 				cls: "obsync-icon-btn",
 				text: "Merge…",
 			});
-			mergeBtn.addEventListener("click", () => void this.enterMerge());
+			mergeBtn.addEventListener(
+				"click",
+				() =>
+					void this.mergePanel.enter(this.plugin, path, () =>
+						this.renderShell(),
+					),
+			);
 		}
 
 		if (!model.isBinary && model.hunks.hunks.length > 0) {
@@ -313,7 +325,7 @@ export class DiffView extends ItemView {
 		const body = this.bodyEl;
 		if (!body) return;
 		body.empty();
-		this.destroyMerge();
+		this.destroyViews();
 		this.hunkCards = [];
 		const model = this.model;
 		if (!model) {
@@ -324,8 +336,8 @@ export class DiffView extends ItemView {
 			this.renderBinaryBody(body, model);
 			return;
 		}
-		if (this.mergeEditing) {
-			this.renderMergeEditor(body);
+		if (this.mergePanel.isEditing) {
+			this.mergePanel.render(body);
 			return;
 		}
 		if (this.mode === EDiffMode.Split) {
@@ -398,122 +410,24 @@ export class DiffView extends ItemView {
 			return;
 		}
 		const list = parent.createDiv({ cls: "obsync-hunk-list" });
-		for (const hunk of hunks) this.renderHunkCard(list, hunk, model.direction);
+		const callbacks: HunkCardCallbacks = {
+			onPushHunk: (i) => void this.pushSingleHunk(i),
+			onPullHunk: (i) => void this.pullSingleHunk(i),
+			onRevertHunk: (i) => void this.revertSingleHunk(i),
+			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
+			onSelectHunk: (i) => this.setCurrentHunk(i),
+		};
+		for (const hunk of hunks) {
+			this.hunkCards.push(
+				renderHunkCard(list, hunk, model.direction, callbacks),
+			);
+		}
 		if (
 			this.currentHunkIndex >= 0 &&
 			this.currentHunkIndex < this.hunkCards.length
 		) {
 			this.hunkCards[this.currentHunkIndex]?.addClass("is-current");
 		}
-	}
-
-	private renderHunkCard(
-		parent: HTMLElement,
-		hunk: SyncHunk,
-		direction: EDiffDirection,
-	): void {
-		const card = parent.createDiv({ cls: "obsync-hunk-card" });
-		card.setAttr("data-hunk-index", String(hunk.index));
-		card.addClass(`is-${hunk.kind}`);
-
-		const gutter = card.createDiv({ cls: "obsync-hunk-gutter" });
-		this.renderHunkActions(gutter, hunk, direction);
-
-		const main = card.createDiv({ cls: "obsync-hunk-main" });
-		const meta = main.createDiv({ cls: "obsync-hunk-meta" });
-		meta.createSpan({
-			cls: "obsync-hunk-range",
-			text: `Lines ${hunk.newStart}-${hunk.newStart + Math.max(hunk.newLines, 1) - 1}`,
-		});
-		meta.createSpan({ cls: "obsync-hunk-stats-add", text: `+${hunk.added}` });
-		meta.createSpan({ cls: "obsync-hunk-stats-del", text: `−${hunk.removed}` });
-
-		const pre = main.createEl("pre");
-		for (const line of hunk.lines) {
-			const span = pre.createSpan({ cls: "obsync-unified-line" });
-			if (line.startsWith("+")) span.addClass("is-add");
-			else if (line.startsWith("-")) span.addClass("is-del");
-			span.createSpan({ cls: "obsync-line-prefix", text: line[0] ?? " " });
-			span.createSpan({ cls: "obsync-line-content", text: line.slice(1) });
-		}
-
-		card.addEventListener("click", () => this.setCurrentHunk(hunk.index));
-		this.hunkCards.push(card);
-	}
-
-	private renderHunkActions(
-		parent: HTMLElement,
-		hunk: SyncHunk,
-		direction: EDiffDirection,
-	): void {
-		if (direction === EDiffDirection.History) {
-			this.makeChunkArrow(
-				parent,
-				"↺",
-				"Restore this hunk from the old version",
-				"is-revert",
-				() => void this.restoreHistoryHunk(hunk.index),
-			);
-			return;
-		}
-		if (direction === EDiffDirection.Local) {
-			this.makeChunkArrow(
-				parent,
-				"≫",
-				"Push this hunk to remote",
-				"is-push",
-				() => void this.pushSingleHunk(hunk.index),
-			);
-			this.makeChunkArrow(
-				parent,
-				"↺",
-				"Revert this hunk to baseline",
-				"is-revert",
-				() => void this.revertSingleHunk(hunk.index),
-			);
-		} else if (direction === EDiffDirection.Remote) {
-			this.makeChunkArrow(
-				parent,
-				"≪",
-				"Pull this hunk from remote",
-				"is-pull",
-				() => void this.pullSingleHunk(hunk.index),
-			);
-		} else {
-			this.makeChunkArrow(
-				parent,
-				"←",
-				"Keep local",
-				"is-pull",
-				() => void this.revertSingleHunk(hunk.index),
-			);
-			this.makeChunkArrow(
-				parent,
-				"→",
-				"Accept remote",
-				"is-push",
-				() => void this.pullSingleHunk(hunk.index),
-			);
-		}
-	}
-
-	private makeChunkArrow(
-		parent: HTMLElement,
-		symbol: string,
-		title: string,
-		extraClass: string,
-		onClick: () => void,
-	): void {
-		const btn = parent.createEl("button", {
-			cls: `obsync-chunk-arrow ${extraClass}`,
-			text: symbol,
-		});
-		btn.setAttr("aria-label", title);
-		btn.setAttr("title", title);
-		btn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			onClick();
-		});
 	}
 
 	private setCurrentHunk(index: number): void {
@@ -650,8 +564,6 @@ export class DiffView extends ItemView {
 	}
 
 	private async advanceAfterResolve(resolvedPath: string): Promise<void> {
-		// Because of STATUS_EVENT, if we don't change path here, the leaf will detach.
-		// Let's try to find the next conflict BEFORE refreshModel is called by the resolve operation.
 		const next = this.getNextConflictPath(resolvedPath);
 		if (next) {
 			this.path = next;
@@ -697,69 +609,11 @@ export class DiffView extends ItemView {
 		await this.refreshModel();
 	}
 
-	private mergeText = "";
-
-	private async enterMerge(): Promise<void> {
-		if (!this.path) return;
-		try {
-			const texts = await this.plugin.controller.getConflictThreeWay(this.path);
-			if (!texts) {
-				notifyError(
-					"Cannot three-way merge this file (binary or no common ancestor). Use Keep local / Accept remote.",
-				);
-				return;
-			}
-			const merged = buildMergedConflict(texts.base, texts.local, texts.remote);
-			this.mergeText = merged.text;
-			this.mergeEditing = true;
-			this.renderShell();
-			if (!merged.hasConflicts) {
-				notifyInfo("No overlapping changes — auto-merged. Review and save.");
-			}
-		} catch (err) {
-			notifyError("Merge failed", err);
-		}
-	}
-
-	private renderMergeEditor(parent: HTMLElement): void {
-		parent.createDiv({
-			cls: "obsync-diff-hint",
-			text: "Resolve every <<<<<<< / ||||||| / ======= / >>>>>>> marker, then Save resolution. The result is pushed and the conflict cleared.",
-		});
-		const host = parent.createDiv({ cls: "obsync-merge-host" });
-		this.mergeEditor = new EditorView({
-			doc: this.mergeText,
-			extensions: [EditorView.lineWrapping],
-			parent: host,
-		});
-	}
-
-	private async saveMerge(): Promise<void> {
-		if (!this.path || !this.mergeEditor) return;
-		const content = this.mergeEditor.state.doc.toString();
-		if (hasUnresolvedMarkers(content)) {
-			notifyError("Resolve all conflict markers before saving.");
-			return;
-		}
-		const resolved = this.path;
-		try {
-			await this.plugin.controller.resolveConflictMerged(resolved, content);
-			this.mergeEditing = false;
-			notifyInfo("Conflict resolved with merged content.");
-			await this.advanceAfterResolve(resolved);
-		} catch (err) {
-			notifyError("Save resolution failed", err);
-		}
-	}
-
-	private destroyMerge(): void {
+	private destroyViews(): void {
 		if (this.merge) {
 			this.merge.destroy();
 			this.merge = null;
 		}
-		if (this.mergeEditor) {
-			this.mergeEditor.destroy();
-			this.mergeEditor = null;
-		}
+		this.mergePanel.destroy();
 	}
 }

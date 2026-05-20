@@ -1,40 +1,19 @@
 import { type App, PluginSettingTab, Setting } from "obsidian";
-import {
-	AUTO_PULL_MAX_MINUTES,
-	AUTO_PULL_MIN_MINUTES,
-	FILE_HISTORY_MAX_SNAPSHOTS,
-	FILE_HISTORY_MIN_SNAPSHOTS,
-} from "../constants";
-import { clearCachedPassphrase } from "../crypto/passphrase-cache";
 import type ObsyncPlugin from "../main";
-import {
-	EStorageBackend,
-	type GoogleDriveStorageConfig,
-	type StorageAdapterConfig,
-} from "../storage/config";
-import { EFieldKind, type SettingsFieldSpec } from "../storage/field-spec";
-import {
-	describeStorageTarget,
-	getDescriptor,
-	listBackends,
-} from "../storage/registry";
 import { defaultDeviceName } from "../sync/device";
-import { clampMaxSnapshots } from "../sync/history";
-import { PassphraseRotatedError } from "../sync/keyfile";
 import { notifyError, notifyInfo } from "../ui/notices";
-import { askNewPassphrase } from "../ui/passphrase-modal";
-import { confirmRemoteReset } from "../ui/reset-modal";
 import {
 	askSettingsTransferInput,
 	showSettingsTransferExport,
 } from "../ui/settings-transfer-modal";
-import { openConfirmModal } from "../ui/source-control/modals";
 import { renderLogsView } from "./logs-view";
+import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import {
-	activeStorage,
-	type ObsyncSettings,
-	type SettingsSyncCategories,
-} from "./model";
+	renderAutomationSection,
+	renderBackendSection,
+	renderMaintenanceSection,
+	renderSecuritySection,
+} from "./sections";
 
 enum ESettingsViewTab {
 	Settings = "settings",
@@ -82,7 +61,6 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 ];
 
 const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
-const BACKEND_SETTINGS_CHANGED = "Storage backend changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MIN_MAX_FILE_MB = 1;
 
@@ -126,15 +104,6 @@ const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 	},
 ];
 
-const AUTOMATION_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
-	{
-		name: "Auto-pull on startup",
-		desc: "Compare with remote shortly after Obsidian launches and pull non-conflicting changes.",
-		get: (s) => s.autoPullOnStartup,
-		set: (v) => ({ autoPullOnStartup: v }),
-	},
-];
-
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
 	private activeTab = ESettingsViewTab.Settings;
@@ -162,15 +131,19 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		this.renderBackendSection(containerEl);
+		renderBackendSection(containerEl, this.plugin, () => this.display());
 		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
 		this.renderIgnoreSection(containerEl);
-		this.renderAutomationSection(containerEl);
+		this.realtimeStatusUnsub = renderAutomationSection(
+			containerEl,
+			this.plugin,
+			() => this.display(),
+		);
 		this.renderUiSection(containerEl);
 		this.renderAdvancedSection(containerEl);
-		this.renderMaintenanceSection(containerEl);
-		this.renderSecuritySection(containerEl);
+		renderMaintenanceSection(containerEl, this.plugin);
+		renderSecuritySection(containerEl, this.plugin, () => this.display());
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
@@ -193,134 +166,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			this.activeTab = tab;
 			this.display();
 		});
-	}
-
-	private renderBackendSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Backend").setHeading();
-		new Setting(parent).setDesc(
-			"Credentials are stored locally on this device and never uploaded.",
-		);
-
-		const settings = this.plugin.settings;
-		const activeKind = settings.activeStorageKind;
-		new Setting(parent)
-			.setName("Storage backend")
-			.setDesc(
-				"Select the remote that holds the encrypted manifest and objects.",
-			)
-			.addDropdown((dropdown) => {
-				for (const entry of listBackends()) {
-					dropdown.addOption(entry.kind, entry.label);
-				}
-				dropdown.setValue(activeKind);
-				dropdown.onChange((value) => {
-					const nextKind = value as EStorageBackend;
-					if (nextKind === settings.activeStorageKind) return;
-
-					// Each backend keeps its own saved config; just switch the
-					// active pointer (seeding defaults on first use).
-					if (!settings.storageConfigs[nextKind]) {
-						settings.storageConfigs[nextKind] =
-							getDescriptor(nextKind).defaults();
-					}
-					settings.activeStorageKind = nextKind;
-
-					void this.plugin.saveSettings().then(() => {
-						this.plugin.scheduleScopeRefresh(BACKEND_SETTINGS_CHANGED);
-						this.display();
-					});
-				});
-			});
-
-		const descriptor = getDescriptor(activeKind);
-		for (const field of descriptor.fields) {
-			this.renderBackendField(parent, field);
-		}
-
-		if (activeKind === EStorageBackend.GoogleDrive) {
-			this.renderGoogleDriveAuth(parent);
-		}
-	}
-
-	private renderBackendField(
-		parent: HTMLElement,
-		field: SettingsFieldSpec,
-	): void {
-		const setting = new Setting(parent).setName(field.name);
-		if (field.desc) setting.setDesc(field.desc);
-		const storage = activeStorage(this.plugin.settings) as unknown as Record<
-			string,
-			unknown
-		>;
-		if (field.kind === EFieldKind.Toggle) {
-			setting.addToggle((t) =>
-				t.setValue(Boolean(storage[field.key])).onChange((v) => {
-					this.updateStorage({ [field.key]: v });
-				}),
-			);
-			return;
-		}
-		if (field.kind === EFieldKind.Number) {
-			const numberField = field;
-			setting.addText((t) => {
-				t.inputEl.type = "number";
-				t.inputEl.min = String(numberField.min);
-				const raw = storage[numberField.key];
-				const value = typeof raw === "number" ? raw : numberField.fallback;
-				t.setValue(String(value)).onChange((v) => {
-					const parsed = Number.parseInt(v, 10);
-					const next = Number.isFinite(parsed)
-						? Math.max(numberField.min, parsed)
-						: numberField.fallback;
-					this.updateStorage({ [numberField.key]: next });
-				});
-			});
-			return;
-		}
-		setting.addText((t) => {
-			if (field.kind === EFieldKind.Password) t.inputEl.type = "password";
-			if (field.placeholder) t.setPlaceholder(field.placeholder);
-			const raw = storage[field.key];
-			const text = typeof raw === "string" ? raw : "";
-			t.setValue(text).onChange((v) => {
-				this.updateStorage({ [field.key]: v.trim() });
-			});
-		});
-	}
-
-	private renderGoogleDriveAuth(parent: HTMLElement): void {
-		const config = activeStorage(
-			this.plugin.settings,
-		) as GoogleDriveStorageConfig;
-		const isAuth = Boolean(config.refreshToken);
-
-		new Setting(parent)
-			.setName("Google account")
-			.setDesc(
-				isAuth
-					? "Authenticated. Tokens are securely stored."
-					: "Not authenticated. Click to authorize.",
-			)
-			.addButton((b) =>
-				b
-					.setButtonText(isAuth ? "Re-authenticate" : "Log in")
-					.setCta()
-					.onClick(() => {
-						const url =
-							config.authServerUrl || "https://obsync-auth.k1tbyte.workers.dev";
-						window.open(`${url}/auth`);
-					}),
-			);
-	}
-
-	private updateStorage(patch: Record<string, unknown>): void {
-		const settings = this.plugin.settings;
-		const next = {
-			...activeStorage(settings),
-			...patch,
-		} as StorageAdapterConfig;
-		settings.storageConfigs[settings.activeStorageKind] = next;
-		void this.plugin.saveSettings();
 	}
 
 	private renderTransferSection(parent: HTMLElement): void {
@@ -389,163 +234,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			});
 	}
 
-	private renderAutomationSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Automation").setHeading();
-		for (const toggle of AUTOMATION_TOGGLES)
-			this.renderToggleField(parent, toggle);
-
-		this.renderNumberField(parent, {
-			name: "Auto-pull interval (minutes)",
-			desc: `Set to ${AUTO_PULL_MIN_MINUTES} to disable. Max ${AUTO_PULL_MAX_MINUTES}.`,
-			get: (s) => String(s.autoPullIntervalMinutes),
-			parse: (raw) => {
-				const parsed = Number.parseInt(raw, 10);
-				return Math.max(
-					AUTO_PULL_MIN_MINUTES,
-					Math.min(AUTO_PULL_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
-				);
-			},
-			set: (value) => ({ autoPullIntervalMinutes: value }),
-		});
-
-		new Setting(parent)
-			.setName("Auto-refresh on file change")
-			.setDesc(
-				"Recompare with the remote shortly after a file changes, keeping the Changes list current. Disable to refresh only when you click compare. (Auto-push on save also requires this.)",
-			)
-			.addToggle((t) =>
-				t
-					.setValue(this.plugin.settings.autoRefreshOnFileChange)
-					.onChange((v) => this.update({ autoRefreshOnFileChange: v })),
-			);
-
-		new Setting(parent)
-			.setName("Auto-push on save")
-			.setDesc(
-				"Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.autoPushOnSave).onChange((v) => {
-					this.update({ autoPushOnSave: v });
-					this.display();
-				}),
-			);
-
-		if (this.plugin.settings.autoPushOnSave) {
-			const subSetting = new Setting(parent)
-				.setName("Push only the saved file")
-				.setDesc(
-					"When a file is saved, push just that file instead of every pending local change.",
-				)
-				.addToggle((t) =>
-					t
-						.setValue(this.plugin.settings.autoPushOnSaveCurrentFileOnly)
-						.onChange((v) => this.update({ autoPushOnSaveCurrentFileOnly: v })),
-				);
-			subSetting.settingEl.addClass("obsync-sub-setting");
-		}
-
-		new Setting(parent)
-			.setName("File version history")
-			.setDesc(
-				"Keep past versions of files so you can view or restore them. Adds a small encrypted snapshot per push; old versions are pruned automatically.",
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.fileHistoryEnabled).onChange((v) => {
-					this.update({ fileHistoryEnabled: v });
-					this.display();
-				}),
-			);
-
-		if (this.plugin.settings.fileHistoryEnabled) {
-			const historyLimit = new Setting(parent)
-				.setName("Versions to keep")
-				.setDesc(
-					`How many snapshots to retain (${FILE_HISTORY_MIN_SNAPSHOTS}–${FILE_HISTORY_MAX_SNAPSHOTS}). Older versions are garbage-collected.`,
-				)
-				.addText((t) =>
-					t
-						.setValue(String(this.plugin.settings.fileHistoryMaxSnapshots))
-						.onChange((raw) =>
-							this.update({
-								fileHistoryMaxSnapshots: clampMaxSnapshots(
-									Number.parseInt(raw, 10),
-								),
-							}),
-						),
-				);
-			historyLimit.settingEl.addClass("obsync-sub-setting");
-
-			const autoRefresh = new Setting(parent)
-				.setName("Auto-refresh history after push")
-				.setDesc(
-					"Reload the open file-history view automatically when a push completes. Disable to refresh only via the ⟳ button.",
-				)
-				.addToggle((t) =>
-					t
-						.setValue(this.plugin.settings.historyAutoRefresh)
-						.onChange((v) => this.update({ historyAutoRefresh: v })),
-				);
-			autoRefresh.settingEl.addClass("obsync-sub-setting");
-		}
-
-		this.renderToggleField(parent, {
-			name: "Real-time sync signals",
-			desc: "Connect via WebSocket to instantly notify other devices when you push. Other devices will auto-pull immediately.",
-			get: (s) => s.realtimeSync,
-			set: (v) => {
-				this.plugin.settings.realtimeSync = v;
-				void this.plugin.saveSettings().then(() => this.plugin.initRealtime());
-				return { realtimeSync: v };
-			},
-		});
-
-		new Setting(parent)
-			.setName("Relay server URL")
-			.setDesc("WebSocket endpoint for sync signals.")
-			.addText((t) => {
-				t.setPlaceholder("wss://...")
-					.setValue(this.plugin.settings.realtimeServerUrl)
-					.onChange((v) => {
-						this.plugin.settings.realtimeServerUrl = v.trim();
-						void this.plugin
-							.saveSettings()
-							.then(() => this.plugin.initRealtime());
-					});
-			});
-
-		new Setting(parent)
-			.setName("Relay token")
-			.setDesc(
-				"Secret token required by the relay server. Must match the TOKEN set at deploy time.",
-			)
-			.addText((t) => {
-				t.inputEl.type = "password";
-				t.setPlaceholder("••••••••")
-					.setValue(this.plugin.settings.realtimeToken)
-					.onChange((v) => {
-						this.plugin.settings.realtimeToken = v.trim();
-						void this.plugin
-							.saveSettings()
-							.then(() => this.plugin.initRealtime());
-					});
-			});
-
-		const statusSetting = new Setting(parent).setName("Relay status");
-		const updateStatus = (connected: boolean): void => {
-			statusSetting.setDesc(
-				!this.plugin.settings.realtimeSync
-					? "Relay is disabled."
-					: connected
-						? "● Connected"
-						: "○ Not connected",
-			);
-		};
-		updateStatus(this.plugin.isRealtimeConnected());
-		this.realtimeStatusUnsub =
-			this.plugin.subscribeRealtimeStatus(updateStatus);
-	}
-
 	private renderUiSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Interface").setHeading();
 		for (const toggle of UI_TOGGLES) this.renderToggleField(parent, toggle);
@@ -574,161 +262,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
 			refreshScope: true,
 		});
-	}
-
-	private renderMaintenanceSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Maintenance").setHeading();
-
-		new Setting(parent)
-			.setName("Verify remote integrity")
-			.setDesc("Check every referenced object exists and decrypts to its hash.")
-			.addButton((button) =>
-				button
-					.setButtonText("Verify")
-					.onClick(() => void this.handleVerifyRemote()),
-			);
-
-		new Setting(parent)
-			.setName("Deep-clean orphaned objects")
-			.setDesc(
-				"List storage and delete blobs/snapshots unreachable from the manifest or history.",
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Deep-clean")
-					.setWarning()
-					.onClick(() => void this.handleDeepClean()),
-			);
-
-		new Setting(parent)
-			.setName("Reset remote storage")
-			.setDesc(
-				"Delete the remote Obsync manifest and objects on the configured backend.",
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Reset remote")
-					.setWarning()
-					.onClick(() => void this.handleResetRemote()),
-			);
-	}
-
-	private async handleVerifyRemote(): Promise<void> {
-		try {
-			const result = await this.plugin.controller.verifyRemote(true);
-			if (!result) {
-				this.notifyError("Configure a storage backend first.");
-				return;
-			}
-			if (result.missing.length === 0 && result.corrupt.length === 0) {
-				notifyInfo(`Integrity OK — ${result.checked} object(s) verified.`);
-				return;
-			}
-			this.notifyError(
-				`Integrity issues: ${result.missing.length} missing, ${result.corrupt.length} corrupt. See logs.`,
-			);
-		} catch (err) {
-			this.notifyError(err);
-		}
-	}
-
-	private async handleDeepClean(): Promise<void> {
-		const confirmed = await openConfirmModal({
-			app: this.app,
-			title: "Deep-clean orphaned objects?",
-			body: [
-				"Permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
-				"Safe in normal operation, but cannot be undone.",
-			],
-			confirmLabel: "Deep-clean",
-			confirmClass: "mod-warning",
-		});
-		if (!confirmed) return;
-		try {
-			const result = await this.plugin.controller.deepCleanRemote();
-			if (!result) {
-				this.notifyError("Configure a storage backend first.");
-				return;
-			}
-			notifyInfo(
-				`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
-			);
-		} catch (err) {
-			this.notifyError(err);
-		}
-	}
-
-	private renderSecuritySection(parent: HTMLElement): void {
-		new Setting(parent).setName("Encryption").setHeading();
-
-		const status = this.plugin.hasPassphrase()
-			? "Passphrase is loaded for this session."
-			: "Passphrase is not set. You will be prompted before the next sync.";
-
-		new Setting(parent)
-			.setName("Cache passphrase between launches")
-			.setDesc(
-				"Stores the passphrase encrypted with a per-device key inside the plugin folder. " +
-					"Disable for stricter security on shared devices.",
-			)
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.cachePassphrase).onChange(async (v) => {
-					this.update({ cachePassphrase: v });
-					if (!v) {
-						await clearCachedPassphrase(
-							this.plugin.app.vault.adapter,
-							this.plugin.app.vault.configDir,
-						);
-					}
-				}),
-			);
-
-		new Setting(parent)
-			.setName("Passphrase")
-			.setDesc(status)
-			.addButton((b) =>
-				b
-					.setButtonText(this.plugin.hasPassphrase() ? "Replace" : "Set")
-					.onClick(async () => {
-						await this.plugin.promptPassphrase(true);
-						this.display();
-					}),
-			)
-			.addButton((b) =>
-				b
-					.setButtonText("Forget")
-					.setWarning()
-					.setDisabled(!this.plugin.hasPassphrase())
-					.onClick(async () => {
-						await this.plugin.forgetPassphrase();
-						notifyInfo("passphrase forgotten.");
-						this.display();
-					}),
-			);
-
-		new Setting(parent)
-			.setName("Rotate passphrase")
-			.setDesc(
-				"Switch to a new passphrase. Re-wraps the data key only — notes are not re-encrypted, so it is instant. All other devices must enter the new passphrase afterwards.",
-			)
-			.addButton((b) =>
-				b.setButtonText("Change…").onClick(async () => {
-					const next = await askNewPassphrase(this.plugin.app);
-					if (!next) return;
-					try {
-						const epoch = await this.plugin.changePassphrase(next);
-						if (epoch === null) return;
-						notifyInfo(`Passphrase changed (key epoch ${epoch}).`);
-						this.display();
-					} catch (err) {
-						if (err instanceof PassphraseRotatedError) {
-							notifyError("Current passphrase is incorrect.");
-							return;
-						}
-						this.notifyError(err);
-					}
-				}),
-			);
 	}
 
 	private renderToggleField(
@@ -793,21 +326,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		} catch (err) {
 			this.notifyError(err);
 		}
-	}
-
-	private async handleResetRemote(): Promise<void> {
-		const confirmed = await confirmRemoteReset(this.app, {
-			description: describeStorageTarget(activeStorage(this.plugin.settings)),
-		});
-		if (!confirmed) return;
-		const ok = await this.plugin.controller.resetRemoteStorage();
-		if (!ok) {
-			this.notifyError(
-				this.plugin.controller.getSnapshot().error ?? "Unknown reset error",
-			);
-			return;
-		}
-		notifyInfo("remote storage reset.");
 	}
 
 	private notifyError(err: unknown): void {
