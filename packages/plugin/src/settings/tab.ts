@@ -1,10 +1,13 @@
-import { type App, PluginSettingTab, Setting } from "obsidian";
+import { type App, PluginSettingTab, Setting, TFile } from "obsidian";
+
+import { IGNORE_FILE_NAME } from "@/constants";
 import type ObsyncPlugin from "@/main";
 import { defaultDeviceName } from "@/sync/device";
 import {
 	askSettingsTransferInput,
 	notifyError,
 	notifyInfo,
+	openInEditor,
 	showSettingsTransferExport,
 } from "@/ui";
 import { renderLogsView } from "./logs-view";
@@ -227,21 +230,26 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private renderIgnoreSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Ignore patterns").setHeading();
+		new Setting(parent).setName("Device-local ignore patterns").setHeading();
 		new Setting(parent).setDesc(
-			"Gitignore-style patterns merged with the vault's .syncignore file. One per line.",
+			"Gitignore-style patterns used only on this device, in addition to the shared syncignore.md note in the vault root. One per line.",
 		);
 
 		new Setting(parent)
 			.setName("Patterns")
-			.setDesc("Applied after .syncignore in the vault root.")
+			.setDesc("Applied after the shared syncignore.md note.")
 			.addTextArea((t) => {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;
 				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) =>
 					this.update({ ignorePatterns: v }, { refreshScope: true }),
 				);
-			});
+			})
+			.addButton((button) =>
+				button
+					.setButtonText("Open syncignore.md")
+					.onClick(() => void this.handleOpenSharedIgnore()),
+			);
 	}
 
 	private renderUiSection(parent: HTMLElement): void {
@@ -333,6 +341,21 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		} catch (err) {
 			this.notifyError(err);
 		}
+	}
+
+	private async handleOpenSharedIgnore(): Promise<void> {
+		const existing = this.app.vault.getAbstractFileByPath(IGNORE_FILE_NAME);
+		if (existing instanceof TFile) {
+			await openInEditor(this.app, IGNORE_FILE_NAME);
+			return;
+		}
+		if (existing) {
+			notifyError(`${IGNORE_FILE_NAME} already exists and is not a file.`);
+			return;
+		}
+		await this.app.vault.create(IGNORE_FILE_NAME, "");
+		notifyInfo(`${IGNORE_FILE_NAME} created.`);
+		await openInEditor(this.app, IGNORE_FILE_NAME);
 	}
 
 	private notifyError(err: unknown): void {

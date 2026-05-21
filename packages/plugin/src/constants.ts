@@ -4,7 +4,7 @@ export const STATE_FILE_NAME = "state.json";
 export const DEVICE_KEY_FILE_NAME = "device.key";
 export const PASSPHRASE_CACHE_FILE_NAME = "passphrase.enc";
 
-export const IGNORE_FILE_NAME = ".syncignore";
+export const IGNORE_FILE_NAME = "syncignore.md";
 
 export const REMOTE_MANIFEST_KEY = "manifest.json.enc";
 export const REMOTE_OBJECTS_PREFIX = "objects/";

@@ -10,7 +10,7 @@ import {
 	pushPaths,
 } from "../src/sync/engine";
 import { readSnapshotIndex } from "../src/sync/history/store";
-import type { SessionState } from "../src/types";
+import { EChangeType, type SessionState } from "../src/types";
 import { createScopePolicy } from "../src/vault/scope";
 import { FakeStorage } from "./helpers/fake-storage";
 import { InMemoryAdapter } from "./helpers/in-memory-adapter";
@@ -75,6 +75,123 @@ describe("engine round-trip", () => {
 		expect(cmp2.diff.localChanges).toHaveLength(0);
 		expect(cmp2.diff.remoteChanges).toHaveLength(0);
 		expect(cmp2.diff.conflicts).toHaveLength(0);
+	});
+
+	it("treats a newly shared-ignored tracked file as a local deletion", async () => {
+		const adapter = new InMemoryAdapter();
+		const storage = new FakeStorage();
+		adapter.putText("note.md", "hello");
+		let state = freshState("A");
+
+		const initial = await compare(deps(adapter, storage, state));
+		const manifest = await pushPaths(deps(adapter, storage, state), initial, [
+			"note.md",
+		]);
+		state = advanceSessionAfterPush(state, initial, manifest);
+
+		const sharedIgnoreScope = createScopePolicy({
+			settingsSync: DEFAULT_SETTINGS_SYNC,
+			configDir: ".obsidian",
+			sharedIgnore: {
+				ignores(path) {
+					return path === "note.md";
+				},
+			},
+		});
+		const ignored = await compare({
+			...deps(adapter, storage, state),
+			scope: sharedIgnoreScope,
+		});
+
+		expect(ignored.diff.localChanges).toEqual([
+			{
+				path: "note.md",
+				type: EChangeType.LocalDelete,
+				localHash: null,
+				remoteHash: manifest.files["note.md"]?.hash ?? null,
+			},
+		]);
+		expect(ignored.diff.remoteChanges).toEqual([]);
+		expect(ignored.diff.conflicts).toEqual([]);
+	});
+
+	it("keeps a tracked file preserved remotely when only a local ignore matches it", async () => {
+		const adapter = new InMemoryAdapter();
+		const storage = new FakeStorage();
+		adapter.putText("note.md", "hello");
+		let state = freshState("A");
+
+		const initial = await compare(deps(adapter, storage, state));
+		const manifest = await pushPaths(deps(adapter, storage, state), initial, [
+			"note.md",
+		]);
+		state = advanceSessionAfterPush(state, initial, manifest);
+
+		const localIgnoreScope = createScopePolicy({
+			settingsSync: DEFAULT_SETTINGS_SYNC,
+			configDir: ".obsidian",
+			localIgnore: matchPaths("note.md"),
+		});
+		const ignored = await compare({
+			...deps(adapter, storage, state),
+			scope: localIgnoreScope,
+		});
+
+		expect(ignored.diff.localChanges).toEqual([]);
+		expect(ignored.diff.remoteChanges).toEqual([]);
+		expect(ignored.remote?.files["note.md"]).toEqual(manifest.files["note.md"]);
+	});
+
+	it("removes a shared-ignored tracked file from remote on push and on other devices' pull", async () => {
+		const storage = new FakeStorage();
+		const adapterA = new InMemoryAdapter();
+		adapterA.putText("note.md", "shared body");
+		let stateA = freshState("A");
+		const initialA = await compare(deps(adapterA, storage, stateA));
+		const manifestA = await pushPaths(
+			deps(adapterA, storage, stateA),
+			initialA,
+			["note.md"],
+		);
+		stateA = advanceSessionAfterPush(stateA, initialA, manifestA);
+
+		const adapterB = new InMemoryAdapter();
+		let stateB = freshState("B");
+		const compareB = await compare(deps(adapterB, storage, stateB));
+		await pullPaths(deps(adapterB, storage, stateB), compareB, ["note.md"]);
+		stateB = { ...stateB, vaultId: manifestA.vaultId, baseline: manifestA };
+		expect(adapterB.readText("note.md")).toBe("shared body");
+
+		const sharedIgnoreScope = createScopePolicy({
+			settingsSync: DEFAULT_SETTINGS_SYNC,
+			configDir: ".obsidian",
+			sharedIgnore: matchPaths("note.md"),
+		});
+		const compareIgnored = await compare({
+			...deps(adapterA, storage, stateA),
+			scope: sharedIgnoreScope,
+		});
+		const manifestIgnored = await pushPaths(
+			{ ...deps(adapterA, storage, stateA), scope: sharedIgnoreScope },
+			compareIgnored,
+			["note.md"],
+		);
+
+		expect(manifestIgnored.files["note.md"]).toBeUndefined();
+
+		const compareDeleted = await compare(deps(adapterB, storage, stateB));
+		expect(compareDeleted.diff.remoteChanges).toEqual([
+			{
+				path: "note.md",
+				type: EChangeType.RemoteDelete,
+				localHash: manifestA.files["note.md"]?.hash ?? null,
+				remoteHash: null,
+			},
+		]);
+		await pullPaths(deps(adapterB, storage, stateB), compareDeleted, [
+			"note.md",
+		]);
+		expect(adapterB.hasFile("note.md")).toBe(false);
 	});
 
 	it("local edit pushes a child manifest", async () => {
@@ -164,3 +281,12 @@ describe("engine round-trip", () => {
 		expect(snapshotBlobs.length).toBe(index.entries.length + 1);
 	});
 });
+
+function matchPaths(...paths: ReadonlyArray<string>) {
+	const pathSet = new Set(paths);
+	return {
+		ignores(path: string) {
+			return pathSet.has(path);
+		},
+	};
+}

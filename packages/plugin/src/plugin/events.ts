@@ -21,7 +21,8 @@ export function registerFileHistoryMenu(plugin: ObsyncPlugin): void {
 
 export function registerIgnoreFileRefresh(plugin: ObsyncPlugin): void {
 	const refreshIfIgnoreFile = (file: TAbstractFile, oldPath?: string): void => {
-		if (file.path !== IGNORE_FILE_NAME && oldPath !== IGNORE_FILE_NAME) return;
+		if (!isTrackedIgnorePath(file.path) && !isTrackedIgnorePath(oldPath))
+			return;
 		plugin.scheduleScopeRefresh("Ignore rules changed.");
 	};
 
@@ -53,4 +54,8 @@ export function registerStatePersistenceFlush(
 		if (document.visibilityState === "hidden") flush();
 	});
 	plugin.registerDomEvent(window, "beforeunload", flush);
+}
+
+function isTrackedIgnorePath(path?: string): boolean {
+	return path === IGNORE_FILE_NAME;
 }

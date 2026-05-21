@@ -7,6 +7,7 @@ import {
 	CONFIG_SUBDIR_DENYLIST,
 	CONFIG_THEMES_DIR,
 	DEVICE_LOCAL_PLUGIN_IDS,
+	IGNORE_FILE_NAME,
 	PLUGIN_ID,
 	VAULT_SUBDIR_DENYLIST,
 } from "../constants";
@@ -16,6 +17,7 @@ import type { IgnoreMatcher } from "./ignore";
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
+	includesInDiff(path: string): boolean;
 	canDescend(dir: string): boolean;
 	classify(path: string): EFileKind;
 	isIgnoredByPattern(path: string): boolean;
@@ -24,7 +26,8 @@ export interface ScopePolicy {
 export interface ScopeOptions {
 	settingsSync: SettingsSyncCategories;
 	configDir: string;
-	ignore?: IgnoreMatcher;
+	sharedIgnore?: IgnoreMatcher;
+	localIgnore?: IgnoreMatcher;
 }
 
 export function createScopePolicy(options: ScopeOptions): ScopePolicy {
@@ -50,23 +53,22 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	);
 
 	const sync = options.settingsSync;
-	const ignoreMatcher = options.ignore;
+	const sharedIgnoreMatcher = options.sharedIgnore;
+	const localIgnoreMatcher = options.localIgnore;
 
 	return {
 		includes(rawPath) {
 			const path = normalize(rawPath);
-			if (!path) return false;
-			if (isInVaultDenylist(path)) return false;
-			if (path.startsWith(ownPluginPrefix)) return false;
-
-			if (path.startsWith(configPrefix)) {
-				if (!isConfigAllowed(path)) return false;
-			} else if (hasDotSegment(path)) {
-				return false;
-			}
-
-			if (ignoreMatcher?.ignores(path)) return false;
+			if (!isPathAllowed(path)) return false;
+			if (isIgnoreFile(path)) return true;
+			if (isSharedIgnored(path) || isLocalIgnored(path)) return false;
 			return true;
+		},
+		includesInDiff(rawPath) {
+			const path = normalize(rawPath);
+			if (!isPathAllowed(path)) return false;
+			if (isIgnoreFile(path)) return true;
+			return !isLocalIgnored(path);
 		},
 		canDescend(rawDir) {
 			const dir = normalize(rawDir);
@@ -75,8 +77,8 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (isInVaultDenylist(dirPath)) return false;
 			if (dirPath.startsWith(ownPluginPrefix)) return false;
 			if (
-				ignoreMatcher &&
-				(ignoreMatcher.ignores(dir) || ignoreMatcher.ignores(dirPath))
+				isIgnoredDir(sharedIgnoreMatcher, dir, dirPath) ||
+				isIgnoredDir(localIgnoreMatcher, dir, dirPath)
 			) {
 				return false;
 			}
@@ -98,9 +100,36 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (path.startsWith(ownPluginPrefix)) return false;
 			if (path.startsWith(configPrefix)) return false;
 			if (hasDotSegment(path)) return false;
-			return Boolean(ignoreMatcher?.ignores(path));
+			if (isIgnoreFile(path)) return false;
+			return isSharedIgnored(path) || isLocalIgnored(path);
 		},
 	};
+
+	function isPathAllowed(path: string): boolean {
+		if (!path) return false;
+		if (isInVaultDenylist(path)) return false;
+		if (path.startsWith(ownPluginPrefix)) return false;
+
+		if (path.startsWith(configPrefix)) {
+			return isConfigAllowed(path);
+		}
+		if (hasDotSegment(path)) return false;
+		return true;
+	}
+
+	function isIgnoreFile(path: string): boolean {
+		return path === IGNORE_FILE_NAME;
+	}
+
+	function isSharedIgnored(path: string): boolean {
+		if (isIgnoreFile(path)) return false;
+		return Boolean(sharedIgnoreMatcher?.ignores(path));
+	}
+
+	function isLocalIgnored(path: string): boolean {
+		if (isIgnoreFile(path)) return false;
+		return Boolean(localIgnoreMatcher?.ignores(path));
+	}
 
 	function isConfigAllowed(path: string): boolean {
 		if (deniedConfigFiles.includes(path)) return false;
@@ -152,4 +181,13 @@ function normalize(path: string): string {
 
 function stripTrailingSlash(value: string): string {
 	return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function isIgnoredDir(
+	matcher: IgnoreMatcher | undefined,
+	dir: string,
+	dirPath: string,
+): boolean {
+	if (!matcher) return false;
+	return matcher.ignores(dir) || matcher.ignores(dirPath);
 }

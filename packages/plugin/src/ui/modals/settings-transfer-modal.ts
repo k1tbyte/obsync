@@ -133,7 +133,7 @@ export class SettingsTransferExportModal extends Modal {
 		new Setting(contentEl)
 			.setName("Sync scope and ignore rules")
 			.setDesc(
-				"Include Obsidian sync categories, ignore patterns, and the max file size limit.",
+				"Include Obsidian sync categories, device-local ignore patterns, and the max file size limit.",
 			)
 			.addToggle((toggle) => {
 				toggle

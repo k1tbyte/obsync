@@ -9,12 +9,21 @@ export interface IgnoreMatcher {
 
 const PASS_THROUGH: IgnoreMatcher = { ignores: () => false };
 
-export async function loadIgnoreMatcher(
+export async function loadSharedIgnoreMatcher(
 	adapter: DataAdapter,
+): Promise<IgnoreMatcher> {
+	return buildIgnoreMatcher(
+		await readIgnorePatterns(adapter, IGNORE_FILE_NAME),
+	);
+}
+
+export async function loadLocalIgnoreMatcher(
 	extraPatterns: string,
 ): Promise<IgnoreMatcher> {
-	const filePatterns = await readIgnoreFile(adapter);
-	const patterns = mergePatterns(filePatterns, extraPatterns);
+	return buildIgnoreMatcher(mergePatterns(extraPatterns));
+}
+
+function buildIgnoreMatcher(patterns: ReadonlyArray<string>): IgnoreMatcher {
 	if (patterns.length === 0) return PASS_THROUGH;
 	const matcher: Ignore = ignore();
 	matcher.add(patterns);
@@ -27,17 +36,27 @@ export async function loadIgnoreMatcher(
 	};
 }
 
-async function readIgnoreFile(adapter: DataAdapter): Promise<string> {
-	if (!(await adapter.exists(IGNORE_FILE_NAME))) return "";
+async function readIgnorePatterns(
+	adapter: DataAdapter,
+	path: string,
+): Promise<ReadonlyArray<string>> {
+	return mergePatterns(await readIgnoreFile(adapter, path));
+}
+
+async function readIgnoreFile(
+	adapter: DataAdapter,
+	path: string,
+): Promise<string> {
+	if (!(await adapter.exists(path))) return "";
 	try {
-		return await adapter.read(IGNORE_FILE_NAME);
+		return await adapter.read(path);
 	} catch {
 		return "";
 	}
 }
 
-function mergePatterns(fileContent: string, extra: string): string[] {
-	const lines = `${fileContent}\n${extra}`.split(/\r?\n/);
+function mergePatterns(...sources: ReadonlyArray<string>): string[] {
+	const lines = sources.join("\n").split(/\r?\n/);
 	const out: string[] = [];
 	for (const raw of lines) {
 		const trimmed = raw.trim();

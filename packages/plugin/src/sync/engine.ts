@@ -96,7 +96,7 @@ export function filterManifestForDiff(
 	if (!manifest) return null;
 	const files: Record<string, ManifestEntry> = {};
 	for (const [path, entry] of Object.entries(manifest.files)) {
-		if (scope.includes(path)) files[path] = entry;
+		if (scope.includesInDiff(path)) files[path] = entry;
 	}
 	return { ...manifest, files };
 }

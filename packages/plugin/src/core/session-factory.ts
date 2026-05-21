@@ -11,7 +11,10 @@ import { PassphraseRotatedError } from "@/sync/keyfile";
 import { loadState } from "@/sync/state";
 import type { LocalState, SessionState } from "@/types";
 import { notifyInfo } from "@/ui";
-import { loadIgnoreMatcher } from "@/vault/ignore";
+import {
+	loadLocalIgnoreMatcher,
+	loadSharedIgnoreMatcher,
+} from "@/vault/ignore";
 import { createScopePolicy } from "@/vault/scope";
 import type { LogService } from "./log-service";
 import type { PassphraseManager } from "./passphrase-manager";
@@ -74,14 +77,18 @@ async function openSession(
 		state.state ?? (await loadState(adapter, app.vault.configDir));
 	state.setInitial(currentState);
 
-	const ignore = await loadIgnoreMatcher(adapter, settings.ignorePatterns);
+	const [sharedIgnore, localIgnore] = await Promise.all([
+		loadSharedIgnoreMatcher(adapter),
+		loadLocalIgnoreMatcher(settings.ignorePatterns),
+	]);
 	return {
 		adapter,
 		storage,
 		scope: createScopePolicy({
 			settingsSync: settings.settingsSync,
 			configDir: app.vault.configDir,
-			ignore,
+			sharedIgnore,
+			localIgnore,
 		}),
 		key,
 		state: buildSessionView(currentState, storage.identity()),

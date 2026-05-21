@@ -75,7 +75,7 @@ export function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
 	const modal = new Modal(app);
 	modal.titleEl.setText(`Ignored files (${paths.length})`);
 	modal.contentEl.createEl("p", {
-		text: "These files are excluded by .syncignore patterns or settings-level ignore rules.",
+		text: "These files are excluded by shared syncignore.md rules or device-local ignore settings.",
 	});
 	const list = modal.contentEl.createEl("ul", { cls: "obsync-ignored-list" });
 	for (const p of paths) {

@@ -8,7 +8,7 @@ Obsync is a plugin for my personal Obsidian vault developed to manually sync an 
 - Source control view with local changes, remote changes, conflicts, per-file diff, and hunk actions for text files.
 - S3-compatible storage with encrypted manifests and encrypted file blobs.
 - Optional sync of selected Obsidian configuration categories.
-- `.syncignore` and settings-based ignore patterns.
+- Shared `syncignore.md` rules plus device-local ignore patterns.
 - Encrypted setup transfer by Obsidian URL, copyable link, or QR code.
 - Local-only diagnostics stored under the plugin folder in the current vault config directory.
 
@@ -37,7 +37,14 @@ Use a separate bucket prefix per vault. Reusing a prefix for another vault is re
 
 ## Ignore patterns
 
-Obsync merges patterns from the vault root `.syncignore` file and the **Ignore patterns** setting. Patterns use gitignore-style syntax.
+Obsync uses two ignore sources, both with gitignore-style syntax:
+
+- `syncignore.md` in the vault root is the shared repository-level ignore list.
+- The **Device-local ignore patterns** setting is applied only on the current device.
+
+Shared ignore rules are synced like a normal note. If a shared rule starts matching a file that was already tracked, the file is shown as a deletion and is removed from remote on the next explicit push. Other devices then delete their local copy on pull.
+
+Device-local ignore rules are non-destructive. They stop this device from sending or receiving matching files, but they do not delete existing remote data.
 
 Examples:
 
@@ -48,7 +55,7 @@ drafts/
 .obsidian/plugins/example-plugin/cache/
 ```
 
-Changing `.syncignore` or the ignore settings marks the current compare result as stale and schedules a refresh when a compare has already been run.
+Changing `syncignore.md` or the ignore settings marks the current compare result as stale and schedules a refresh when a compare has already been run.
 
 ## Commands
 
@@ -69,7 +76,7 @@ After reset, local vault files are preserved, the local baseline is cleared, and
 
 ## Device transfer
 
-Use **Settings → Obsync → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, ignore patterns, file size limit, concurrency, and auto-pull settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
+Use **Settings → Obsync → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, device-local ignore patterns, file size limit, concurrency, and auto-pull settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
 
 The transfer link is encrypted with a key derived from the current Obsync passphrase and a random transfer salt. Before encryption, the payload is minified to short keys and compressed when that actually makes the token smaller. The final URL uses the `obsidian://obsync?d=...` format. The receiving device must use the same passphrase and explicitly confirm import before the transferred settings are applied.
 
