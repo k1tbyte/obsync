@@ -103,6 +103,15 @@ const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 		get: (s) => s.showFileExplorerIndicators,
 		set: (v) => ({ showFileExplorerIndicators: v }),
 	},
+	{
+		name: "Editor change signs",
+		desc: "Show per-line gutter marks for changes since the last sync.",
+		get: (s) => s.showEditorChangeSigns,
+		set: (v, plugin) => {
+			plugin.refreshEditorSigns(v);
+			return { showEditorChangeSigns: v };
+		},
+	},
 ];
 
 export class ObsyncSettingTab extends PluginSettingTab {

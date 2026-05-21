@@ -3,6 +3,7 @@ import { type ObsidianProtocolData, Plugin } from "obsidian";
 
 import { registerCommands } from "@/commands";
 import type { LogService, PassphraseManager, StatePersister } from "@/core";
+import { registerEditorSigns, type SignsHandle } from "@/editor/signs";
 import type { SyncLogEntry } from "@/logs/store";
 import {
 	activeStorage,
@@ -62,6 +63,7 @@ export default class ObsyncPlugin extends Plugin {
 	private scopeRefreshTimer: number | null = null;
 	private realtime: PluginRealtime | null = null;
 	private adoptPromptActive = false;
+	private editorSigns: SignsHandle | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -86,6 +88,7 @@ export default class ObsyncPlugin extends Plugin {
 		);
 
 		this.settingsTab = registerPluginUi(this, this.controller).settingsTab;
+		this.editorSigns = registerEditorSigns(this);
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
@@ -117,11 +120,17 @@ export default class ObsyncPlugin extends Plugin {
 			window.clearTimeout(this.scopeRefreshTimer);
 			this.scopeRefreshTimer = null;
 		}
+		this.editorSigns?.dispose();
+		this.editorSigns = null;
 		this.statePersister?.dispose();
 		this.controller?.dispose();
 		this.passphraseManager?.dispose();
 		this.realtime?.dispose();
 		this.realtime = null;
+	}
+
+	refreshEditorSigns(enabled: boolean): void {
+		this.editorSigns?.refresh(enabled);
 	}
 
 	private async maybePromptAdoptVault(

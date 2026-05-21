@@ -1,4 +1,8 @@
-import { loadLocalText, loadRemoteText } from "@/sync/content";
+import {
+	loadBaselineText,
+	loadLocalText,
+	loadRemoteText,
+} from "@/sync/content";
 import { DiffCache, type DiffCacheInput } from "@/sync/diff-cache";
 import type { CompareResult, EngineDependencies } from "@/sync/engine";
 import type { FileDiffModel } from "@/sync/projection";
@@ -7,6 +11,11 @@ import type { Conflict, EChangeType, FileChange } from "@/types";
 export interface PathStatus {
 	change?: FileChange;
 	conflict?: Conflict;
+}
+
+export interface BaselineSnapshot {
+	hash: string;
+	text: string;
 }
 
 interface FileDiffServiceDeps {
@@ -61,6 +70,26 @@ export class FileDiffService {
 
 	async getFileDiff(path: string): Promise<FileDiffModel | null> {
 		return this.fileDiff(path, false);
+	}
+
+	/**
+	 * Loads the baseline text for a path even when there is no current change
+	 * status (so the live editor signs can diff against it). Returns null when
+	 * the path is not in the baseline manifest or its content is binary.
+	 */
+	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
+		const session = await this.deps.openSession();
+		if (!session) return null;
+		const baseline = session.state.baseline;
+		const entry = baseline?.files[path];
+		if (!entry) return null;
+		const text = await loadBaselineText(
+			{ storage: session.storage, key: session.key },
+			baseline,
+			path,
+		);
+		if (text === null) return null;
+		return { hash: entry.hash, text };
 	}
 
 	async getForcedFileDiff(path: string): Promise<FileDiffModel | null> {

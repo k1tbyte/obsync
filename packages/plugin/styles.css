@@ -716,3 +716,188 @@
 	padding: var(--size-4-2);
 	border-radius: var(--radius-s);
 }
+
+.cm-gutter.obsync-sign-gutter {
+	width: 4px;
+	padding: 0;
+	overflow: visible;
+	cursor: pointer;
+}
+
+.cm-gutter.obsync-sign-gutter .cm-gutterElement {
+	position: relative;
+	padding: 0;
+	width: 4px;
+}
+
+.obsync-sign {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 3px;
+	border-radius: 999px;
+	pointer-events: none;
+	transform-origin: center;
+	transition:
+		transform 120ms ease,
+		filter 120ms ease,
+		box-shadow 120ms ease;
+	will-change: transform;
+}
+
+.cm-gutter.obsync-sign-gutter .cm-gutterElement:hover .obsync-sign {
+	transform: scaleX(1.75);
+	filter: saturate(1.08);
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.obsync-sign-add {
+	background-color: var(--color-green, #2bb673);
+}
+
+.obsync-sign-change {
+	background-color: var(--color-yellow, #d6a700);
+}
+
+.obsync-sign-delete {
+	background: linear-gradient(
+		to bottom,
+		transparent 0%,
+		transparent 70%,
+		var(--color-red, #d04a4a) 70%,
+		var(--color-red, #d04a4a) 100%
+	);
+}
+
+.obsync-sign-topdelete {
+	background: linear-gradient(
+		to bottom,
+		var(--color-red, #d04a4a) 0%,
+		var(--color-red, #d04a4a) 30%,
+		transparent 30%,
+		transparent 100%
+	);
+}
+
+.obsync-sign-changedelete {
+	background: linear-gradient(
+		to bottom,
+		var(--color-yellow, #d6a700) 0%,
+		var(--color-yellow, #d6a700) 70%,
+		var(--color-red, #d04a4a) 70%,
+		var(--color-red, #d04a4a) 100%
+	);
+}
+
+.obsync-hunk-popup {
+	z-index: 2000;
+	min-width: 280px;
+	max-width: 520px;
+	max-height: 60vh;
+	display: flex;
+	flex-direction: column;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+	font-size: var(--font-ui-small);
+	overflow: hidden;
+}
+
+.obsync-hunk-popup-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.obsync-hunk-popup-title {
+	font-weight: 600;
+}
+
+.obsync-hunk-popup-close {
+	background: transparent;
+	border: none;
+	color: var(--text-muted);
+	font-size: 16px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 var(--size-2-2);
+}
+
+.obsync-hunk-popup-close:hover {
+	color: var(--text-normal);
+}
+
+.obsync-hunk-popup-body {
+	overflow: auto;
+	padding: var(--size-4-2) var(--size-4-3);
+	font-family: var(--font-monospace);
+	white-space: pre;
+	line-height: 1.4;
+}
+
+.obsync-hunk-popup-line-removed,
+.obsync-hunk-popup-line-added {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-2-2);
+}
+
+.obsync-hunk-popup-line-removed {
+	background: rgba(208, 74, 74, 0.12);
+	color: var(--text-normal);
+}
+
+.obsync-hunk-popup-line-added {
+	background: rgba(43, 182, 115, 0.12);
+	color: var(--text-normal);
+}
+
+.obsync-hunk-popup-prefix {
+	display: inline-block;
+	width: 1ch;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.obsync-hunk-popup-line-removed .obsync-hunk-popup-prefix {
+	color: var(--color-red, #d04a4a);
+}
+
+.obsync-hunk-popup-line-added .obsync-hunk-popup-prefix {
+	color: var(--color-green, #2bb673);
+}
+
+.obsync-hunk-popup-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.obsync-hunk-popup-truncated {
+	color: var(--text-muted);
+	font-style: italic;
+	padding-top: var(--size-2-2);
+}
+
+.obsync-hunk-popup-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.obsync-hunk-popup-revert {
+	cursor: pointer;
+}
+
+.obsync-hunk-popup-push {
+	cursor: pointer;
+}

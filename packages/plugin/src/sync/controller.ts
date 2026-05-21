@@ -30,7 +30,11 @@ import {
 	type SyncStatusListener,
 	type SyncStatusSnapshot,
 } from "./runtime/controller-state";
-import { FileDiffService, type PathStatus } from "./runtime/file-diff-service";
+import {
+	type BaselineSnapshot,
+	FileDiffService,
+	type PathStatus,
+} from "./runtime/file-diff-service";
 import { HistoryQueryService } from "./runtime/history-query-service";
 import { HistoryWriteService } from "./runtime/history-write-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
@@ -340,6 +344,11 @@ export class SyncController {
 	/** Like {@link getFileDiff} but decodes size-capped (non-binary) files. */
 	async getForcedFileDiff(path: string): Promise<FileDiffModel | null> {
 		return this.fileDiffs.getForcedFileDiff(path);
+	}
+
+	/** Loads the baseline text for any tracked path (for live editor signs). */
+	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
+		return this.fileDiffs.loadBaselineForPath(path);
 	}
 
 	clearDiffCache(): void {
