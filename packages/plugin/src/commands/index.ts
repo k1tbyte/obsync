@@ -12,6 +12,7 @@ import {
 	openSourceControlHistory,
 	openSourceControlView,
 } from "@/ui";
+import { JoinShareModal } from "@/ui/modals/share-modals";
 
 export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
@@ -83,6 +84,28 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		id: "deep-clean-orphans",
 		name: "Deep-clean orphaned objects",
 		callback: () => void runDeepClean(plugin),
+	});
+
+	plugin.addCommand({
+		id: "join-shared-folder",
+		name: "Join a shared folder",
+		callback: () => {
+			const modal = new JoinShareModal(plugin);
+			modal.open();
+		},
+	});
+
+	plugin.addCommand({
+		id: "sync-shared-folders",
+		name: "Sync shared folders now",
+		checkCallback: (checking) => {
+			if (plugin.settings.sharedFolders.length === 0) return false;
+			if (checking) return true;
+			void plugin.shares
+				?.syncAll()
+				.then(() => notifyInfo("shared folders synced."));
+			return true;
+		},
 	});
 
 	plugin.addCommand({

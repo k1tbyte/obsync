@@ -1,10 +1,10 @@
 import "./polyfills";
-import { type ObsidianProtocolData, Plugin } from "obsidian";
+import { type ObsidianProtocolData, Plugin, TFolder } from "obsidian";
 
 import { registerCommands } from "@/commands";
 import type { LogService, PassphraseManager, StatePersister } from "@/core";
 import { registerEditorSigns, type SignsHandle } from "@/editor/signs";
-import type { SyncLogEntry } from "@/logs/store";
+import { ESyncLogOperation, type SyncLogEntry } from "@/logs/store";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
@@ -23,6 +23,12 @@ import {
 	type SettingsTransferPackage,
 	settingsTransferAction,
 } from "@/settings/transfer";
+import {
+	isPathInShare,
+	SHARE_INVITE_ACTION,
+	type SharedFolderConfig,
+	ShareSyncService,
+} from "@/share";
 import { createStorageAdapter, handleStorageProtocol } from "@/storage";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { defaultDeviceName } from "@/sync/device";
@@ -37,6 +43,7 @@ import {
 	notifyError,
 	notifyInfo,
 } from "@/ui";
+import { CreateShareModal, JoinShareModal } from "@/ui/modals/share-modals";
 import { bootstrapPluginRuntime } from "./plugin/bootstrap";
 import {
 	registerFileHistoryMenu,
@@ -56,6 +63,7 @@ const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 export default class ObsyncPlugin extends Plugin {
 	settings: ObsyncSettings = DEFAULT_SETTINGS;
 	controller!: SyncController;
+	shares: ShareSyncService | null = null;
 	private settingsTab?: ObsyncSettingTab;
 	private logs!: LogService;
 	private statePersister!: StatePersister;
@@ -94,6 +102,7 @@ export default class ObsyncPlugin extends Plugin {
 		registerScheduler(this, this.controller);
 		registerFileHistoryMenu(this);
 		this.initRealtime();
+		this.initShares();
 
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
@@ -127,6 +136,75 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager?.dispose();
 		this.realtime?.dispose();
 		this.realtime = null;
+		this.shares?.dispose();
+		this.shares = null;
+	}
+
+	private initShares(): void {
+		this.shares = new ShareSyncService({
+			app: this.app,
+			getSettings: () => this.settings,
+			getState: () => this.statePersister.state,
+			ensureState: async () => {
+				const state =
+					this.statePersister.state ??
+					(await loadState(this.app.vault.adapter, this.app.vault.configDir));
+				this.statePersister.setInitial(state);
+				return state;
+			},
+			persistState: (state) => this.statePersister.persist(state),
+			log: (level, message, details) => {
+				const op = ESyncLogOperation.Share;
+				if (level === "error") return this.logs.error(op, message, details);
+				if (level === "warn") return this.logs.warn(op, message, details);
+				return this.logs.info(op, message, details);
+			},
+		});
+		this.shares.start(this);
+		this.registerObsidianProtocolHandler(SHARE_INVITE_ACTION, (params) => {
+			const data = params.d ?? params.data;
+			new JoinShareModal(this, typeof data === "string" ? data : "").open();
+		});
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFolder)) return;
+				const shared = this.settings.sharedFolders.some((share) =>
+					isPathInShare(file.path, share.localRoot),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle(
+							shared ? "Obsync: Sync shared folder" : "Obsync: Share folder…",
+						)
+						.setIcon("users")
+						.onClick(() => {
+							if (shared) {
+								const share = this.settings.sharedFolders.find((entry) =>
+									isPathInShare(file.path, entry.localRoot),
+								);
+								if (share) this.shares?.scheduleSync(share.id);
+								return;
+							}
+							new CreateShareModal(this, file.path).open();
+						}),
+				);
+			}),
+		);
+	}
+
+	async addSharedFolder(share: SharedFolderConfig): Promise<void> {
+		this.settings.sharedFolders.push(share);
+		await this.saveSettings();
+		this.shares?.refresh();
+		this.shares?.scheduleSync(share.id);
+	}
+
+	async removeSharedFolder(shareId: string): Promise<void> {
+		this.settings.sharedFolders = this.settings.sharedFolders.filter(
+			(share) => share.id !== shareId,
+		);
+		await this.saveSettings();
+		await this.shares?.forgetShareState(shareId);
 	}
 
 	refreshEditorSigns(enabled: boolean): void {

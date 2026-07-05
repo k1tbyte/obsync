@@ -7,6 +7,7 @@ Obsync is a plugin for my personal Obsidian vault developed to manually sync an 
 - Manual compare, push, and pull commands.
 - Source control view with local changes, remote changes, conflicts, per-file diff, and hunk actions for text files.
 - S3-compatible storage with encrypted manifests and encrypted file blobs.
+- Shared folders: sync a single folder with other people through its own encrypted storage location, with invite links, automatic merging, and conflict copies.
 - Optional sync of selected Obsidian configuration categories.
 - Shared `syncignore.md` rules plus device-local ignore patterns.
 - Encrypted setup transfer by Obsidian URL, copyable link, or QR code.
@@ -73,6 +74,19 @@ Changing `syncignore.md` or the ignore settings marks the current compare result
 Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc` and everything under `objects/` for the configured bucket prefix. It keeps `salt.bin`, so the same passphrase-derived key remains valid.
 
 After reset, local vault files are preserved, the local baseline is cleared, and the next source control view shows local files as additions ready to push.
+
+## Shared folders
+
+A shared folder lets another person (or another vault) sync one folder with you without giving them access to anything else:
+
+- Each share syncs to its own storage location (for S3, `<prefix>/shares/<share-id>/`) and is encrypted with its own random key — not your vault passphrase. Invitees can decrypt only the share.
+- Create a share from the folder context menu (**Obsync: Share folder…**) or **Settings → Obsync → Shared folders**. The active storage backend is reused with a share-specific prefix.
+- Invites are `obsidian://obsync-share?d=…` links encrypted with an invite passphrase that you communicate separately. The link contains the storage credentials and share key, so only send it to people you trust.
+- Joining downloads the share into a folder you choose; the folder name does not have to match the sharer's.
+- Sync is automatic: local edits under the share, a periodic re-check, and (optionally) a PartyKit relay room per share for instant propagation between participants.
+- Conflicts never lose data: concurrent text edits are three-way merged; anything unmergeable keeps your version and writes the other version next to it as `name (conflict from <device> <date>).md`; a deletion never beats an edit.
+- Shared folders remain part of your normal vault sync too, so your own backup still covers them.
+- Removing a share stops syncing but keeps the local files.
 
 ## Device transfer
 

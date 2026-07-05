@@ -17,6 +17,7 @@ import {
 	renderBackendSection,
 	renderMaintenanceSection,
 	renderSecuritySection,
+	renderSharesSection,
 } from "./sections";
 
 enum ESettingsViewTab {
@@ -120,7 +121,7 @@ const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
 	private activeTab = ESettingsViewTab.Settings;
-	private realtimeStatusUnsub: (() => void) | null = null;
+	private sectionUnsubs: Array<() => void> = [];
 
 	constructor(app: App, plugin: ObsyncPlugin) {
 		super(app, plugin);
@@ -128,13 +129,11 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
-		this.realtimeStatusUnsub?.();
-		this.realtimeStatusUnsub = null;
+		this.unsubscribeSections();
 	}
 
 	display(): void {
-		this.realtimeStatusUnsub?.();
-		this.realtimeStatusUnsub = null;
+		this.unsubscribeSections();
 		const { containerEl } = this;
 		containerEl.empty();
 		this.renderTabBar(containerEl);
@@ -147,16 +146,26 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		renderBackendSection(containerEl, this.plugin, () => this.display());
 		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
+		const sharesUnsub = renderSharesSection(containerEl, this.plugin, () =>
+			this.display(),
+		);
+		if (sharesUnsub) this.sectionUnsubs.push(sharesUnsub);
 		this.renderIgnoreSection(containerEl);
-		this.realtimeStatusUnsub = renderAutomationSection(
+		const automationUnsub = renderAutomationSection(
 			containerEl,
 			this.plugin,
 			() => this.display(),
 		);
+		if (automationUnsub) this.sectionUnsubs.push(automationUnsub);
 		this.renderUiSection(containerEl);
 		this.renderAdvancedSection(containerEl);
 		renderMaintenanceSection(containerEl, this.plugin);
 		renderSecuritySection(containerEl, this.plugin, () => this.display());
+	}
+
+	private unsubscribeSections(): void {
+		for (const unsub of this.sectionUnsubs) unsub();
+		this.sectionUnsubs = [];
 	}
 
 	private renderTabBar(parent: HTMLElement): void {

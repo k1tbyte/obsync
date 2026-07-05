@@ -191,6 +191,15 @@ export const QR_ERROR_CORRECTION = "L" as const;
 export const VAULT_EVENT_DEBOUNCE_MS = 1_500;
 export const REALTIME_SYNC_DEBOUNCE_MS = 2_000;
 
+/** How often shared folders re-check their remote when nothing else triggers. */
+export const SHARE_SYNC_INTERVAL_MS = 5 * 60_000;
+/** Debounce for share syncs triggered by local edits or realtime signals. */
+export const SHARE_EVENT_DEBOUNCE_MS = 2_500;
+export const SHARE_STARTUP_DELAY_MS = 5_000;
+/** Retries when another participant pushes between our compare and publish. */
+export const SHARE_PUSH_RETRIES = 3;
+export const SHARE_KEY_BYTES = 32;
+
 export const SCHEDULER_BACKOFF_THRESHOLD = 3;
 export const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;
 export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;

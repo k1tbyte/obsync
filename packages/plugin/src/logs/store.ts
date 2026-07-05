@@ -19,6 +19,7 @@ export enum ESyncLogOperation {
 	Pull = "pull",
 	Reset = "reset",
 	Session = "session",
+	Share = "share",
 }
 
 export interface SyncLogEntry {
