@@ -19,8 +19,7 @@ export function createSharedFolderConfig(input: {
 	relayToken?: string;
 }): SharedFolderConfig {
 	const id = randomId();
-	const localRoot = normalizeShareRoot(input.localRoot);
-	if (!localRoot) throw new Error("Select a folder to share");
+	const localRoot = assertValidShareRoot(input.localRoot);
 	const name = input.name.trim() || localRoot.split("/").pop() || localRoot;
 	return {
 		id,
@@ -39,8 +38,7 @@ export function joinedSharedFolderConfig(
 	invite: ShareInvite,
 	localRoot: string,
 ): SharedFolderConfig {
-	const root = normalizeShareRoot(localRoot);
-	if (!root) throw new Error("Choose a folder for the shared content");
+	const root = assertValidShareRoot(localRoot);
 	return {
 		id: invite.id,
 		name: invite.name,
@@ -75,4 +73,25 @@ export function deriveShareStorageConfig(
 function joinPrefix(prefix: string, suffix: string): string {
 	const trimmed = prefix.replace(/^\/+|\/+$/g, "");
 	return trimmed ? `${trimmed}/${suffix}` : suffix;
+}
+
+/** Share roots must be real vault folders — never the vault root or anything
+ * under a dot-directory (config, trash, git, …). */
+function assertValidShareRoot(root: string): string {
+	const normalized = normalizeShareRoot(root);
+	if (!normalized) throw new Error("Select a folder to share");
+	if (normalized.split("/").some((segment) => segment.startsWith("."))) {
+		throw new Error("Hidden folders cannot be shared");
+	}
+	return normalized;
+}
+
+/** Turns a share name into a safe default folder name for joining. */
+export function shareNameToFolder(name: string): string {
+	return (
+		name
+			.replace(/[\\/:*?"<>|]/g, "-")
+			.replace(/^\.+/, "")
+			.trim() || "Shared folder"
+	);
 }

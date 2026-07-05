@@ -2,6 +2,7 @@ export {
 	createSharedFolderConfig,
 	deriveShareStorageConfig,
 	joinedSharedFolderConfig,
+	shareNameToFolder,
 } from "./create";
 export {
 	createShareInviteUrl,

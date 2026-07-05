@@ -9,6 +9,7 @@ import {
 	normalizeShareRoot,
 	readShareInvite,
 	type SharedFolderConfig,
+	shareNameToFolder,
 } from "../../share";
 import { notifyError, notifyInfo } from "../notices";
 
@@ -307,7 +308,8 @@ export class JoinShareModal extends Modal {
 					`You already joined this share (folder "${existing.localRoot}").`,
 				);
 			}
-			const root = normalizeShareRoot(this.folder) || invite.name;
+			const root =
+				normalizeShareRoot(this.folder) || shareNameToFolder(invite.name);
 			const overlap = findShareOverlap(
 				this.plugin.settings.sharedFolders,
 				root,
