@@ -47,6 +47,7 @@ export class HistoryQueryService {
 		hash: string,
 		label: string,
 		forceText = false,
+		versionSize?: number,
 	): Promise<FileDiffModel | null> {
 		const session = await this.deps.openSession();
 		if (!session) return null;
@@ -60,6 +61,7 @@ export class HistoryQueryService {
 			hash,
 			label,
 			forceText,
+			versionSize,
 		);
 	}
 }

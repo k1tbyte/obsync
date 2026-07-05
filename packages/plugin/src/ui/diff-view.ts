@@ -26,6 +26,7 @@ interface DiffViewState {
 	path?: string;
 	historyHash?: string;
 	historyLabel?: string;
+	historySize?: number;
 }
 
 enum EDiffMode {
@@ -38,6 +39,7 @@ export class DiffView extends ItemView {
 	private path: string | null = null;
 	private historyHash: string | null = null;
 	private historyLabel = "Version";
+	private historySize: number | undefined;
 	private model: FileDiffModel | null = null;
 	private mode: EDiffMode = EDiffMode.Unified;
 	private merge: MergeView | null = null;
@@ -79,6 +81,7 @@ export class DiffView extends ItemView {
 			this.path = state.path ?? this.path;
 			this.historyHash = state.historyHash ?? null;
 			this.historyLabel = state.historyLabel ?? "Version";
+			this.historySize = state.historySize;
 			this.currentHunkIndex = -1;
 			this.mergePanel.reset();
 			this.forceText = false;
@@ -130,6 +133,7 @@ export class DiffView extends ItemView {
 					this.historyHash,
 					this.historyLabel,
 					this.forceText,
+					this.historySize,
 				);
 				if (!this.model) {
 					this.renderError("This version is no longer available.");

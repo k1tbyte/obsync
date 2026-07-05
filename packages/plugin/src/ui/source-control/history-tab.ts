@@ -15,7 +15,7 @@ export class HistoryTab {
 		private readonly onRerender: () => void,
 		private readonly openDiff: (
 			path: string,
-			history?: { hash: string; label: string },
+			history?: { hash: string; label: string; size?: number },
 		) => Promise<void>,
 	) {}
 
@@ -142,6 +142,7 @@ export class HistoryTab {
 					void this.openDiff(path, {
 						hash: version.hash,
 						label: `${label} · ${formatTimestamp(version.createdAt)}`,
+						size: version.size,
 					}),
 			);
 			const restoreBtn = actions.createEl("button", {

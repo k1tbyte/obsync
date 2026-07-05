@@ -229,8 +229,15 @@ export class SyncController {
 		hash: string,
 		label: string,
 		forceText = false,
+		versionSize?: number,
 	): Promise<FileDiffModel | null> {
-		return this.historyQueries.getHistoryDiff(path, hash, label, forceText);
+		return this.historyQueries.getHistoryDiff(
+			path,
+			hash,
+			label,
+			forceText,
+			versionSize,
+		);
 	}
 
 	async restoreHistoryHunks(

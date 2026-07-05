@@ -1,3 +1,4 @@
+import { isTextMergeCandidate } from "@/sync/auto-merge";
 import {
 	loadBaselineText,
 	loadLocalText,
@@ -58,6 +59,15 @@ export class FileDiffService {
 		if (!conflict?.baselineHash) return null;
 		const session = await this.deps.openSession();
 		if (!session) return null;
+		// Size/extension pre-flight so a binary or oversized conflict never
+		// downloads all three sides just to return null.
+		const mergeable = await isTextMergeCandidate(
+			session,
+			path,
+			result.remote,
+			session.state.baseline,
+		);
+		if (!mergeable) return null;
 		const fetch = { storage: session.storage, key: session.key };
 		const [base, local, remote] = await Promise.all([
 			loadRemoteText(fetch, conflict.baselineHash),

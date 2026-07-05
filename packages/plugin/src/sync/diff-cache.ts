@@ -1,3 +1,4 @@
+import { DIFF_CACHE_MAX_BYTES } from "../constants";
 import type { Conflict, FileChange } from "../types";
 import type { EngineDependencies } from "./engine";
 import {
@@ -25,9 +26,11 @@ const DIFF_CACHE_MAX_ENTRIES = 64;
 
 export class DiffCache {
 	private readonly entries = new Map<string, FileDiffModel>();
+	private retainedBytes = 0;
 
 	clear(): void {
 		this.entries.clear();
+		this.retainedBytes = 0;
 	}
 
 	async get(input: DiffCacheInput): Promise<FileDiffModel | null> {
@@ -50,15 +53,36 @@ export class DiffCache {
 		const model = await buildModel(projection, input.status, forceText);
 		if (model) {
 			this.entries.set(cacheKey, model);
-			if (this.entries.size > DIFF_CACHE_MAX_ENTRIES) {
-				for (const oldest of this.entries.keys()) {
-					this.entries.delete(oldest);
-					break;
-				}
-			}
+			this.retainedBytes += modelBytes(model);
+			this.evict();
 		}
 		return model;
 	}
+
+	/** Evicts LRU entries once either the entry count or the total retained
+	 * text bytes exceed the budget — a handful of forced 16 MB diffs must not
+	 * pin hundreds of megabytes of strings. */
+	private evict(): void {
+		for (const [key, model] of this.entries) {
+			if (
+				this.entries.size <= DIFF_CACHE_MAX_ENTRIES &&
+				this.retainedBytes <= DIFF_CACHE_MAX_BYTES
+			) {
+				break;
+			}
+			if (this.entries.size === 1) break; // Always keep the newest model.
+			this.entries.delete(key);
+			this.retainedBytes -= modelBytes(model);
+		}
+	}
+}
+
+function modelBytes(model: FileDiffModel): number {
+	return (
+		model.leftText.length +
+		model.rightText.length +
+		(model.baseText?.length ?? 0)
+	);
 }
 
 async function buildModel(
