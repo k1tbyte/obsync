@@ -2,6 +2,7 @@ export enum EStorageBackend {
 	S3 = "s3",
 	WebDAV = "webdav",
 	GoogleDrive = "google-drive",
+	ShareBroker = "share-broker",
 }
 
 export interface S3StorageConfig {
@@ -36,7 +37,20 @@ export interface GoogleDriveStorageConfig {
 	concurrency: number;
 }
 
+/**
+ * A shared folder seen from a participant's device. Carries no storage
+ * credentials: every object access is signed on demand by the owner's broker,
+ * scoped to this share's prefix.
+ */
+export interface ShareBrokerStorageConfig {
+	kind: EStorageBackend.ShareBroker;
+	brokerUrl: string;
+	shareToken: string;
+	concurrency: number;
+}
+
 export type StorageAdapterConfig =
 	| S3StorageConfig
 	| WebDAVStorageConfig
-	| GoogleDriveStorageConfig;
+	| GoogleDriveStorageConfig
+	| ShareBrokerStorageConfig;

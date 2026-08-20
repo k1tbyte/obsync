@@ -18,6 +18,14 @@ import {
 	s3Identity,
 } from "./adapters/s3";
 import {
+	createShareBrokerAdapter,
+	defaultShareBrokerConfig,
+	describeShareBrokerTarget,
+	isShareBrokerConfigured,
+	SHARE_BROKER_FIELDS,
+	shareBrokerIdentity,
+} from "./adapters/share-broker";
+import {
 	createWebDAVAdapter,
 	defaultWebDAVConfig,
 	describeWebDAVTarget,
@@ -79,7 +87,24 @@ const STORAGE_REGISTRY: {
 		fields: GOOGLE_DRIVE_FIELDS,
 		handleProtocol: handleGoogleDriveProtocol,
 	},
+	[EStorageBackend.ShareBroker]: {
+		label: "Shared folder (broker)",
+		defaults: defaultShareBrokerConfig,
+		create: createShareBrokerAdapter,
+		isConfigured: isShareBrokerConfigured,
+		describeTarget: describeShareBrokerTarget,
+		identity: shareBrokerIdentity,
+		fields: SHARE_BROKER_FIELDS,
+	},
 };
+
+/** Backends a user can pick as their own vault storage. The broker is only
+ * ever reached through a share invite, never chosen directly. */
+const SELECTABLE_BACKENDS = new Set<EStorageBackend>([
+	EStorageBackend.S3,
+	EStorageBackend.WebDAV,
+	EStorageBackend.GoogleDrive,
+]);
 
 export function getDescriptor<K extends EStorageBackend>(
 	kind: K,
@@ -91,10 +116,12 @@ export function listBackends(): ReadonlyArray<{
 	kind: EStorageBackend;
 	label: string;
 }> {
-	return Object.entries(STORAGE_REGISTRY).map(([kind, descriptor]) => ({
-		kind: kind as EStorageBackend,
-		label: descriptor.label,
-	}));
+	return Object.entries(STORAGE_REGISTRY)
+		.filter(([kind]) => SELECTABLE_BACKENDS.has(kind as EStorageBackend))
+		.map(([kind, descriptor]) => ({
+			kind: kind as EStorageBackend,
+			label: descriptor.label,
+		}));
 }
 
 export function createStorageAdapter(

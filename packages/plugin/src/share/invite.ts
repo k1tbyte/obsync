@@ -1,6 +1,10 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
 import { getDescriptor } from "../storage";
-import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
+import {
+	EStorageBackend,
+	type ShareBrokerStorageConfig,
+	type StorageAdapterConfig,
+} from "../storage/config";
 import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
 import { deflateBytes, inflateBytes } from "../utils/compress";
 import type { SharedFolderConfig } from "./types";
@@ -40,19 +44,22 @@ interface InvitePayload {
 
 /**
  * Encodes a share invite as an encrypted `obsidian://obsync-share?d=…` URL.
- * The payload (storage credentials + share key) is encrypted with a key
- * derived from `passphrase`, which the inviter shares out-of-band.
+ *
+ * The payload carries the share's content key plus a broker token — never
+ * storage credentials. The token grants access to this share's prefix only and
+ * can be revoked without touching the other participants.
  */
 export async function createShareInviteUrl(
 	share: SharedFolderConfig,
 	passphrase: string,
+	brokerStorage: ShareBrokerStorageConfig,
 ): Promise<string> {
 	if (!passphrase) throw new Error("Invite passphrase is empty");
 	const payload: InvitePayload = {
 		id: share.id,
 		n: share.name,
 		k: share.keyB64,
-		s: compactStorageConfig(share.storage),
+		s: compactStorageConfig(brokerStorage),
 	};
 	if (share.relayUrl) {
 		payload.r = { u: share.relayUrl };
@@ -116,6 +123,11 @@ export async function readShareInvite(
 	const payload = JSON.parse(decoder.decode(plaintext)) as unknown;
 	if (!isInvitePayload(payload)) {
 		throw new Error("Invalid share invite payload");
+	}
+	if (payload.s.kind !== EStorageBackend.ShareBroker) {
+		throw new Error(
+			"This invite predates the share broker and is no longer supported. Ask the owner for a new invite link.",
+		);
 	}
 	return {
 		id: payload.id,

@@ -51,6 +51,9 @@ export interface ObsyncSettings {
 	/** Folders shared with other people; each syncs to its own encrypted
 	 * remote location with its own key. */
 	sharedFolders: SharedFolderConfig[];
+	/** Self-hosted broker that signs share access for invitees. */
+	shareBrokerUrl: string;
+	shareBrokerAdminSecret: string;
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
 	showFileExplorerIndicators: boolean;
@@ -79,6 +82,8 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	realtimeToken: "",
 	cachePassphrase: true,
 	sharedFolders: [],
+	shareBrokerUrl: "",
+	shareBrokerAdminSecret: "",
 	showStatusBar: true,
 	showRibbonIcon: true,
 	showFileExplorerIndicators: true,

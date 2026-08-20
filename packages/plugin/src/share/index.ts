@@ -1,7 +1,19 @@
 export {
+	type BrokerAdmin,
+	isBrokerConfigured,
+	issueShareToken,
+	listShareParticipants,
+	revokeAllShareTokens,
+	revokeShareToken,
+	type ShareParticipant,
+} from "./broker";
+export {
+	assertShareableStorage,
 	createSharedFolderConfig,
 	deriveShareStorageConfig,
+	isShareableStorage,
 	joinedSharedFolderConfig,
+	participantIdFromName,
 	shareNameToFolder,
 } from "./create";
 export {
@@ -22,6 +34,7 @@ export {
 export {
 	EShareSyncState,
 	IDLE_SHARE_STATUS,
+	isOwnedShare,
 	isPathInShare,
 	normalizeShareRoot,
 	type SharedFolderConfig,

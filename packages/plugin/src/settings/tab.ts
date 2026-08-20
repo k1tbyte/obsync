@@ -69,7 +69,7 @@ const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MIN_MAX_FILE_MB = 1;
 
-interface UpdateOptions {
+interface ApplySettingsOptions {
 	refreshScope?: boolean;
 }
 
@@ -251,7 +251,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;
 				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) =>
-					this.update({ ignorePatterns: v }, { refreshScope: true }),
+					this.applySettings({ ignorePatterns: v }, { refreshScope: true }),
 				);
 			})
 			.addButton((button) =>
@@ -299,7 +299,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		if (field.desc) setting.setDesc(field.desc);
 		setting.addToggle((t) =>
 			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
-				this.update(field.set(v, this.plugin), {
+				this.applySettings(field.set(v, this.plugin), {
 					refreshScope: field.refreshScope,
 				}),
 			),
@@ -315,14 +315,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		setting.addText((t) =>
 			t.setValue(field.get(this.plugin.settings)).onChange((raw) => {
 				const value = field.parse(raw);
-				this.update(field.set(value), { refreshScope: field.refreshScope });
+				this.applySettings(field.set(value), {
+					refreshScope: field.refreshScope,
+				});
 			}),
 		);
 	}
 
-	private update(
+	private applySettings(
 		partial: Partial<ObsyncSettings>,
-		options: UpdateOptions = {},
+		options: ApplySettingsOptions = {},
 	): void {
 		Object.assign(this.plugin.settings, partial);
 		void this.plugin.saveSettings().then(() => {

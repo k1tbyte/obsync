@@ -1,4 +1,6 @@
-export interface Env {
+import { handleShareRequest, type ShareEnv } from "./share";
+
+export interface Env extends ShareEnv {
 	GDRIVE_CLIENT_ID: string;
 	GDRIVE_CLIENT_SECRET: string;
 }
@@ -11,16 +13,20 @@ export default {
 	): Promise<Response> {
 		const url = new URL(request.url);
 
-		// Handle CORS preflight for the /refresh endpoint
+		// Handle CORS preflight for the /refresh and /share endpoints
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				headers: {
 					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type",
+					"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+					"Access-Control-Allow-Headers":
+						"Content-Type, Authorization, X-Obsync-Admin",
 				},
 			});
 		}
+
+		const shareResponse = await handleShareRequest(request, env, url);
+		if (shareResponse) return shareResponse;
 
 		if (url.pathname === "/refresh") {
 			if (request.method !== "POST")
@@ -136,8 +142,9 @@ export default {
 			return Response.redirect(redirectUrl.toString());
 		}
 
-		return new Response("Not found. Use /auth to start OAuth flow.", {
-			status: 404,
-		});
+		return new Response(
+			"Not found. Use /auth to start OAuth flow, or /share/* for shared folders.",
+			{ status: 404 },
+		);
 	},
 };

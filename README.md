@@ -79,14 +79,34 @@ After reset, local vault files are preserved, the local baseline is cleared, and
 
 A shared folder lets another person (or another vault) sync one folder with you without giving them access to anything else:
 
-- Each share syncs to its own storage location (for S3, `<prefix>/shares/<share-id>/`) and is encrypted with its own random key — not your vault passphrase. Invitees can decrypt only the share.
-- Create a share from the folder context menu (**Obsync: Share folder…**) or **Settings → Obsync → Shared folders**. The active storage backend is reused with a share-specific prefix.
-- Invites are `obsidian://obsync-share?d=…` links encrypted with an invite passphrase that you communicate separately. The link contains the storage credentials and share key, so only send it to people you trust.
+- Each share syncs to its own storage location (`<prefix>/shares/<share-id>/`) and is encrypted with its own random key — not your vault passphrase. Invitees can decrypt only the share.
+- Invitees never receive storage credentials. They get a token that the broker exchanges for short-lived presigned URLs scoped to that share's prefix, so their access is bounded by the storage service itself and can be revoked per person.
+- Shares need S3-compatible storage (S3, R2, MinIO), which the broker signs against. Your vault itself can still live on WebDAV or Google Drive — point shares at an S3 bucket regardless.
+- Create a share from the folder context menu (**Obsync: Share folder…**) or **Settings → Obsync → Shared folders**. Set the broker URL and admin secret there first.
+- Invites are `obsidian://obsync-share?d=…` links encrypted with an invite passphrase that you communicate separately. Each link is issued for one named person and can be revoked from **People…** without disturbing anyone else.
 - Joining downloads the share into a folder you choose; the folder name does not have to match the sharer's.
 - Sync is automatic: local edits under the share, a periodic re-check, and (optionally) a PartyKit relay room per share for instant propagation between participants.
 - Conflicts never lose data: concurrent text edits are three-way merged; anything unmergeable keeps your version and writes the other version next to it as `name (conflict from <device> <date>).md`; a deletion never beats an edit.
-- Shared folders remain part of your normal vault sync too, so your own backup still covers them.
-- Removing a share stops syncing but keeps the local files.
+- Shared folders remain part of your normal vault sync too, so your own backup still covers them. The folder is therefore stored twice: once under your vault key, once under the share key. That separation is what keeps a participant's access from ever reaching the rest of the vault.
+- Removing a share means different things on each side. The owner stops sharing: every invite is revoked and the share's encrypted copy is deleted from storage (the files stay in the vault, covered by the normal vault sync). A participant just leaves: their local files stay and nobody else is affected.
+
+### Running the broker
+
+The broker is `packages/auth-worker`, deployed to your own Cloudflare account — the credentials it holds are yours, and no one else's traffic passes through it.
+
+1. `wrangler kv namespace create SHARE_TOKENS`, then paste the id into `wrangler.toml`.
+2. Set the secrets: `SHARE_ADMIN_SECRET`, `SHARE_S3_ENDPOINT`, `SHARE_S3_BUCKET`, `SHARE_S3_ACCESS_KEY_ID`, `SHARE_S3_SECRET_ACCESS_KEY` (`wrangler secret put <name>`).
+3. Scope that S3 key to `<SHARE_S3_PREFIX>shares/*` only. The broker then cannot reach the main vault even if it is compromised:
+
+```json
+{ "Effect": "Allow",
+  "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+  "Resource": "arn:aws:s3:::<bucket>/shares/*" }
+```
+
+4. `pnpm --filter obsync-auth-worker run deploy`, then put the worker URL and `SHARE_ADMIN_SECRET` into **Settings → Obsync → Shared folders**.
+
+Object bytes go straight between participants and S3; the broker only signs, so it stays well inside the Workers free tier. If the broker is offline, participants pause until it returns — you keep syncing, since your own device holds the real credentials.
 
 ## Device transfer
 

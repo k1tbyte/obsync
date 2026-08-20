@@ -1,4 +1,4 @@
-import type { StorageAdapterConfig } from "../storage/config";
+import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
 
 /**
  * A shared folder: one vault folder kept in sync with other people through a
@@ -23,6 +23,16 @@ export interface SharedFolderConfig {
 	/** Paused shares keep their config but never sync. */
 	paused?: boolean;
 	createdAt: number;
+}
+
+/**
+ * True for a share this device created: its config holds real storage
+ * credentials, so this device may delete the share's remote copy. A share
+ * joined from an invite reaches storage through the owner's broker and must
+ * never touch remote data on removal.
+ */
+export function isOwnedShare(share: SharedFolderConfig): boolean {
+	return share.storage.kind !== EStorageBackend.ShareBroker;
 }
 
 export enum EShareSyncState {

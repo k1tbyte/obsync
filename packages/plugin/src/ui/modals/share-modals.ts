@@ -3,15 +3,27 @@ import { Modal, Setting } from "obsidian";
 import type ObsyncPlugin from "../../main";
 import { activeStorage, isStorageConfigured } from "../../settings/model";
 import {
+	assertShareableStorage,
+	type BrokerAdmin,
 	createSharedFolderConfig,
 	createShareInviteUrl,
+	isBrokerConfigured,
+	issueShareToken,
 	joinedSharedFolderConfig,
 	normalizeShareRoot,
+	participantIdFromName,
 	readShareInvite,
 	type SharedFolderConfig,
 	shareNameToFolder,
 } from "../../share";
 import { notifyError, notifyInfo } from "../notices";
+
+export function brokerAdmin(plugin: ObsyncPlugin): BrokerAdmin {
+	return {
+		url: plugin.settings.shareBrokerUrl,
+		adminSecret: plugin.settings.shareBrokerAdminSecret,
+	};
+}
 
 /** Returns the share whose root equals or nests the given root, if any. */
 export function findShareOverlap(
@@ -52,8 +64,7 @@ export class CreateShareModal extends Modal {
 			text: "The folder syncs to its own encrypted location on your storage. People you invite can read and change only this folder — it is encrypted with its own key, separate from your vault passphrase.",
 		});
 		contentEl.createEl("p", {
-			cls: "mod-warning",
-			text: "The invite link contains storage credentials. Invitees can write to the share's storage prefix — only share with people you trust.",
+			text: "Invitees get a revocable token for this folder only — never your storage credentials.",
 		});
 
 		new Setting(contentEl)
@@ -123,6 +134,12 @@ export class CreateShareModal extends Modal {
 			if (!isStorageConfigured(this.plugin.settings)) {
 				throw new Error("Configure a storage backend first.");
 			}
+			assertShareableStorage(activeStorage(this.plugin.settings));
+			if (!isBrokerConfigured(brokerAdmin(this.plugin))) {
+				throw new Error(
+					"Set the share broker URL and admin secret under Settings → Obsync → Shared folders first.",
+				);
+			}
 			const overlap = findShareOverlap(
 				this.plugin.settings.sharedFolders,
 				root,
@@ -152,10 +169,11 @@ export class CreateShareModal extends Modal {
 export class ShareInviteModal extends Modal {
 	private passphrase = "";
 	private confirm = "";
+	private participant = "";
 	private resultEl: HTMLElement | null = null;
 
 	constructor(
-		plugin: ObsyncPlugin,
+		private readonly plugin: ObsyncPlugin,
 		private readonly share: SharedFolderConfig,
 	) {
 		super(plugin.app);
@@ -167,6 +185,17 @@ export class ShareInviteModal extends Modal {
 		contentEl.createEl("p", {
 			text: "Choose an invite passphrase and share it with the other person separately (not alongside the link). They need both to join.",
 		});
+
+		new Setting(contentEl)
+			.setName("Invite for")
+			.setDesc(
+				"Who this link is for. Revoke it later by this name. Re-using a name replaces that person's link.",
+			)
+			.addText((t) =>
+				t.setPlaceholder("Alice").onChange((v) => {
+					this.participant = v;
+				}),
+			);
 
 		new Setting(contentEl).setName("Invite passphrase").addText((t) => {
 			t.inputEl.type = "password";
@@ -206,8 +235,23 @@ export class ShareInviteModal extends Modal {
 			notifyError("Passphrases do not match.");
 			return;
 		}
+		const participantId = participantIdFromName(this.participant);
+		if (!participantId) {
+			notifyError("Enter who this invite is for.");
+			return;
+		}
 		try {
-			const url = await createShareInviteUrl(this.share, this.passphrase);
+			const brokerStorage = await issueShareToken(
+				brokerAdmin(this.plugin),
+				this.share.id,
+				participantId,
+				this.participant.trim(),
+			);
+			const url = await createShareInviteUrl(
+				this.share,
+				this.passphrase,
+				brokerStorage,
+			);
 			const host = this.resultEl;
 			if (!host) return;
 			host.empty();
