@@ -1,6 +1,7 @@
 import { type ObsidianProtocolData, requestUrl } from "obsidian";
-import { notifyError, notifyInfo } from "../../ui/notices";
 
+import { DEFAULT_GDRIVE_AUTH_SERVER } from "../../constants";
+import { notifyError, notifyInfo } from "../../ui/notices";
 import { EStorageBackend, type GoogleDriveStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -41,7 +42,7 @@ export function defaultGoogleDriveConfig(): GoogleDriveStorageConfig {
 		kind: EStorageBackend.GoogleDrive,
 		folderName: "ObsidianSync",
 		clientId: "",
-		authServerUrl: "https://obsync-auth.kitbyte.workers.dev",
+		authServerUrl: DEFAULT_GDRIVE_AUTH_SERVER,
 		accessToken: "",
 		refreshToken: "",
 		expiresAt: 0,
@@ -213,7 +214,6 @@ export function createGoogleDriveAdapter(
 	return {
 		capabilities: {
 			canList: true,
-			hasConditionalWrites: false,
 		},
 		identity: () => googleDriveIdentity(config),
 

@@ -39,19 +39,10 @@ export function diff(input: DiffInput): DiffResult {
 
 		if (localChanged && remoteChanged) {
 			if (local === remote) continue;
-			if (local === null || remote === null) {
-				conflicts.push({
-					path,
-					localHash: local ?? "",
-					remoteHash: remote ?? "",
-					baselineHash: baseline,
-				});
-				continue;
-			}
 			conflicts.push({
 				path,
-				localHash: local,
-				remoteHash: remote,
+				localHash: local ?? "",
+				remoteHash: remote ?? "",
 				baselineHash: baseline,
 			});
 			continue;

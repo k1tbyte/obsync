@@ -1,3 +1,4 @@
+import { LOG_PATH_LIMIT } from "../../constants";
 import { encryptBytes, sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
@@ -5,7 +6,6 @@ import type { ManifestEntry } from "../../types";
 import {
 	advanceSessionAfterPush,
 	buildSessionState,
-	mergeFolderArrays,
 	updateBaselineEntry,
 } from "../baseline";
 import {
@@ -14,14 +14,11 @@ import {
 	loadLocalBytes,
 	textToBytes,
 } from "../content";
-import { pushPaths, pushSingleFile } from "../engine";
-import { publishManifestWithHistory } from "../history";
+import { publishFileMap, pushPaths, pushSingleFile } from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
-import { buildManifest, objectKey } from "../manifest";
+import { objectKey } from "../manifest";
 import { loadBaselineOrRemoteText } from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
-
-const LOG_PATH_LIMIT = 50;
 
 export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 	deps,
@@ -122,31 +119,7 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 		};
 		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
 	}
-	const folders = mergeFolderArrays(
-		result.remote?.folders,
-		result.snapshot.emptyFolders,
-	);
-	const vaultId =
-		deps.state.vaultId ?? result.remote?.vaultId ?? deps.state.deviceId;
-	const manifest = buildManifest(
-		deps.state.deviceId,
-		deps.state.deviceName,
-		vaultId,
-		result.remote,
-		{
-			files: baseFiles,
-			skipped: [],
-			emptyFolders: folders,
-			ignoredPaths: [],
-		},
-	);
-	await publishManifestWithHistory(
-		deps.storage,
-		deps.key,
-		manifest,
-		result.remote?.snapshotId ?? null,
-		deps.history,
-	);
+	const manifest = await publishFileMap(deps, result, baseFiles);
 	await ctx.persistState(
 		buildSessionState(deps.state, manifest, nextHashCache),
 	);

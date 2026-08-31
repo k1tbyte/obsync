@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	applyHunks,
-	buildUnifiedDiff,
-	computeHunks,
-	EHunkKind,
-} from "../src/sync/hunks";
+import { applyHunks, computeHunks, EHunkKind } from "../src/sync/hunks";
 
 describe("hunks", () => {
 	describe("computeHunks", () => {
@@ -55,17 +50,6 @@ describe("hunks", () => {
 			// Empty set -> reject all changes -> output should match left.
 			const applied = applyHunks(left, result.hunks, new Set([]));
 			expect(applied).toBe(left);
-		});
-	});
-
-	describe("buildUnifiedDiff", () => {
-		it("builds unified diff format", () => {
-			const left = "hello\nworld";
-			const right = "hello\nbrave\nworld";
-			const diff = buildUnifiedDiff("test.txt", left, right);
-			expect(diff).toContain("@@ -1,2 +1,3 @@");
-			expect(diff).toContain("+brave");
-			expect(diff).toContain(" hello");
 		});
 	});
 });

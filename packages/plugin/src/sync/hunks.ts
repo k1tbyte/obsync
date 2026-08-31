@@ -83,34 +83,6 @@ export function applyHunks(
 	return out.join("\n");
 }
 
-export function buildUnifiedDiff(
-	path: string,
-	left: string,
-	right: string,
-): string {
-	return structuredPatch(
-		`a/${path}`,
-		`b/${path}`,
-		normalizeEol(left),
-		normalizeEol(right),
-		"",
-		"",
-		{ context: 3 },
-	)
-		.hunks.map(renderHunk)
-		.join("\n");
-}
-
-export function buildUnifiedDiffHeader(
-	path: string,
-	left: string,
-	right: string,
-): string {
-	const body = buildUnifiedDiff(path, left, right);
-	if (!body) return "";
-	return `--- a/${path}\n+++ b/${path}\n${body}\n`;
-}
-
 function annotateHunk(
 	index: number,
 	oldStart: number,
@@ -142,17 +114,6 @@ function classify(added: number, removed: number): EHunkKind {
 	if (added > 0 && removed === 0) return EHunkKind.Added;
 	if (added === 0 && removed > 0) return EHunkKind.Removed;
 	return EHunkKind.Modified;
-}
-
-function renderHunk(hunk: {
-	oldStart: number;
-	oldLines: number;
-	newStart: number;
-	newLines: number;
-	lines: string[];
-}): string {
-	const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
-	return `${header}\n${hunk.lines.join("\n")}`;
 }
 
 function normalizeEol(value: string): string {

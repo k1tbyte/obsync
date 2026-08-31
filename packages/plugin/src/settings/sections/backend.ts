@@ -1,4 +1,6 @@
 import { Setting } from "obsidian";
+
+import { DEFAULT_GDRIVE_AUTH_SERVER } from "../../constants";
 import type ObsyncPlugin from "../../main";
 import {
 	EStorageBackend,
@@ -127,8 +129,7 @@ function renderGoogleDriveAuth(
 				.setButtonText(isAuth ? "Re-authenticate" : "Log in")
 				.setCta()
 				.onClick(() => {
-					const url =
-						config.authServerUrl || "https://obsync-auth.k1tbyte.workers.dev";
+					const url = config.authServerUrl || DEFAULT_GDRIVE_AUTH_SERVER;
 					window.open(`${url}/auth`);
 				}),
 		);

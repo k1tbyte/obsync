@@ -203,6 +203,25 @@ describe("shared folder sync cycle", () => {
 		expect(outcome.pushed).toBe(0);
 		expect(outcome.pulled).toBe(0);
 	});
+
+	it("leaves the caller's EngineDependencies untouched", async () => {
+		const storage = new FakeStorage();
+		const alice = new Participant("alice", "A", storage);
+		alice.vault.putText("A/note.md", "hello\n");
+
+		const deps = await alice.deps();
+		const originalState = deps.state;
+		await runShareSyncCycle("test-share", deps, {
+			persist: () => Promise.resolve(),
+			log: () => Promise.resolve(),
+			notifyPeers: () => undefined,
+		});
+
+		// A retry after ConcurrentPushError re-enters with these deps, so the
+		// cycle must not have advanced them behind the caller's back.
+		expect(deps.state).toBe(originalState);
+		expect(deps.state.baseline).toBeNull();
+	});
 });
 
 describe("conflictCopyPath", () => {

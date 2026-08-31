@@ -7,6 +7,8 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 
+import { DEFAULT_CONCURRENCY } from "../../constants";
+import { normalizeKeyPrefix } from "../../shared/path";
 import { EStorageBackend, type S3StorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -14,9 +16,9 @@ import {
 	type SettingsFieldSpec,
 } from "../field-spec";
 import type { StorageAdapter } from "../types";
+import { delay, RETRY_DELAYS_MS, withTimeout } from "./util";
 
 const S3_TIMEOUT_MS = 30_000;
-const S3_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
 export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -60,7 +62,7 @@ export function defaultS3Config(): S3StorageConfig {
 		accessKeyId: "",
 		secretAccessKey: "",
 		forcePathStyle: true,
-		concurrency: 4,
+		concurrency: DEFAULT_CONCURRENCY,
 	};
 }
 
@@ -89,18 +91,18 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			secretAccessKey: config.secretAccessKey,
 		},
 	});
-	const prefix = normalizePrefix(config.prefix);
+	const prefix = normalizeKeyPrefix(config.prefix);
 	const fullKey = (key: string): string => `${prefix}${key}`;
 
 	return {
-		capabilities: { canList: true, hasConditionalWrites: false },
+		capabilities: { canList: true },
 		identity() {
 			return s3Identity(config);
 		},
 		async exists(key) {
 			return withRetry(async () => {
 				try {
-					await withTimeout(
+					await s3Timeout(
 						client.send(
 							new HeadObjectCommand({
 								Bucket: config.bucket,
@@ -118,7 +120,7 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 		async get(key) {
 			return withRetry(async () => {
 				try {
-					const out = await withTimeout(
+					const out = await s3Timeout(
 						client.send(
 							new GetObjectCommand({
 								Bucket: config.bucket,
@@ -138,7 +140,7 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 		},
 		async put(key, body, contentType) {
 			await withRetry(() =>
-				withTimeout(
+				s3Timeout(
 					client.send(
 						new PutObjectCommand({
 							Bucket: config.bucket,
@@ -153,7 +155,7 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 		},
 		async delete(key) {
 			await withRetry(() =>
-				withTimeout(
+				s3Timeout(
 					client.send(
 						new DeleteObjectCommand({
 							Bucket: config.bucket,
@@ -167,7 +169,7 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			const keys: string[] = [];
 			let token: string | undefined;
 			do {
-				const out = await withTimeout(
+				const out = await s3Timeout(
 					client.send(
 						new ListObjectsV2Command({
 							Bucket: config.bucket,
@@ -186,17 +188,16 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	};
 }
 
+/** Every S3 call gets the same deadline. */
+function s3Timeout<T>(promise: Promise<T>): Promise<T> {
+	return withTimeout(promise, S3_TIMEOUT_MS);
+}
+
 function assertConfig(config: S3StorageConfig): void {
 	if (!config.bucket) throw new Error("S3 bucket is not configured");
 	if (!config.accessKeyId || !config.secretAccessKey) {
 		throw new Error("S3 credentials are not configured");
 	}
-}
-
-function normalizePrefix(prefix: string): string {
-	if (!prefix) return "";
-	const trimmed = prefix.replace(/^\/+|\/+$/g, "");
-	return trimmed ? `${trimmed}/` : "";
 }
 
 function relativeKey(key: string, prefix: string): string {
@@ -237,13 +238,13 @@ async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 	let lastErr: unknown;
-	for (let i = 0; i <= S3_RETRY_DELAYS_MS.length; i++) {
+	for (let i = 0; i <= RETRY_DELAYS_MS.length; i++) {
 		try {
 			return await fn();
 		} catch (err) {
 			lastErr = err;
-			if (!isRetryable(err) || i === S3_RETRY_DELAYS_MS.length) break;
-			await delay(S3_RETRY_DELAYS_MS[i] as number);
+			if (!isRetryable(err) || i === RETRY_DELAYS_MS.length) break;
+			await delay(RETRY_DELAYS_MS[i] as number);
 		}
 	}
 	throw lastErr;
@@ -260,29 +261,6 @@ function isRetryable(err: unknown): boolean {
 		return true;
 	const status = e.$metadata?.httpStatusCode;
 	return status !== undefined && status >= 500;
-}
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function withTimeout<T>(promise: Promise<T>, ms = S3_TIMEOUT_MS): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const id = window.setTimeout(
-			() => reject(new Error(`S3 operation timed out after ${ms}ms`)),
-			ms,
-		);
-		promise.then(
-			(value) => {
-				window.clearTimeout(id);
-				resolve(value);
-			},
-			(err: unknown) => {
-				window.clearTimeout(id);
-				reject(err instanceof Error ? err : new Error(String(err)));
-			},
-		);
-	});
 }
 
 async function readStream(

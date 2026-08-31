@@ -1,3 +1,4 @@
+import { LOG_PATH_LIMIT } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import type { EngineDependencies } from "@/sync/engine";
 import {
@@ -26,7 +27,7 @@ export class MaintenanceService {
 		await this.deps.logInfo(
 			ESyncLogOperation.Compare,
 			`Integrity check: ${result.checked} object(s), ${result.missing.length} missing, ${result.corrupt.length} corrupt.`,
-			[...result.missing, ...result.corrupt].slice(0, 50),
+			[...result.missing, ...result.corrupt].slice(0, LOG_PATH_LIMIT),
 		);
 		return result;
 	}

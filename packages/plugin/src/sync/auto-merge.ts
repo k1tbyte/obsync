@@ -1,15 +1,8 @@
-import { diff3Merge } from "node-diff3";
-
-import { HUNK_TEXT_MAX_BYTES } from "../constants";
+import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "../constants";
 import { ESyncLogOperation } from "../logs/store";
 import type { Manifest, SessionState } from "../types";
-import { writeBinary } from "../vault/io";
-import {
-	hasKnownBinaryExtension,
-	loadLocalText,
-	loadRemoteText,
-	textToBytes,
-} from "./content";
+import { tryAutoMergeConflict } from "./conflict-merge";
+import { hasKnownBinaryExtension } from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
 
@@ -19,46 +12,22 @@ export async function autoMergeOp(
 	ctx: OperationContext,
 ): Promise<OperationOutcome> {
 	const mergedPaths: string[] = [];
-	const remoteFetch = { storage: deps.storage, key: deps.key };
 
 	for (const conflict of result.diff.conflicts) {
-		// Skip delete conflicts and conflicts without a common ancestor
-		if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash)
-			continue;
-
+		// No common ancestor: nothing to merge against, and no reason to stat.
+		if (!conflict.baselineHash) continue;
 		// Rule out binary/oversized files from path + manifest sizes alone —
 		// never download megabytes just to discover the file can't be merged.
-		if (
-			!(await isTextMergeCandidate(
-				deps,
-				conflict.path,
-				result.remote,
-				deps.state.baseline,
-			))
-		)
-			continue;
-
-		const [baseText, remoteText, localText] = await Promise.all([
-			loadRemoteText(remoteFetch, conflict.baselineHash),
-			loadRemoteText(remoteFetch, conflict.remoteHash),
-			loadLocalText(deps.adapter, conflict.path),
-		]);
-		// Skip binary or missing files
-		if (baseText === null || remoteText === null || localText === null)
-			continue;
-
-		const regions = diff3Merge(
-			toLines(localText),
-			toLines(baseText),
-			toLines(remoteText),
+		const mergeable = await isTextMergeCandidate(
+			deps,
+			conflict.path,
+			result.remote,
+			deps.state.baseline,
 		);
-
-		// If any region is a true conflict, leave it for manual resolution
-		if (regions.some((r) => "conflict" in r)) continue;
-
-		const merged = regions.flatMap((r) => ("ok" in r ? r.ok : [])).join("\n");
-		await writeBinary(deps.adapter, conflict.path, textToBytes(merged));
-		mergedPaths.push(conflict.path);
+		if (!mergeable) continue;
+		if (await tryAutoMergeConflict(deps, conflict)) {
+			mergedPaths.push(conflict.path);
+		}
 	}
 
 	if (mergedPaths.length === 0) {
@@ -82,15 +51,9 @@ export async function autoMergeOp(
 	await ctx.logInfo(
 		ESyncLogOperation.Compare,
 		`Auto-merged ${mergedPaths.length} conflict(s).`,
-		mergedPaths.slice(0, 50),
+		mergedPaths.slice(0, LOG_PATH_LIMIT),
 	);
 	return { newRemote: result.remote, touchedPaths: new Set(mergedPaths) };
-}
-
-/** Splits text into lines after normalising CRLF so a mixed-EOL pair does not
- * produce a spurious whole-file diff in the three-way merge. */
-function toLines(value: string): string[] {
-	return value.replace(/\r\n/g, "\n").split("\n");
 }
 
 /**

@@ -1,4 +1,5 @@
 import type ObsyncPlugin from "../../main";
+import { errorMessage } from "../../shared/errors";
 import { formatBytes } from "../../shared/format";
 import { deviceLabel } from "../../sync/device";
 import type { FileVersion } from "../../sync/history";
@@ -101,7 +102,7 @@ export class HistoryTab {
 					body.empty();
 					body.createDiv({
 						cls: "obsync-history-error",
-						text: `Could not load history: ${errorText(err)}`,
+						text: `Could not load history: ${errorMessage(err)}`,
 					});
 				});
 			return;
@@ -214,8 +215,4 @@ export class HistoryTab {
 
 function formatTimestamp(ms: number): string {
 	return new Date(ms).toLocaleString();
-}
-
-function errorText(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }

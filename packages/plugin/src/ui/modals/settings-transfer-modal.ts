@@ -14,6 +14,7 @@ import {
 	type SettingsTransferExportOptions,
 	type SettingsTransferPackage,
 } from "@/settings/transfer";
+import { errorMessage } from "@/shared/errors";
 import { describeStorageTarget } from "@/storage";
 
 interface SettingsTransferExportModalOptions {
@@ -21,6 +22,90 @@ interface SettingsTransferExportModalOptions {
 		options: SettingsTransferExportOptions,
 	) => Promise<SettingsTransferPackage | null>;
 }
+
+const EVERYTHING: SettingsTransferExportOptions = {
+	storageMode: ESettingsTransferStorageMode.All,
+	includeSyncScope: true,
+	includeAutomation: true,
+	includeRealtime: true,
+};
+
+interface ExportToggle {
+	name: string;
+	desc: string;
+	get: (options: SettingsTransferExportOptions) => boolean;
+	set: (
+		value: boolean,
+		options: SettingsTransferExportOptions,
+	) => SettingsTransferExportOptions;
+	/** Disabled while the value is implied by another toggle. */
+	locked?: (options: SettingsTransferExportOptions) => boolean;
+}
+
+/** True when the selection already covers everything transferable. */
+function isEverything(options: SettingsTransferExportOptions): boolean {
+	return (
+		options.storageMode === ESettingsTransferStorageMode.All &&
+		options.includeSyncScope &&
+		options.includeAutomation &&
+		options.includeRealtime
+	);
+}
+
+const EXPORT_TOGGLES: ReadonlyArray<ExportToggle> = [
+	{
+		name: "Entire transferable config",
+		desc: "Includes all saved storage setups plus sync scope, automation, history, and live sync settings.",
+		get: isEverything,
+		set: (value, options) =>
+			value
+				? { ...EVERYTHING }
+				: { ...options, storageMode: ESettingsTransferStorageMode.Active },
+	},
+	{
+		name: "Current storage setup",
+		desc: "Transfer credentials and connection details for the currently selected backend so sync works right away.",
+		get: (o) => o.storageMode !== ESettingsTransferStorageMode.None,
+		locked: (o) => o.storageMode === ESettingsTransferStorageMode.All,
+		set: (value, o) => ({
+			...o,
+			storageMode: value
+				? ESettingsTransferStorageMode.Active
+				: ESettingsTransferStorageMode.None,
+		}),
+	},
+	{
+		name: "All saved storage setups",
+		desc: "Also include every saved backend configuration, not just the currently selected one.",
+		get: (o) => o.storageMode === ESettingsTransferStorageMode.All,
+		set: (value, o) => ({
+			...o,
+			storageMode: value
+				? ESettingsTransferStorageMode.All
+				: o.storageMode === ESettingsTransferStorageMode.None
+					? ESettingsTransferStorageMode.None
+					: ESettingsTransferStorageMode.Active,
+		}),
+	},
+	{
+		name: "Sync scope and ignore rules",
+		desc: "Include Obsidian sync categories, device-local ignore patterns, and the max file size limit.",
+		get: (o) => o.includeSyncScope,
+		set: (value, o) => ({ ...o, includeSyncScope: value }),
+	},
+	{
+		name: "Automation and history",
+		desc: "Include auto-pull, auto-push, file history, and related automation settings.",
+		get: (o) => o.includeAutomation,
+		set: (value, o) => ({ ...o, includeAutomation: value }),
+	},
+	{
+		name: "Live sync relay settings",
+		desc: "Include the real-time sync toggle, relay URL, and relay token.",
+		get: (o) => o.includeRealtime,
+		set: (value, o) => ({ ...o, includeRealtime: value }),
+	},
+];
 
 export class SettingsTransferExportModal extends Modal {
 	private readonly createPackage: SettingsTransferExportModalOptions["createPackage"];
@@ -30,7 +115,6 @@ export class SettingsTransferExportModal extends Modal {
 	private exportPackage: SettingsTransferPackage | null = null;
 	private note = "Select what to export, then generate the encrypted link.";
 	private generating = false;
-	private entireConfig = false;
 
 	constructor(app: App, options: SettingsTransferExportModalOptions) {
 		super(app);
@@ -59,122 +143,20 @@ export class SettingsTransferExportModal extends Modal {
 		});
 		contentEl.createEl("h3", { text: "What to export" });
 
-		new Setting(contentEl)
-			.setName("Entire transferable config")
-			.setDesc(
-				"Includes all saved storage setups plus sync scope, automation, history, and live sync settings.",
-			)
-			.addToggle((toggle) => {
-				toggle.setValue(this.entireConfig).onChange((value) => {
-					this.entireConfig = value;
-					if (value) {
-						this.options = {
-							storageMode: ESettingsTransferStorageMode.All,
-							includeSyncScope: true,
-							includeAutomation: true,
-							includeRealtime: true,
-						};
-					}
-					this.markSelectionChanged();
-				});
-			});
-
-		new Setting(contentEl)
-			.setName("Current storage setup")
-			.setDesc(
-				"Transfer credentials and connection details for the currently selected backend so sync works right away.",
-			)
-			.addToggle((toggle) => {
-				toggle
-					.setValue(
-						this.options.storageMode !== ESettingsTransferStorageMode.None,
-					)
-					.setDisabled(
-						this.entireConfig ||
-							this.options.storageMode === ESettingsTransferStorageMode.All,
-					)
-					.onChange((value) => {
-						this.entireConfig = false;
-						this.options = {
-							...this.options,
-							storageMode: value
-								? ESettingsTransferStorageMode.Active
-								: ESettingsTransferStorageMode.None,
-						};
-						this.markSelectionChanged();
-					});
-			});
-
-		new Setting(contentEl)
-			.setName("All saved storage setups")
-			.setDesc(
-				"Also include every saved backend configuration, not just the currently selected one.",
-			)
-			.addToggle((toggle) => {
-				toggle
-					.setValue(
-						this.options.storageMode === ESettingsTransferStorageMode.All,
-					)
-					.setDisabled(this.entireConfig)
-					.onChange((value) => {
-						this.entireConfig = false;
-						this.options = {
-							...this.options,
-							storageMode: value
-								? ESettingsTransferStorageMode.All
-								: this.options.storageMode === ESettingsTransferStorageMode.None
-									? ESettingsTransferStorageMode.None
-									: ESettingsTransferStorageMode.Active,
-						};
-						this.markSelectionChanged();
-					});
-			});
-
-		new Setting(contentEl)
-			.setName("Sync scope and ignore rules")
-			.setDesc(
-				"Include Obsidian sync categories, device-local ignore patterns, and the max file size limit.",
-			)
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.options.includeSyncScope)
-					.setDisabled(this.entireConfig)
-					.onChange((value) => {
-						this.entireConfig = false;
-						this.options = { ...this.options, includeSyncScope: value };
-						this.markSelectionChanged();
-					});
-			});
-
-		new Setting(contentEl)
-			.setName("Automation and history")
-			.setDesc(
-				"Include auto-pull, auto-push, file history, and related automation settings.",
-			)
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.options.includeAutomation)
-					.setDisabled(this.entireConfig)
-					.onChange((value) => {
-						this.entireConfig = false;
-						this.options = { ...this.options, includeAutomation: value };
-						this.markSelectionChanged();
-					});
-			});
-
-		new Setting(contentEl)
-			.setName("Live sync relay settings")
-			.setDesc("Include the real-time sync toggle, relay URL, and relay token.")
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.options.includeRealtime)
-					.setDisabled(this.entireConfig)
-					.onChange((value) => {
-						this.entireConfig = false;
-						this.options = { ...this.options, includeRealtime: value };
-						this.markSelectionChanged();
-					});
-			});
+		for (const toggle of EXPORT_TOGGLES) {
+			new Setting(contentEl)
+				.setName(toggle.name)
+				.setDesc(toggle.desc)
+				.addToggle((control) =>
+					control
+						.setValue(toggle.get(this.options))
+						.setDisabled(toggle.locked?.(this.options) ?? false)
+						.onChange((value) => {
+							this.options = toggle.set(value, this.options);
+							this.markSelectionChanged();
+						}),
+				);
+		}
 
 		contentEl.createEl("h3", { text: "Export preview" });
 		contentEl.createEl("p", { text: this.note });
@@ -260,7 +242,7 @@ export class SettingsTransferExportModal extends Modal {
 				: "Link ready. The QR code was skipped because this export is too large to scan reliably.";
 		} catch (err) {
 			this.exportPackage = null;
-			this.note = err instanceof Error ? err.message : String(err);
+			this.note = errorMessage(err);
 		} finally {
 			this.generating = false;
 			this.render();

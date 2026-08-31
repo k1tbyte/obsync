@@ -15,13 +15,11 @@ import {
 import type { ObsyncSettingTab } from "@/settings/tab";
 import {
 	createSettingsTransferPackage as buildSettingsTransferPackage,
-	createSettingsTransferUrl,
 	mergeTransferredSettings,
-	type ObsyncTransferSettings,
 	readSettingsTransfer,
 	type SettingsTransferExportOptions,
 	type SettingsTransferPackage,
-	settingsTransferAction,
+	TRANSFER_ACTION,
 } from "@/settings/transfer";
 import {
 	isPathInShare,
@@ -36,7 +34,6 @@ import { rotatePassphrase } from "@/sync/keyfile";
 import type { RealtimePresenceDevice } from "@/sync/realtime";
 import { registerScheduler } from "@/sync/scheduler";
 import { loadState } from "@/sync/state";
-import type { LocalState } from "@/types";
 import {
 	confirmAdoptNewVault,
 	confirmSettingsTransferImport,
@@ -106,7 +103,7 @@ export default class ObsyncPlugin extends Plugin {
 
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
-		this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
+		this.registerObsidianProtocolHandler(TRANSFER_ACTION, (params) => {
 			void this.handleSettingsTransferProtocol(params);
 		});
 
@@ -245,12 +242,6 @@ export default class ObsyncPlugin extends Plugin {
 		}, SCOPE_REFRESH_DEBOUNCE_MS);
 	}
 
-	async createSettingsTransferUrl(): Promise<string | null> {
-		const passphrase = await this.requireTransferPassphrase();
-		if (!passphrase) return null;
-		return createSettingsTransferUrl(this.settings, passphrase);
-	}
-
 	async createSettingsTransferPackage(
 		options: SettingsTransferExportOptions,
 	): Promise<SettingsTransferPackage | null> {
@@ -263,10 +254,10 @@ export default class ObsyncPlugin extends Plugin {
 		const passphrase = await this.requireTransferPassphrase();
 		if (!passphrase) return false;
 		const imported = await readSettingsTransfer(input, passphrase);
-		const settings = mergeTransferredSettings(this.settings, imported);
-		const confirmed = await confirmSettingsTransferImport(this.app, settings);
+		const merged = mergeTransferredSettings(this.settings, imported);
+		const confirmed = await confirmSettingsTransferImport(this.app, merged);
 		if (!confirmed) return false;
-		await this.applyImportedSettings(imported);
+		await this.applyImportedSettings(merged);
 		return true;
 	}
 
@@ -336,20 +327,14 @@ export default class ObsyncPlugin extends Plugin {
 		return epoch;
 	}
 
-	applyState(state: LocalState): void {
-		this.statePersister.setInitial(state);
-	}
-
 	private async requireTransferPassphrase(): Promise<string | null> {
 		if (!(await this.passphraseManager.prompt(false))) return null;
 		return this.passphraseManager.current();
 	}
 
-	private async applyImportedSettings(
-		settings: ObsyncTransferSettings,
-	): Promise<void> {
-		const nextSettings = mergeTransferredSettings(this.settings, settings);
-		Object.assign(this.settings, nextSettings);
+	/** Applies the settings the user just confirmed in the import dialog. */
+	private async applyImportedSettings(merged: ObsyncSettings): Promise<void> {
+		Object.assign(this.settings, merged);
 		this.passphraseManager.invalidateKey();
 		await this.saveSettings();
 		await this.passphraseManager.persistIfEnabled();

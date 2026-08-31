@@ -8,7 +8,6 @@ export interface ObjectStorage {
 
 export interface StorageCapabilities {
 	canList: boolean;
-	hasConditionalWrites: boolean;
 }
 
 export interface StorageAdapter extends ObjectStorage {

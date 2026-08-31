@@ -1,14 +1,16 @@
-import { decryptBytes, sha256Hex } from "../../crypto";
+import { LOG_PATH_LIMIT } from "../../constants";
+import { sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { EChangeType } from "../../types";
 import { deletePath, writeBinary } from "../../vault/io";
-import { textToBytes } from "../content";
+import {
+	loadLocalText,
+	loadRemoteText,
+	textToBytes,
+	writeRemoteObject,
+} from "../content";
 import { applyHunks, computeHunks } from "../hunks";
-import { objectKey } from "../manifest";
-import { loadLocalText, loadRemoteText } from "./text-loaders";
 import type { Operation } from "./types";
-
-const LOG_PATH_LIMIT = 50;
 
 export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 	deps,
@@ -32,14 +34,7 @@ export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 			delete nextHashCache[path];
 			continue;
 		}
-		const blob = await deps.storage.get(objectKey(baselineEntry.hash));
-		if (!blob) throw new Error(`Baseline object missing for ${path}`);
-		const plaintext = await decryptBytes(deps.key, blob);
-		const verify = await sha256Hex(plaintext);
-		if (verify !== baselineEntry.hash) {
-			throw new Error(`Hash mismatch reverting ${path}`);
-		}
-		await writeBinary(deps.adapter, path, plaintext);
+		await writeRemoteObject(deps, path, baselineEntry.hash);
 		nextHashCache[path] = {
 			mtime: Date.now(),
 			size: baselineEntry.size,
@@ -72,7 +67,7 @@ export const revertHunksOp: Operation<RevertHunksArgs> = async (
 	const baselineText = baselineEntry
 		? ((await loadRemoteText(deps, baselineEntry.hash)) ?? "")
 		: "";
-	const local = (await loadLocalText(deps, path)) ?? "";
+	const local = (await loadLocalText(deps.adapter, path)) ?? "";
 	const { hunks } = computeHunks(baselineText, local);
 	const keep = new Set<number>();
 	for (let i = 0; i < hunks.length; i++) {

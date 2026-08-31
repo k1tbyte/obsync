@@ -1,3 +1,4 @@
+import { LOG_PATH_LIMIT } from "../../constants";
 import { ESyncLogOperation } from "../../logs/store";
 import { resetSessionState } from "../baseline";
 import {
@@ -7,8 +8,6 @@ import {
 } from "../engine";
 import { resetRemoteStorage as resetStorageObjects } from "../reset";
 import type { OperationContext } from "./types";
-
-const LOG_PATH_LIMIT = 50;
 
 export interface FlowResult {
 	compareResult: CompareResult;

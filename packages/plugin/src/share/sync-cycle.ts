@@ -1,13 +1,8 @@
-import { diff3Merge } from "node-diff3";
-
+import { SHARE_LOG_PATH_LIMIT } from "../constants";
 import { isTextMergeCandidate } from "../sync/auto-merge";
 import { advanceSessionAfterPush, buildSessionState } from "../sync/baseline";
-import {
-	loadLocalText,
-	loadRemoteBytes,
-	loadRemoteText,
-	textToBytes,
-} from "../sync/content";
+import { tryAutoMergeConflict } from "../sync/conflict-merge";
+import { loadRemoteBytes } from "../sync/content";
 import {
 	type CompareResult,
 	compare,
@@ -15,7 +10,7 @@ import {
 	pullPaths,
 	pushPaths,
 } from "../sync/engine";
-import type { Conflict, HashCacheEntry, SessionState } from "../types";
+import type { HashCacheEntry, Manifest, SessionState } from "../types";
 import { writeBinary } from "../vault/io";
 
 export interface ShareCycleHooks {
@@ -36,8 +31,6 @@ export interface ShareCycleOutcome {
 	conflictCopies: string[];
 }
 
-const LOG_PATH_LIMIT = 25;
-
 /**
  * One full bidirectional sync of a share: compare, auto-resolve conflicts
  * (three-way merge or conflict copies — never losing either side's data),
@@ -52,7 +45,12 @@ export async function runShareSyncCycle(
 	deps: EngineDependencies,
 	hooks: ShareCycleHooks,
 ): Promise<ShareCycleOutcome> {
-	let result = await compare(deps);
+	// The session advances as the cycle progresses; `deps` stays the read-only
+	// config it is everywhere else in the engine.
+	let session = deps.state;
+	const current = (): EngineDependencies => ({ ...deps, state: session });
+
+	let result = await compare(current());
 	const outcome: ShareCycleOutcome = {
 		pulled: 0,
 		pushed: 0,
@@ -60,18 +58,19 @@ export async function runShareSyncCycle(
 	};
 
 	if (result.diff.conflicts.length > 0) {
-		const { resolved, copies } = await resolveConflicts(deps, result);
-		outcome.conflictCopies = copies;
-		if (copies.length > 0) {
+		const resolution = await resolveConflicts(current(), result);
+		outcome.conflictCopies = resolution.copies;
+		if (resolution.copies.length > 0) {
 			await hooks.log(
 				"warn",
-				`Shared folder "${shareName}": kept ${copies.length} conflict copy(ies).`,
-				copies.slice(0, LOG_PATH_LIMIT),
+				`Shared folder "${shareName}": kept ${resolution.copies.length} conflict copy(ies).`,
+				resolution.copies.slice(0, SHARE_LOG_PATH_LIMIT),
 			);
 		}
-		if (resolved > 0) {
-			await hooks.persist(deps.state);
-			result = await compare(deps);
+		if (resolution.baseline) {
+			session = { ...session, baseline: resolution.baseline };
+			await hooks.persist(session);
+			result = await compare(current());
 		}
 		if (result.diff.conflicts.length > 0) {
 			throw new Error(
@@ -82,31 +81,31 @@ export async function runShareSyncCycle(
 
 	const pullList = result.diff.remoteChanges.map((c) => c.path);
 	if (pullList.length > 0) {
-		const baseline = await pullPaths(deps, result, pullList);
-		deps.state = buildSessionState(
-			deps.state,
+		const baseline = await pullPaths(current(), result, pullList);
+		session = buildSessionState(
+			session,
 			baseline,
 			withoutPaths(result.updatedCache, pullList),
 		);
-		await hooks.persist(deps.state);
+		await hooks.persist(session);
 		await hooks.log(
 			"info",
 			`Shared folder "${shareName}": pulled ${pullList.length} file(s).`,
-			pullList.slice(0, LOG_PATH_LIMIT),
+			pullList.slice(0, SHARE_LOG_PATH_LIMIT),
 		);
 		outcome.pulled = pullList.length;
 	}
 
 	const pushList = result.diff.localChanges.map((c) => c.path);
 	if (pushList.length > 0) {
-		const manifest = await pushPaths(deps, result, pushList);
-		deps.state = advanceSessionAfterPush(deps.state, result, manifest);
-		await hooks.persist(deps.state);
+		const manifest = await pushPaths(current(), result, pushList);
+		session = advanceSessionAfterPush(session, result, manifest);
+		await hooks.persist(session);
 		hooks.notifyPeers();
 		await hooks.log(
 			"info",
 			`Shared folder "${shareName}": pushed ${pushList.length} file(s).`,
-			pushList.slice(0, LOG_PATH_LIMIT),
+			pushList.slice(0, SHARE_LOG_PATH_LIMIT),
 		);
 		outcome.pushed = pushList.length;
 	}
@@ -119,16 +118,16 @@ export async function runShareSyncCycle(
  * - both edited, clean three-way text merge → merged content,
  * - anything else → local wins, and the remote version is preserved next to
  *   the file as a "(conflict from …)" copy that syncs like any other file.
- * Resolution rewrites baseline entries so the next compare sees ordinary
- * local/remote changes instead of conflicts.
+ * Returns the rewritten baseline (null when nothing was resolved) so the next
+ * compare sees ordinary local/remote changes instead of conflicts.
  */
 async function resolveConflicts(
 	deps: EngineDependencies,
 	result: CompareResult,
-): Promise<{ resolved: number; copies: string[] }> {
+): Promise<{ baseline: Manifest | null; copies: string[] }> {
 	const remote = result.remote;
 	const template = deps.state.baseline ?? remote;
-	if (!template) return { resolved: 0, copies: [] };
+	if (!template) return { baseline: null, copies: [] };
 	const files = { ...(deps.state.baseline?.files ?? {}) };
 	const copies: string[] = [];
 	let resolved = 0;
@@ -147,18 +146,15 @@ async function resolveConflicts(
 		}
 		if (!remoteEntry) continue;
 
-		let merged = false;
-		if (
-			conflict.baselineHash &&
+		const merged =
+			Boolean(conflict.baselineHash) &&
 			(await isTextMergeCandidate(
 				deps,
 				conflict.path,
 				remote,
 				deps.state.baseline,
-			))
-		) {
-			merged = await tryThreeWayMerge(deps, conflict);
-		}
+			)) &&
+			(await tryAutoMergeConflict(deps, conflict));
 		if (!merged) {
 			const copyPath = await writeConflictCopy(
 				deps,
@@ -174,36 +170,8 @@ async function resolveConflicts(
 		resolved++;
 	}
 
-	if (resolved > 0) {
-		deps.state.baseline = { ...template, files };
-	}
-	return { resolved, copies };
-}
-
-async function tryThreeWayMerge(
-	deps: EngineDependencies,
-	conflict: Conflict,
-): Promise<boolean> {
-	const fetch = { storage: deps.storage, key: deps.key };
-	const [baseText, remoteText, localText] = await Promise.all([
-		loadRemoteText(fetch, conflict.baselineHash as string),
-		loadRemoteText(fetch, conflict.remoteHash),
-		loadLocalText(deps.adapter, conflict.path),
-	]);
-	if (baseText === null || remoteText === null || localText === null) {
-		return false;
-	}
-	const regions = diff3Merge(
-		toLines(localText),
-		toLines(baseText),
-		toLines(remoteText),
-	);
-	if (regions.some((region) => "conflict" in region)) return false;
-	const mergedText = regions
-		.flatMap((region) => ("ok" in region ? region.ok : []))
-		.join("\n");
-	await writeBinary(deps.adapter, conflict.path, textToBytes(mergedText));
-	return true;
+	if (resolved === 0) return { baseline: null, copies };
+	return { baseline: { ...template, files }, copies };
 }
 
 async function writeConflictCopy(
@@ -237,10 +205,6 @@ export function conflictCopyPath(
 	const day = now.toISOString().slice(0, 10);
 	const who = (deviceName ?? "remote").replace(/[\\/:*?"<>|]/g, "-").trim();
 	return `${dir}${stem} (conflict from ${who} ${day})${ext}`;
-}
-
-function toLines(value: string): string[] {
-	return value.replace(/\r\n/g, "\n").split("\n");
 }
 
 function withoutPaths(

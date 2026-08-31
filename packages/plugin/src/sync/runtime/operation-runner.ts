@@ -1,4 +1,5 @@
 import { ESyncLogOperation } from "@/logs/store";
+import { errorMessage } from "@/shared/errors";
 import type { SyncControllerHost } from "@/sync/controller";
 import {
 	type CompareResult,
@@ -61,7 +62,7 @@ export class OperationRunner {
 				),
 			);
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorMessage(err);
 			this.deps.runtimeState.setError(message);
 			await this.deps.host.logError(ESyncLogOperation.Compare, message);
 		} finally {
@@ -89,7 +90,7 @@ export class OperationRunner {
 				this.deps.runtimeState.setStaleReason(null);
 				return true;
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				const message = errorMessage(err);
 				this.deps.runtimeState.setError(message);
 				await this.deps.host.logError(operation, message);
 				return false;
@@ -158,7 +159,7 @@ export class OperationRunner {
 					await this.deps.host.logWarn(operation, err.message);
 					return;
 				}
-				const message = err instanceof Error ? err.message : String(err);
+				const message = errorMessage(err);
 				this.deps.runtimeState.setError(message);
 				await this.deps.host.logError(operation, message);
 			} finally {

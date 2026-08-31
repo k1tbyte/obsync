@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 
+import { DEFAULT_CONCURRENCY } from "../constants";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
@@ -40,7 +41,7 @@ export async function issueShareToken(
 		kind: EStorageBackend.ShareBroker,
 		brokerUrl: normalizeUrl(admin.url),
 		shareToken: body.token,
-		concurrency: 4,
+		concurrency: DEFAULT_CONCURRENCY,
 	};
 }
 

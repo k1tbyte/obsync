@@ -1,3 +1,4 @@
+import { hasDotSegment, normalizePath } from "../shared/path";
 import { EFileKind } from "../types";
 import type { ScopePolicy } from "../vault/scope";
 import type { SymlinkDetector } from "../vault/symlinks";
@@ -12,7 +13,7 @@ export function createShareScopePolicy(
 	symlinks?: SymlinkDetector,
 ): ScopePolicy {
 	const allowed = (rawPath: string): boolean => {
-		const path = normalize(rawPath);
+		const path = normalizePath(rawPath);
 		if (!path) return false;
 		return !hasDotSegment(path) && !symlinks?.isLink(path);
 	};
@@ -20,7 +21,7 @@ export function createShareScopePolicy(
 		includes: allowed,
 		includesInDiff: allowed,
 		canDescend(rawDir) {
-			const dir = normalize(rawDir);
+			const dir = normalizePath(rawDir);
 			if (!dir) return true; // share root
 			return !hasDotSegment(dir) && !symlinks?.isLink(dir);
 		},
@@ -31,12 +32,4 @@ export function createShareScopePolicy(
 			return false;
 		},
 	};
-}
-
-function hasDotSegment(path: string): boolean {
-	return path.split("/").some((seg) => seg.startsWith("."));
-}
-
-function normalize(path: string): string {
-	return path.replace(/^\/+/, "").replace(/\\/g, "/");
 }

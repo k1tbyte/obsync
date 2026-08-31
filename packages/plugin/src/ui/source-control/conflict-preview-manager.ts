@@ -47,29 +47,18 @@ export class ConflictPreviewManager {
 	): void {
 		const previewEl = parent.createDiv({ cls: "obsync-conflict-preview" });
 		const cached = this.previewCache.get(path);
-		if (cached === undefined && !this.loadingPreviews.has(path)) {
-			this.loadingPreviews.add(path);
-			previewEl.setText("Loading diff…");
-			void this.loadPreview(path).then((model) => {
-				this.previewCache.set(path, model);
-				this.loadingPreviews.delete(path);
-				this.renderInto(previewEl, model, path, handlers);
-			});
-			return;
-		}
-		if (cached === null) {
-			previewEl.setText("No diff available.");
-			return;
-		}
-		if (cached?.isBinary) {
-			previewEl.setText("Binary file — cannot preview diff.");
-			return;
-		}
-		if (cached) {
-			renderConflictPreview(previewEl, cached, path, handlers);
+		if (cached !== undefined) {
+			this.renderInto(previewEl, cached, path, handlers);
 			return;
 		}
 		previewEl.setText("Loading diff…");
+		if (this.loadingPreviews.has(path)) return;
+		this.loadingPreviews.add(path);
+		void this.loadPreview(path).then((model) => {
+			this.previewCache.set(path, model);
+			this.loadingPreviews.delete(path);
+			this.renderInto(previewEl, model, path, handlers);
+		});
 	}
 
 	private renderInto(

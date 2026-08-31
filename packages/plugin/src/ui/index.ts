@@ -1,6 +1,12 @@
 export { DiffView } from "./diff-view";
 export { registerFileExplorerIndicators } from "./file-explorer-indicators";
 export {
+	deepCleanOrphanedObjects,
+	resetLocalState,
+	resetRemoteStorage,
+	verifyRemoteIntegrity,
+} from "./maintenance-actions";
+export {
 	askNewPassphrase,
 	askPassphrase,
 	askSettingsTransferInput,
@@ -16,7 +22,12 @@ export {
 	SyncReportModal,
 	showSettingsTransferExport,
 } from "./modals";
-export { notifyError, notifyInfo } from "./notices";
+export {
+	notifyError,
+	notifyInfo,
+	reportError,
+	runWithNotice,
+} from "./notices";
 export { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
 export { type RealtimeStatusHandle, registerRibbon } from "./ribbon";
 export {

@@ -10,6 +10,7 @@ import {
 } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
 import type ObsyncPlugin from "../main";
+import { errorMessage } from "../shared/errors";
 import { formatBytes } from "../shared/format";
 import type { FileDiffModel } from "../sync/projection";
 import {
@@ -33,6 +34,14 @@ enum EDiffMode {
 	Split = "split",
 	Unified = "unified",
 }
+
+const HUNK_OPS = {
+	push: { ok: "pushed hunk", fail: "Push hunk failed" },
+	pull: { ok: "pulled hunk", fail: "Pull hunk failed" },
+	revert: { ok: "reverted hunk", fail: "Revert hunk failed" },
+} as const;
+
+type HunkOpKind = keyof typeof HUNK_OPS;
 
 export class DiffView extends ItemView {
 	private readonly plugin: ObsyncPlugin;
@@ -155,7 +164,7 @@ export class DiffView extends ItemView {
 
 			this.renderShell();
 		} catch (err) {
-			this.renderError(err instanceof Error ? err.message : String(err));
+			this.renderError(errorMessage(err));
 		} finally {
 			this.rendering = false;
 		}
@@ -323,9 +332,9 @@ export class DiffView extends ItemView {
 		}
 		const list = parent.createDiv({ cls: "obsync-hunk-list" });
 		const callbacks: HunkCardCallbacks = {
-			onPushHunk: (i) => void this.pushSingleHunk(i),
-			onPullHunk: (i) => void this.pullSingleHunk(i),
-			onRevertHunk: (i) => void this.revertSingleHunk(i),
+			onPushHunk: (i) => void this.runHunkOp("push", i),
+			onPullHunk: (i) => void this.runHunkOp("pull", i),
+			onRevertHunk: (i) => void this.runHunkOp("revert", i),
 			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
 			onSelectHunk: (i) => this.setCurrentHunk(i),
 		};
@@ -386,88 +395,82 @@ export class DiffView extends ItemView {
 	}
 
 	private async restoreVersion(): Promise<void> {
-		if (!this.path || !this.historyHash) return;
-		try {
-			await this.plugin.controller.restoreFileVersion(
-				this.path,
-				this.historyHash,
-			);
-			notifyInfo("Restored version. Review and push when ready.");
-			await this.refreshModel();
-		} catch (err) {
-			notifyError("Restore failed", err);
-		}
+		const { path, historyHash } = this;
+		if (!path || !historyHash) return;
+		await this.runOnFile(
+			() => this.plugin.controller.restoreFileVersion(path, historyHash),
+			"Restored version. Review and push when ready.",
+			"Restore failed",
+		);
 	}
 
 	private async restoreHistoryHunk(index: number): Promise<void> {
-		if (!this.path || !this.historyHash) return;
-		try {
-			await this.plugin.controller.restoreHistoryHunks(
-				this.path,
-				this.historyHash,
-				new Set([index]),
-			);
-			notifyInfo("Restored hunk. Review and push when ready.");
-			await this.refreshModel();
-		} catch (err) {
-			notifyError("Restore hunk failed", err);
-		}
+		const { path, historyHash } = this;
+		if (!path || !historyHash) return;
+		await this.runOnFile(
+			() =>
+				this.plugin.controller.restoreHistoryHunks(
+					path,
+					historyHash,
+					new Set([index]),
+				),
+			"Restored hunk. Review and push when ready.",
+			"Restore hunk failed",
+		);
 	}
 
-	private async pushSingleHunk(index: number): Promise<void> {
-		if (!this.path) return;
-		try {
-			await this.plugin.controller.pushHunks(this.path, new Set([index]));
-			notifyInfo("pushed hunk");
-			await this.refreshModel();
-		} catch (err) {
-			notifyError("Push hunk failed", err);
-		}
-	}
-
-	private async pullSingleHunk(index: number): Promise<void> {
-		if (!this.path) return;
-		try {
-			await this.plugin.controller.pullHunks(this.path, new Set([index]));
-			notifyInfo("pulled hunk");
-			await this.refreshModel();
-		} catch (err) {
-			notifyError("Pull hunk failed", err);
-		}
-	}
-
-	private async revertSingleHunk(index: number): Promise<void> {
-		if (!this.path) return;
-		try {
-			await this.plugin.controller.revertHunks(this.path, new Set([index]));
-			notifyInfo("reverted hunk");
-			await this.refreshModel();
-		} catch (err) {
-			notifyError("Revert hunk failed", err);
-		}
+	private async runHunkOp(kind: HunkOpKind, index: number): Promise<void> {
+		const path = this.path;
+		if (!path) return;
+		const selected = new Set([index]);
+		const controller = this.plugin.controller;
+		const run = {
+			push: () => controller.pushHunks(path, selected),
+			pull: () => controller.pullHunks(path, selected),
+			revert: () => controller.revertHunks(path, selected),
+		}[kind];
+		const op = HUNK_OPS[kind];
+		await this.runOnFile(run, op.ok, op.fail);
 	}
 
 	private async resolveKeepLocal(): Promise<void> {
-		if (!this.path) return;
-		const resolved = this.path;
-		try {
-			await this.plugin.controller.resolveConflictKeepLocal(resolved);
-			notifyInfo("kept local version");
-			await this.advanceAfterResolve(resolved);
-		} catch (err) {
-			notifyError("Resolve keep local failed", err);
-		}
+		const path = this.path;
+		if (!path) return;
+		await this.runOnFile(
+			() => this.plugin.controller.resolveConflictKeepLocal(path),
+			"kept local version",
+			"Resolve keep local failed",
+			() => this.advanceAfterResolve(path),
+		);
 	}
 
 	private async resolveAcceptRemote(): Promise<void> {
-		if (!this.path) return;
-		const resolved = this.path;
+		const path = this.path;
+		if (!path) return;
+		await this.runOnFile(
+			() => this.plugin.controller.resolveConflictAcceptRemote(path),
+			"accepted remote version",
+			"Resolve accept remote failed",
+			() => this.advanceAfterResolve(path),
+		);
+	}
+
+	/**
+	 * Runs a controller call for the open file, announces it, then re-reads the
+	 * view. `then` overrides the follow-up for actions that move to another file.
+	 */
+	private async runOnFile(
+		action: () => Promise<void>,
+		okMessage: string,
+		failureLabel: string,
+		then: () => Promise<void> = () => this.refreshModel(),
+	): Promise<void> {
 		try {
-			await this.plugin.controller.resolveConflictAcceptRemote(resolved);
-			notifyInfo("accepted remote version");
-			await this.advanceAfterResolve(resolved);
+			await action();
+			notifyInfo(okMessage);
+			await then();
 		} catch (err) {
-			notifyError("Resolve accept remote failed", err);
+			notifyError(failureLabel, err);
 		}
 	}
 

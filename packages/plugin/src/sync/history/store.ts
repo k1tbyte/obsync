@@ -4,6 +4,7 @@ import {
 	SNAPSHOT_INDEX_VERSION,
 } from "../../constants";
 import { decryptJson, type EncryptionKey, encryptJson } from "../../crypto";
+import { errorMessage } from "../../shared/errors";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
 import type { SnapshotIndex, SnapshotIndexEntry } from "./types";
@@ -27,9 +28,7 @@ export async function readSnapshotIndex(
 		// index here would let the caller overwrite the real one and orphan all
 		// history. Fail loudly instead so the update is skipped this round.
 		throw new Error(
-			`Snapshot index present but unreadable; refusing to reset it: ${
-				err instanceof Error ? err.message : String(err)
-			}`,
+			`Snapshot index present but unreadable; refusing to reset it: ${errorMessage(err)}`,
 		);
 	}
 	if (!Array.isArray(parsed.entries)) {

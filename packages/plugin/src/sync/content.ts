@@ -8,10 +8,11 @@ import {
 import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 import type { Manifest } from "../types";
-import { readBinary } from "../vault/io";
+import { readBinary, writeBinary } from "../vault/io";
 import { objectKey } from "./manifest";
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
+const encoder = new TextEncoder();
 
 export interface RemoteFetchOptions {
 	storage: ObjectStorage;
@@ -48,6 +49,21 @@ export async function loadRemoteBytes(
 		throw new Error(`Hash mismatch for remote object ${hash}`);
 	}
 	return plaintext;
+}
+
+/**
+ * Downloads one object, verifies it against its hash, and writes it to `path`.
+ * The single path for materialising a remote object on disk.
+ */
+export async function writeRemoteObject(
+	deps: RemoteFetchOptions & { adapter: DataAdapter },
+	path: string,
+	hash: string,
+): Promise<Uint8Array> {
+	const bytes = await loadRemoteBytes(deps, hash);
+	if (!bytes) throw new Error(`Missing remote object for ${path}`);
+	await writeBinary(deps.adapter, path, bytes);
+	return bytes;
 }
 
 export async function loadRemoteText(
@@ -105,5 +121,5 @@ export function bytesToText(bytes: Uint8Array): string {
 }
 
 export function textToBytes(text: string): Uint8Array {
-	return new TextEncoder().encode(text);
+	return encoder.encode(text);
 }

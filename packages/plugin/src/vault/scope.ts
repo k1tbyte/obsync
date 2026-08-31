@@ -12,6 +12,7 @@ import {
 	VAULT_SUBDIR_DENYLIST,
 } from "../constants";
 import type { SettingsSyncCategories } from "../settings/model";
+import { hasDotSegment, normalizePath } from "../shared/path";
 import { EFileKind } from "../types";
 import type { IgnoreMatcher } from "./ignore";
 import type { SymlinkDetector } from "./symlinks";
@@ -61,20 +62,20 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 
 	return {
 		includes(rawPath) {
-			const path = normalize(rawPath);
+			const path = normalizePath(rawPath);
 			if (!isPathAllowed(path)) return false;
 			if (isIgnoreFile(path)) return true;
 			if (isSharedIgnored(path) || isLocalIgnored(path)) return false;
 			return true;
 		},
 		includesInDiff(rawPath) {
-			const path = normalize(rawPath);
+			const path = normalizePath(rawPath);
 			if (!isPathAllowed(path)) return false;
 			if (isIgnoreFile(path)) return true;
 			return !isLocalIgnored(path);
 		},
 		canDescend(rawDir) {
-			const dir = normalize(rawDir);
+			const dir = normalizePath(rawDir);
 			if (!dir) return true;
 			const dirPath = `${dir}/`;
 			if (isInVaultDenylist(dirPath)) return false;
@@ -92,13 +93,13 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			return !hasDotSegment(dir);
 		},
 		classify(rawPath) {
-			const path = normalize(rawPath);
+			const path = normalizePath(rawPath);
 			if (path.startsWith(pluginsDir)) return EFileKind.Plugin;
 			if (path.startsWith(configPrefix)) return EFileKind.Config;
 			return EFileKind.Vault;
 		},
 		isIgnoredByPattern(rawPath) {
-			const path = normalize(rawPath);
+			const path = normalizePath(rawPath);
 			if (!path) return false;
 			if (isInVaultDenylist(path)) return false;
 			if (path.startsWith(ownPluginPrefix)) return false;
@@ -176,14 +177,6 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 
 function isInVaultDenylist(path: string): boolean {
 	return VAULT_SUBDIR_DENYLIST.some((d) => path.startsWith(d));
-}
-
-function hasDotSegment(path: string): boolean {
-	return path.split("/").some((seg) => seg.startsWith("."));
-}
-
-function normalize(path: string): string {
-	return path.replace(/^\/+/, "").replace(/\\/g, "/");
 }
 
 function stripTrailingSlash(value: string): string {

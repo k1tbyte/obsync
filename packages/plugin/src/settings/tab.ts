@@ -2,14 +2,17 @@ import { type App, PluginSettingTab, Setting, TFile } from "obsidian";
 
 import { IGNORE_FILE_NAME } from "@/constants";
 import type ObsyncPlugin from "@/main";
+import { EFieldKind } from "@/storage/field-spec";
 import { defaultDeviceName } from "@/sync/device";
 import {
 	askSettingsTransferInput,
 	notifyError,
 	notifyInfo,
 	openInEditor,
+	reportError,
 	showSettingsTransferExport,
 } from "@/ui";
+import { type FieldContext, renderFields, type SettingsField } from "./fields";
 import { renderLogsView } from "./logs-view";
 import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import {
@@ -65,56 +68,47 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 	},
 ];
 
-const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
+const SCOPE_CHANGED = "Sync scope settings changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MIN_MAX_FILE_MB = 1;
 
-interface ApplySettingsOptions {
-	refreshScope?: boolean;
-}
-
-interface ToggleFieldConfig {
-	name: string;
-	desc?: string;
-	get: (s: ObsyncSettings) => boolean;
-	set: (value: boolean, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
-	refreshScope?: boolean;
-}
-
-interface NumberFieldConfig {
-	name: string;
-	desc?: string;
-	get: (s: ObsyncSettings) => string;
-	parse: (raw: string) => number;
-	set: (value: number) => Partial<ObsyncSettings>;
-	refreshScope?: boolean;
-}
-
-const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
+const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 	{
+		kind: EFieldKind.Toggle,
 		name: "Status bar indicator",
 		get: (s) => s.showStatusBar,
 		set: (v) => ({ showStatusBar: v }),
 	},
 	{
+		kind: EFieldKind.Toggle,
 		name: "Ribbon icon",
 		get: (s) => s.showRibbonIcon,
 		set: (v) => ({ showRibbonIcon: v }),
 	},
 	{
+		kind: EFieldKind.Toggle,
 		name: "File explorer indicators",
 		desc: "Color file names in the file tree by change status.",
 		get: (s) => s.showFileExplorerIndicators,
 		set: (v) => ({ showFileExplorerIndicators: v }),
 	},
 	{
+		kind: EFieldKind.Toggle,
 		name: "Editor change signs",
 		desc: "Show per-line gutter marks for changes since the last sync.",
 		get: (s) => s.showEditorChangeSigns,
-		set: (v, plugin) => {
-			plugin.refreshEditorSigns(v);
-			return { showEditorChangeSigns: v };
-		},
+		set: (v) => ({ showEditorChangeSigns: v }),
+		after: (plugin) =>
+			plugin.refreshEditorSigns(plugin.settings.showEditorChangeSigns),
+	},
+	{
+		kind: EFieldKind.Number,
+		name: "Max file size (MB)",
+		desc: "Files larger than this are skipped.",
+		get: (s) => String(Math.round(s.maxFileBytes / BYTES_PER_MB)),
+		parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
+		set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
+		refreshScope: true,
 	},
 ];
 
@@ -161,6 +155,10 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		this.renderAdvancedSection(containerEl);
 		renderMaintenanceSection(containerEl, this.plugin);
 		renderSecuritySection(containerEl, this.plugin, () => this.display());
+	}
+
+	private fieldContext(): FieldContext {
+		return { plugin: this.plugin, rerender: () => this.display() };
 	}
 
 	private unsubscribeSections(): void {
@@ -225,17 +223,20 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		new Setting(parent).setDesc(
 			"Workspace, cache, trash and device-local plugin data are never synced.",
 		);
-		for (const row of SETTINGS_SYNC_ROWS) {
-			this.renderToggleField(parent, {
+		renderFields(
+			parent,
+			this.fieldContext(),
+			SETTINGS_SYNC_ROWS.map((row) => ({
+				kind: EFieldKind.Toggle as const,
 				name: row.name,
 				desc: row.desc,
-				get: (s) => s.settingsSync[row.key],
-				set: (v) => ({
+				get: (s: ObsyncSettings) => s.settingsSync[row.key],
+				set: (v: boolean) => ({
 					settingsSync: { ...this.plugin.settings.settingsSync, [row.key]: v },
 				}),
 				refreshScope: true,
-			});
-		}
+			})),
+		);
 	}
 
 	private renderIgnoreSection(parent: HTMLElement): void {
@@ -244,13 +245,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			"Applied only on this device, in addition to the shared syncignore.md note in the vault root.",
 		);
 
-		this.renderToggleField(parent, {
-			name: "Ignore symlinks",
-			desc: "Skip symbolic links, Windows junctions and directory links. They point outside the vault and exist only on this device.",
-			get: (s) => s.ignoreSymlinks,
-			set: (v) => ({ ignoreSymlinks: v }),
-			refreshScope: true,
-		});
+		renderFields(parent, this.fieldContext(), [
+			{
+				kind: EFieldKind.Toggle,
+				name: "Ignore symlinks",
+				desc: "Skip symbolic links, Windows junctions and directory links. They point outside the vault and exist only on this device.",
+				get: (s) => s.ignoreSymlinks,
+				set: (v) => ({ ignoreSymlinks: v }),
+				refreshScope: true,
+			},
+		]);
 
 		new Setting(parent)
 			.setName("Patterns")
@@ -258,9 +262,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			.addTextArea((t) => {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;
-				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) =>
-					this.applySettings({ ignorePatterns: v }, { refreshScope: true }),
-				);
+				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) => {
+					this.plugin.settings.ignorePatterns = v;
+					void this.plugin
+						.saveSettings()
+						.then(() => this.plugin.scheduleScopeRefresh(SCOPE_CHANGED));
+				});
 			})
 			.addButton((button) =>
 				button
@@ -271,7 +278,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
 	private renderUiSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Interface").setHeading();
-		for (const toggle of UI_TOGGLES) this.renderToggleField(parent, toggle);
+		renderFields(parent, this.fieldContext(), INTERFACE_FIELDS);
 	}
 
 	private renderAdvancedSection(parent: HTMLElement): void {
@@ -288,58 +295,6 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.getDeviceName())
 					.onChange((v) => void this.plugin.setDeviceName(v)),
 			);
-
-		this.renderNumberField(parent, {
-			name: "Max file size (MB)",
-			desc: "Files larger than this are skipped.",
-			get: (s) => String(Math.round(s.maxFileBytes / BYTES_PER_MB)),
-			parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
-			set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
-			refreshScope: true,
-		});
-	}
-
-	private renderToggleField(
-		parent: HTMLElement,
-		field: ToggleFieldConfig,
-	): void {
-		const setting = new Setting(parent).setName(field.name);
-		if (field.desc) setting.setDesc(field.desc);
-		setting.addToggle((t) =>
-			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
-				this.applySettings(field.set(v, this.plugin), {
-					refreshScope: field.refreshScope,
-				}),
-			),
-		);
-	}
-
-	private renderNumberField(
-		parent: HTMLElement,
-		field: NumberFieldConfig,
-	): void {
-		const setting = new Setting(parent).setName(field.name);
-		if (field.desc) setting.setDesc(field.desc);
-		setting.addText((t) =>
-			t.setValue(field.get(this.plugin.settings)).onChange((raw) => {
-				const value = field.parse(raw);
-				this.applySettings(field.set(value), {
-					refreshScope: field.refreshScope,
-				});
-			}),
-		);
-	}
-
-	private applySettings(
-		partial: Partial<ObsyncSettings>,
-		options: ApplySettingsOptions = {},
-	): void {
-		Object.assign(this.plugin.settings, partial);
-		void this.plugin.saveSettings().then(() => {
-			if (options.refreshScope) {
-				this.plugin.scheduleScopeRefresh(SCOPE_SETTINGS_CHANGED);
-			}
-		});
 	}
 
 	private async handleExportSettings(): Promise<void> {
@@ -358,7 +313,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			notifyInfo("settings imported.");
 			this.display();
 		} catch (err) {
-			this.notifyError(err);
+			reportError(err);
 		}
 	}
 
@@ -375,11 +330,5 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		await this.app.vault.create(IGNORE_FILE_NAME, "");
 		notifyInfo(`${IGNORE_FILE_NAME} created.`);
 		await openInEditor(this.app, IGNORE_FILE_NAME);
-	}
-
-	private notifyError(err: unknown): void {
-		const message = err instanceof Error ? err.message : String(err);
-		notifyError(message);
-		console.error("[obsync]", err);
 	}
 }

@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 
+import { DEFAULT_CONCURRENCY } from "../../constants";
 import { EStorageBackend, type ShareBrokerStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -39,7 +40,7 @@ export function defaultShareBrokerConfig(): ShareBrokerStorageConfig {
 		kind: EStorageBackend.ShareBroker,
 		brokerUrl: "",
 		shareToken: "",
-		concurrency: 4,
+		concurrency: DEFAULT_CONCURRENCY,
 	};
 }
 
@@ -84,7 +85,7 @@ export function createShareBrokerAdapter(
 	assertConfig(config);
 
 	return {
-		capabilities: { canList: true, hasConditionalWrites: false },
+		capabilities: { canList: true },
 		identity() {
 			return shareBrokerIdentity(config);
 		},

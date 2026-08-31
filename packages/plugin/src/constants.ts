@@ -183,6 +183,10 @@ export const DIFF_VIEW_TYPE = "obsync-diff";
 
 export const STATUS_EVENT = "obsync:status-changed";
 
+/** Fallback Google Drive auth broker when the user has not self-hosted one. */
+export const DEFAULT_GDRIVE_AUTH_SERVER =
+	"https://obsync-auth.kitbyte.workers.dev";
+
 export const RESET_CONFIRMATION_TEXT = "RESET";
 export const IMPORT_CONFIRMATION_TEXT = "IMPORT";
 export const QR_SIZE = 320;
@@ -203,6 +207,11 @@ export const SHARE_KEY_BYTES = 32;
 export const SCHEDULER_BACKOFF_THRESHOLD = 3;
 export const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;
 export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
+
+/** Max paths attached to a single log entry, so one big sync cannot flood the log. */
+export const LOG_PATH_LIMIT = 50;
+/** Shares log more often (every cycle), so they attach fewer paths. */
+export const SHARE_LOG_PATH_LIMIT = 25;
 
 export const BATCH_RESOLVE_CONFIRM_THRESHOLD = 5;
 

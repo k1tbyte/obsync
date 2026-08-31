@@ -12,11 +12,7 @@ export {
 	pushPathsOp,
 } from "./push";
 export { type RevertHunksArgs, revertHunksOp, revertPathsOp } from "./revert";
-export {
-	loadBaselineOrRemoteText,
-	loadLocalText,
-	loadRemoteText,
-} from "./text-loaders";
+export { loadBaselineOrRemoteText } from "./text-loaders";
 export type {
 	Operation,
 	OperationContext,

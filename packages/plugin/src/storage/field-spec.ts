@@ -1,3 +1,5 @@
+import { DEFAULT_CONCURRENCY } from "../constants";
+
 export enum EFieldKind {
 	Text = "text",
 	Password = "password",
@@ -43,5 +45,5 @@ export const CONCURRENCY_FIELD: NumberFieldSpec = {
 	name: "Concurrency",
 	desc: "Parallel uploads/downloads for this backend. Higher is faster but heavier on the remote.",
 	min: 1,
-	fallback: 4,
+	fallback: DEFAULT_CONCURRENCY,
 };

@@ -8,6 +8,7 @@ import {
 } from "../constants";
 import { importAesKey } from "../crypto";
 import type { ObsyncSettings } from "../settings/model";
+import { errorMessage } from "../shared/errors";
 import { createStorageAdapter, isAdapterConfigured } from "../storage";
 import type { StorageAdapter } from "../storage/types";
 import type { EngineDependencies } from "../sync/engine";
@@ -15,6 +16,7 @@ import { ConcurrentPushError } from "../sync/manifest";
 import { RealtimeClient } from "../sync/realtime";
 import type { LocalState, SessionState } from "../types";
 import { base64UrlToBytes } from "../utils/base64";
+import { runWithConcurrency } from "../utils/concurrency";
 import { createSymlinkDetector } from "../vault/symlinks";
 import { createShareScopePolicy } from "./scope";
 import { ScopedVaultAdapter } from "./scoped-adapter";
@@ -197,9 +199,9 @@ export class ShareSyncService {
 	async deleteRemoteShareData(share: SharedFolderConfig): Promise<void> {
 		const storage = this.getStorage(share);
 		const keys = await storage.list("");
-		for (const key of keys) {
-			await storage.delete(key);
-		}
+		await runWithConcurrency(keys, share.storage.concurrency, (key) =>
+			storage.delete(key),
+		);
 	}
 
 	dispose(): void {
@@ -274,7 +276,7 @@ export class ShareSyncService {
 				error: null,
 			});
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorMessage(err);
 			this.failStatus(shareId, message);
 			await this.host.log("error", `Shared folder "${share.name}": ${message}`);
 			throw err;

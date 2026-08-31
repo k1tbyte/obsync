@@ -3,7 +3,7 @@ import { clearCachedPassphrase } from "../../crypto/passphrase-cache";
 import type ObsyncPlugin from "../../main";
 import { PassphraseRotatedError } from "../../sync/keyfile";
 import { askNewPassphrase } from "../../ui/modals";
-import { notifyError, notifyInfo } from "../../ui/notices";
+import { notifyError, notifyInfo, reportError } from "../../ui/notices";
 
 export function renderSecuritySection(
 	parent: HTMLElement,
@@ -81,10 +81,4 @@ export function renderSecuritySection(
 				}
 			}),
 		);
-}
-
-function reportError(err: unknown): void {
-	const message = err instanceof Error ? err.message : String(err);
-	notifyError(message);
-	console.error("[obsync]", err);
 }

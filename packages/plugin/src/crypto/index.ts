@@ -45,10 +45,13 @@ export async function deriveKey(
 
 /** Imports raw key bytes as an AES-GCM content key (the envelope data key). */
 export async function importAesKey(raw: Uint8Array): Promise<EncryptionKey> {
-	return subtle.importKey("raw", raw as any, { name: "AES-GCM" }, false, [
-		"encrypt",
-		"decrypt",
-	]);
+	return subtle.importKey(
+		"raw",
+		toBufferSource(raw),
+		{ name: "AES-GCM" },
+		false,
+		["encrypt", "decrypt"],
+	);
 }
 
 export async function encryptBytes(
@@ -58,9 +61,9 @@ export async function encryptBytes(
 	const iv = randomBytes(IV_BYTES);
 	const ciphertext = new Uint8Array(
 		await subtle.encrypt(
-			{ name: "AES-GCM", iv: iv as any },
+			{ name: "AES-GCM", iv: toBufferSource(iv) },
 			key,
-			plaintext as any,
+			toBufferSource(plaintext),
 		),
 	);
 	const out = new Uint8Array(1 + iv.length + ciphertext.length);
@@ -83,9 +86,9 @@ export async function decryptBytes(
 	const iv = blob.subarray(1, 1 + IV_BYTES);
 	const ciphertext = blob.subarray(1 + IV_BYTES);
 	const plaintext = await subtle.decrypt(
-		{ name: "AES-GCM", iv: iv as any },
+		{ name: "AES-GCM", iv: toBufferSource(iv) },
 		key,
-		ciphertext as any,
+		toBufferSource(ciphertext),
 	);
 	return new Uint8Array(plaintext);
 }
@@ -106,7 +109,7 @@ export async function decryptJson<T>(
 }
 
 export async function sha256Hex(data: Uint8Array): Promise<string> {
-	const digest = await subtle.digest("SHA-256", data as any);
+	const digest = await subtle.digest("SHA-256", toBufferSource(data));
 	return toHex(new Uint8Array(digest));
 }
 
@@ -121,6 +124,15 @@ export function randomId(): string {
 		return window.crypto.randomUUID();
 	}
 	return toHex(randomBytes(16));
+}
+
+/**
+ * WebCrypto takes `BufferSource`; a `Uint8Array` over a `SharedArrayBuffer` is
+ * not assignable to it under the DOM types, and every array here is a plain
+ * one. Narrowing in a single helper keeps the cast off the call sites.
+ */
+function toBufferSource(bytes: Uint8Array): BufferSource {
+	return bytes as BufferSource;
 }
 
 function toHex(bytes: Uint8Array): string {
