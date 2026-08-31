@@ -15,6 +15,7 @@ import { ConcurrentPushError } from "../sync/manifest";
 import { RealtimeClient } from "../sync/realtime";
 import type { LocalState, SessionState } from "../types";
 import { base64UrlToBytes } from "../utils/base64";
+import { createSymlinkDetector } from "../vault/symlinks";
 import { createShareScopePolicy } from "./scope";
 import { ScopedVaultAdapter } from "./scoped-adapter";
 import { runShareSyncCycle } from "./sync-cycle";
@@ -330,7 +331,13 @@ export class ShareSyncService {
 				share.localRoot,
 			).asDataAdapter(),
 			storage: this.getStorage(share),
-			scope: createShareScopePolicy(),
+			scope: createShareScopePolicy(
+				createSymlinkDetector(
+					this.host.app.vault.adapter,
+					this.host.getSettings().ignoreSymlinks,
+					share.localRoot,
+				),
+			),
 			key: await importAesKey(base64UrlToBytes(share.keyB64)),
 			state: session,
 			maxFileBytes: this.host.getSettings().maxFileBytes,

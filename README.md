@@ -9,7 +9,7 @@ Obsync is a plugin for my personal Obsidian vault developed to manually sync an 
 - S3-compatible storage with encrypted manifests and encrypted file blobs.
 - Shared folders: sync a single folder with other people through its own encrypted storage location, with invite links, automatic merging, and conflict copies.
 - Optional sync of selected Obsidian configuration categories.
-- Shared `syncignore.md` rules plus device-local ignore patterns.
+- Shared `syncignore.md` rules plus device-local ignore patterns and symlink skipping.
 - Encrypted setup transfer by Obsidian URL, copyable link, or QR code.
 - Local-only diagnostics stored under the plugin folder in the current vault config directory.
 
@@ -41,7 +41,7 @@ Use a separate bucket prefix per vault. Reusing a prefix for another vault is re
 Obsync uses two ignore sources, both with gitignore-style syntax:
 
 - `syncignore.md` in the vault root is the shared repository-level ignore list.
-- The **Device-local ignore patterns** setting is applied only on the current device.
+- The **Patterns** setting under Device-local exclusions is applied only on the current device.
 
 Shared ignore rules are synced like a normal note. If a shared rule starts matching a file that was already tracked, the file is shown as a deletion and is removed from remote on the next explicit push. Other devices then delete their local copy on pull.
 
@@ -55,6 +55,8 @@ drafts/
 *.tmp
 .obsidian/plugins/example-plugin/cache/
 ```
+
+**Ignore symlinks** (on by default) skips symbolic links, Windows junctions and directory links. Obsidian shows them as ordinary files and folders, so without this the vault walk descends into them and offers to sync whatever lives outside the vault. Like a device-local pattern it is non-destructive: a link never reads as a local deletion of what other devices store at that path. Desktop only, since mobile has no symlinks.
 
 Changing `syncignore.md` or the ignore settings marks the current compare result as stale and schedules a refresh when a compare has already been run.
 

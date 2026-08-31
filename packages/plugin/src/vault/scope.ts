@@ -14,6 +14,7 @@ import {
 import type { SettingsSyncCategories } from "../settings/model";
 import { EFileKind } from "../types";
 import type { IgnoreMatcher } from "./ignore";
+import type { SymlinkDetector } from "./symlinks";
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
@@ -28,6 +29,7 @@ export interface ScopeOptions {
 	configDir: string;
 	sharedIgnore?: IgnoreMatcher;
 	localIgnore?: IgnoreMatcher;
+	symlinks?: SymlinkDetector;
 }
 
 export function createScopePolicy(options: ScopeOptions): ScopePolicy {
@@ -55,6 +57,7 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	const sync = options.settingsSync;
 	const sharedIgnoreMatcher = options.sharedIgnore;
 	const localIgnoreMatcher = options.localIgnore;
+	const symlinks = options.symlinks;
 
 	return {
 		includes(rawPath) {
@@ -75,6 +78,7 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (!dir) return true;
 			const dirPath = `${dir}/`;
 			if (isInVaultDenylist(dirPath)) return false;
+			if (symlinks?.isLink(dir)) return false;
 			if (dirPath.startsWith(ownPluginPrefix)) return false;
 			if (
 				isIgnoredDir(sharedIgnoreMatcher, dir, dirPath) ||
@@ -109,6 +113,9 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		if (!path) return false;
 		if (isInVaultDenylist(path)) return false;
 		if (path.startsWith(ownPluginPrefix)) return false;
+		// Device-local, like the ignore patterns below: excluded from the diff too,
+		// so a link never reads as a deletion of what other devices store here.
+		if (symlinks?.isLink(path)) return false;
 
 		if (path.startsWith(configPrefix)) {
 			return isConfigAllowed(path);
