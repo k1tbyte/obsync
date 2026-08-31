@@ -50,7 +50,7 @@ export async function scanVault(
 			return;
 		}
 		const stat = await adapter.stat(path);
-		if (!stat || stat.type !== "file") return;
+		if (stat?.type !== "file") return;
 		if (stat.size > options.maxFileBytes) {
 			skipped.push({
 				path,

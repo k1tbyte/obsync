@@ -901,3 +901,18 @@
 .obsync-hunk-popup-push {
 	cursor: pointer;
 }
+
+/* Shared folders */
+
+.obsync-share-row .setting-item-name {
+	word-break: break-word;
+}
+
+.obsync-share-invite-link {
+	width: 100%;
+	resize: vertical;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	word-break: break-all;
+	margin-top: var(--size-4-2);
+}

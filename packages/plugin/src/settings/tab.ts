@@ -17,6 +17,7 @@ import {
 	renderBackendSection,
 	renderMaintenanceSection,
 	renderSecuritySection,
+	renderSharesSection,
 } from "./sections";
 
 enum ESettingsViewTab {
@@ -68,7 +69,7 @@ const SCOPE_SETTINGS_CHANGED = "Sync scope settings changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MIN_MAX_FILE_MB = 1;
 
-interface UpdateOptions {
+interface ApplySettingsOptions {
 	refreshScope?: boolean;
 }
 
@@ -120,7 +121,7 @@ const UI_TOGGLES: ReadonlyArray<ToggleFieldConfig> = [
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
 	private activeTab = ESettingsViewTab.Settings;
-	private realtimeStatusUnsub: (() => void) | null = null;
+	private sectionUnsubs: Array<() => void> = [];
 
 	constructor(app: App, plugin: ObsyncPlugin) {
 		super(app, plugin);
@@ -128,13 +129,11 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
-		this.realtimeStatusUnsub?.();
-		this.realtimeStatusUnsub = null;
+		this.unsubscribeSections();
 	}
 
 	display(): void {
-		this.realtimeStatusUnsub?.();
-		this.realtimeStatusUnsub = null;
+		this.unsubscribeSections();
 		const { containerEl } = this;
 		containerEl.empty();
 		this.renderTabBar(containerEl);
@@ -147,16 +146,26 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		renderBackendSection(containerEl, this.plugin, () => this.display());
 		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
+		const sharesUnsub = renderSharesSection(containerEl, this.plugin, () =>
+			this.display(),
+		);
+		if (sharesUnsub) this.sectionUnsubs.push(sharesUnsub);
 		this.renderIgnoreSection(containerEl);
-		this.realtimeStatusUnsub = renderAutomationSection(
+		const automationUnsub = renderAutomationSection(
 			containerEl,
 			this.plugin,
 			() => this.display(),
 		);
+		if (automationUnsub) this.sectionUnsubs.push(automationUnsub);
 		this.renderUiSection(containerEl);
 		this.renderAdvancedSection(containerEl);
 		renderMaintenanceSection(containerEl, this.plugin);
 		renderSecuritySection(containerEl, this.plugin, () => this.display());
+	}
+
+	private unsubscribeSections(): void {
+		for (const unsub of this.sectionUnsubs) unsub();
+		this.sectionUnsubs = [];
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
@@ -242,7 +251,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;
 				t.setValue(this.plugin.settings.ignorePatterns).onChange((v) =>
-					this.update({ ignorePatterns: v }, { refreshScope: true }),
+					this.applySettings({ ignorePatterns: v }, { refreshScope: true }),
 				);
 			})
 			.addButton((button) =>
@@ -290,7 +299,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		if (field.desc) setting.setDesc(field.desc);
 		setting.addToggle((t) =>
 			t.setValue(field.get(this.plugin.settings)).onChange((v) =>
-				this.update(field.set(v, this.plugin), {
+				this.applySettings(field.set(v, this.plugin), {
 					refreshScope: field.refreshScope,
 				}),
 			),
@@ -306,14 +315,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		setting.addText((t) =>
 			t.setValue(field.get(this.plugin.settings)).onChange((raw) => {
 				const value = field.parse(raw);
-				this.update(field.set(value), { refreshScope: field.refreshScope });
+				this.applySettings(field.set(value), {
+					refreshScope: field.refreshScope,
+				});
 			}),
 		);
 	}
 
-	private update(
+	private applySettings(
 		partial: Partial<ObsyncSettings>,
-		options: UpdateOptions = {},
+		options: ApplySettingsOptions = {},
 	): void {
 		Object.assign(this.plugin.settings, partial);
 		void this.plugin.saveSettings().then(() => {

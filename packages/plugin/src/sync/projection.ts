@@ -141,7 +141,7 @@ async function statLocalSource(
 ): Promise<SideSource> {
 	try {
 		const stat = await adapter.stat(path);
-		if (!stat || stat.type !== "file") {
+		if (stat?.type !== "file") {
 			return { path, size: null, load: async () => null };
 		}
 		return {

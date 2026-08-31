@@ -51,6 +51,7 @@ export function createEmptyState(previous?: Partial<LocalState>): LocalState {
 		deviceName: previous?.deviceName ?? defaultDeviceName(),
 		storages: {},
 		hashCache: {},
+		shareCaches: {},
 	};
 }
 
@@ -60,6 +61,7 @@ function normalizeState(parsed: Partial<LocalState>): LocalState {
 		deviceName: parsed.deviceName ?? defaultDeviceName(),
 		storages: parsed.storages ?? {},
 		hashCache: parsed.hashCache ?? {},
+		shareCaches: parsed.shareCaches ?? {},
 	};
 }
 

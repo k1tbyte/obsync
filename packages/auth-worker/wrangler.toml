@@ -2,6 +2,25 @@ name = "obsync-auth"
 main = "src/index.ts"
 compatibility_date = "2024-05-14"
 
+# Shared-folder broker: stores participant tokens. Create with
+#   wrangler kv namespace create SHARE_TOKENS
+# and paste the returned id below.
+[[kv_namespaces]]
+binding = "SHARE_TOKENS"
+id = ""
+
+[vars]
+SHARE_S3_REGION = "auto"
+SHARE_S3_PREFIX = ""
+SHARE_S3_FORCE_PATH_STYLE = "true"
+
 # Secrets (Do NOT hardcode values here, configure them via Cloudflare Dashboard or Wrangler CLI):
 # - GDRIVE_CLIENT_ID
 # - GDRIVE_CLIENT_SECRET
+#
+# Shared-folder broker secrets:
+# - SHARE_ADMIN_SECRET          minted by the owner's plugin to issue/revoke invites
+# - SHARE_S3_ENDPOINT           e.g. https://<account>.r2.cloudflarestorage.com
+# - SHARE_S3_BUCKET
+# - SHARE_S3_ACCESS_KEY_ID      scope this key to "<SHARE_S3_PREFIX>shares/*" only
+# - SHARE_S3_SECRET_ACCESS_KEY

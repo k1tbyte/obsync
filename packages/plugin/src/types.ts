@@ -49,6 +49,12 @@ export interface LocalState {
 	deviceName?: string;
 	storages: Record<string, StorageState>;
 	hashCache: Record<string, HashCacheEntry>;
+	/**
+	 * Per-shared-folder hash caches, keyed by share id. Shared folders scan
+	 * with share-root-relative paths, so they must not share the vault-wide
+	 * {@link hashCache} (relative paths could collide with vault paths).
+	 */
+	shareCaches?: Record<string, Record<string, HashCacheEntry>>;
 }
 
 /**
