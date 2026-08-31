@@ -21,6 +21,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Configure KV namespace
+        working-directory: packages/auth-worker
+        env:
+          SHARE_TOKENS_KV_ID: ${{ secrets.SHARE_TOKENS_KV_ID }}
+        run: |
+          if [[ ! "$SHARE_TOKENS_KV_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            echo "::error::SHARE_TOKENS_KV_ID must be a 32-character hexadecimal KV namespace ID."
+            exit 1
+          fi
+          sed -i "s/^id = \"\"$/id = \"$SHARE_TOKENS_KV_ID\"/" wrangler.toml
+          grep -q "^id = \"$SHARE_TOKENS_KV_ID\"$" wrangler.toml
+
       - name: Deploy
         run: pnpm --filter obsync-auth-worker run deploy
         env:

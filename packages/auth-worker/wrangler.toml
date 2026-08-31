@@ -2,9 +2,8 @@ name = "obsync-auth"
 main = "src/index.ts"
 compatibility_date = "2024-05-14"
 
-# Shared-folder broker: stores participant tokens. Create with
-#   wrangler kv namespace create SHARE_TOKENS
-# and paste the returned id below.
+# Shared-folder broker: stores participant tokens. CI injects the namespace id
+# from the SHARE_TOKENS_KV_ID GitHub secret.
 [[kv_namespaces]]
 binding = "SHARE_TOKENS"
 id = ""
