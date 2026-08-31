@@ -239,14 +239,22 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private renderIgnoreSection(parent: HTMLElement): void {
-		new Setting(parent).setName("Device-local ignore patterns").setHeading();
+		new Setting(parent).setName("Device-local exclusions").setHeading();
 		new Setting(parent).setDesc(
-			"Gitignore-style patterns used only on this device, in addition to the shared syncignore.md note in the vault root. One per line.",
+			"Applied only on this device, in addition to the shared syncignore.md note in the vault root.",
 		);
+
+		this.renderToggleField(parent, {
+			name: "Ignore symlinks",
+			desc: "Skip symbolic links, Windows junctions and directory links. They point outside the vault and exist only on this device.",
+			get: (s) => s.ignoreSymlinks,
+			set: (v) => ({ ignoreSymlinks: v }),
+			refreshScope: true,
+		});
 
 		new Setting(parent)
 			.setName("Patterns")
-			.setDesc("Applied after the shared syncignore.md note.")
+			.setDesc("Gitignore-style, one per line.")
 			.addTextArea((t) => {
 				t.inputEl.rows = 6;
 				t.inputEl.cols = 40;

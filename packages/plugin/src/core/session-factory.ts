@@ -16,6 +16,7 @@ import {
 	loadSharedIgnoreMatcher,
 } from "@/vault/ignore";
 import { createScopePolicy } from "@/vault/scope";
+import { createSymlinkDetector } from "@/vault/symlinks";
 import type { LogService } from "./log-service";
 import type { PassphraseManager } from "./passphrase-manager";
 import type { StatePersister } from "./state-persister";
@@ -89,6 +90,7 @@ async function openSession(
 			configDir: app.vault.configDir,
 			sharedIgnore,
 			localIgnore,
+			symlinks: createSymlinkDetector(adapter, settings.ignoreSymlinks),
 		}),
 		key,
 		state: buildSessionView(currentState, storage.identity()),

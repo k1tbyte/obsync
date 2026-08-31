@@ -107,6 +107,7 @@ describe("settings transfer", () => {
 			realtimeToken: "relay-secret",
 			autoPushOnSave: true,
 			ignorePatterns: "*.tmp",
+			ignoreSymlinks: false,
 		});
 		const options: SettingsTransferExportOptions = {
 			storageMode: ESettingsTransferStorageMode.None,
@@ -121,6 +122,7 @@ describe("settings transfer", () => {
 		expect(imported.storageConfigs).toBeUndefined();
 		expect(imported.settingsSync).toBeUndefined();
 		expect(imported.ignorePatterns).toBeUndefined();
+		expect(imported.ignoreSymlinks).toBeUndefined();
 		expect(imported.autoPushOnSave).toBeUndefined();
 		expect(imported.realtimeSync).toBe(true);
 		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
@@ -139,6 +141,7 @@ describe("settings transfer", () => {
 				themes: true,
 			},
 			ignorePatterns: "*.tmp\n*.swp",
+			ignoreSymlinks: !DEFAULT_SETTINGS.ignoreSymlinks,
 			maxFileBytes: DEFAULT_SETTINGS.maxFileBytes + 1024,
 			autoPullOnStartup: !DEFAULT_SETTINGS.autoPullOnStartup,
 			autoPullIntervalMinutes: DEFAULT_SETTINGS.autoPullIntervalMinutes + 5,
@@ -172,6 +175,7 @@ describe("settings transfer", () => {
 		});
 		expect(imported.settingsSync).toEqual(settings.settingsSync);
 		expect(imported.ignorePatterns).toBe(settings.ignorePatterns);
+		expect(imported.ignoreSymlinks).toBe(settings.ignoreSymlinks);
 		expect(imported.maxFileBytes).toBe(settings.maxFileBytes);
 		expect(imported.autoPullOnStartup).toBe(settings.autoPullOnStartup);
 		expect(imported.autoPullIntervalMinutes).toBe(

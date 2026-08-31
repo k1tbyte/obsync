@@ -139,6 +139,7 @@ Follow Obsidian's **Developer Policies** and **Plugin Guidelines**. In particula
 - Batch disk access and avoid excessive vault scans.
 - Debounce/throttle expensive operations in response to file system events.
 - Vault scanning uses `ScopePolicy.canDescend()` to prune denied, ignored, and disabled config directories before listing descendants. Keep this pruning path in sync with `ScopePolicy.includes()` when changing sync scope rules.
+- Symlink skipping lives in `vault/symlinks.ts` and plugs into `ScopePolicy` via the optional `symlinks` option, so the scanner, the diff filter and shared folders all honour it from one place. It is the only part of the plugin that touches Node (`require("node:fs")`, lazily, so mobile just gets a no-op detector).
 
 ## Coding conventions
 

@@ -35,6 +35,9 @@ export interface ObsyncSettings {
 	activeStorageKind: EStorageBackend;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
+	/** Skip symlinks, junctions and directory links: they point outside the
+	 * vault and exist only on this device. */
+	ignoreSymlinks: boolean;
 	maxFileBytes: number;
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
@@ -68,6 +71,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	activeStorageKind: DEFAULT_STORAGE.kind,
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
+	ignoreSymlinks: true,
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,

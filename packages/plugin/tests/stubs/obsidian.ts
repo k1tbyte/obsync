@@ -47,6 +47,15 @@ export class TFile extends Stub {}
 export class TFolder extends Stub {}
 export class TAbstractFile extends Stub {}
 
+export class FileSystemAdapter extends Stub {
+	constructor(private readonly basePath = "") {
+		super();
+	}
+	getBasePath(): string {
+		return this.basePath;
+	}
+}
+
 export type App = unknown;
 export type WorkspaceLeaf = unknown;
 export type ObsidianProtocolData = unknown;

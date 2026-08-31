@@ -15,7 +15,7 @@ import {
 const TRANSFER_VERSION = 4;
 const TRANSFER_SALT_BYTES = 16;
 const TRANSFER_PARTS = 4;
-const TRANSFER_ACTION = "obsync";
+export const TRANSFER_ACTION = "obsync";
 const TRANSFER_PARAM = "d";
 const SETTINGS_TRANSFER_MAX_QR_BYTES = 1024;
 const MAX_SYNC_MASK = 0b111111;
@@ -41,6 +41,7 @@ export interface ObsyncTransferSettings
 			| "activeStorageKind"
 			| "settingsSync"
 			| "ignorePatterns"
+			| "ignoreSymlinks"
 			| "maxFileBytes"
 			| "autoPullOnStartup"
 			| "autoPullIntervalMinutes"
@@ -111,6 +112,12 @@ const TRANSFER_FIELDS: ReadonlyArray<FieldSpec> = [
 		settingsKey: "ignorePatterns",
 		transferKey: "i",
 		kind: ETransferFieldKind.Str,
+	},
+	{
+		section: ETransferSection.Scope,
+		settingsKey: "ignoreSymlinks",
+		transferKey: "k",
+		kind: ETransferFieldKind.Bool,
 	},
 	{
 		section: ETransferSection.Scope,
@@ -226,11 +233,7 @@ const TRANSFER_ENCODINGS: Readonly<Record<string, ETransferEncoding>> = {
 	[ETransferEncoding.Deflate]: ETransferEncoding.Deflate,
 };
 
-export function settingsTransferAction(): string {
-	return TRANSFER_ACTION;
-}
-
-export function normalizeSettingsTransferExportOptions(
+function normalizeSettingsTransferExportOptions(
 	options?: Partial<SettingsTransferExportOptions>,
 ): SettingsTransferExportOptions {
 	return {
