@@ -1,10 +1,50 @@
 import { Setting } from "obsidian";
+
 import type ObsyncPlugin from "../../main";
-import { describeStorageTarget } from "../../storage/registry";
-import { confirmRemoteReset } from "../../ui/modals";
-import { notifyError, notifyInfo } from "../../ui/notices";
-import { openConfirmModal } from "../../ui/source-control/modals";
-import { activeStorage } from "../model";
+import {
+	deepCleanOrphanedObjects,
+	resetLocalState,
+	resetRemoteStorage,
+	verifyRemoteIntegrity,
+} from "../../ui/maintenance-actions";
+
+interface MaintenanceAction {
+	name: string;
+	desc: string;
+	buttonText: string;
+	warning?: boolean;
+	run: (plugin: ObsyncPlugin) => Promise<unknown>;
+}
+
+const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
+	{
+		name: "Reset local state",
+		desc: "Clear the local sync baseline, adopted remote vault, and file hash cache on this device. Obsync settings stay unchanged.",
+		buttonText: "Reset local",
+		warning: true,
+		run: resetLocalState,
+	},
+	{
+		name: "Verify remote integrity",
+		desc: "Check every referenced object exists and decrypts to its hash.",
+		buttonText: "Verify",
+		run: verifyRemoteIntegrity,
+	},
+	{
+		name: "Deep-clean orphaned objects",
+		desc: "List storage and delete blobs/snapshots unreachable from the manifest or history.",
+		buttonText: "Deep-clean",
+		warning: true,
+		run: deepCleanOrphanedObjects,
+	},
+	{
+		name: "Reset remote storage",
+		desc: "Delete the remote Obsync manifest and objects on the configured backend.",
+		buttonText: "Reset remote",
+		warning: true,
+		run: resetRemoteStorage,
+	},
+];
 
 export function renderMaintenanceSection(
 	parent: HTMLElement,
@@ -12,132 +52,15 @@ export function renderMaintenanceSection(
 ): void {
 	new Setting(parent).setName("Maintenance").setHeading();
 
-	new Setting(parent)
-		.setName("Reset local state")
-		.setDesc(
-			"Clear the local sync baseline, adopted remote vault, and file hash cache on this device. Obsync settings stay unchanged.",
-		)
-		.addButton((button) =>
-			button
-				.setButtonText("Reset local")
-				.setWarning()
-				.onClick(() => void handleResetLocal(plugin)),
-		);
-
-	new Setting(parent)
-		.setName("Verify remote integrity")
-		.setDesc("Check every referenced object exists and decrypts to its hash.")
-		.addButton((button) =>
-			button
-				.setButtonText("Verify")
-				.onClick(() => void handleVerifyRemote(plugin)),
-		);
-
-	new Setting(parent)
-		.setName("Deep-clean orphaned objects")
-		.setDesc(
-			"List storage and delete blobs/snapshots unreachable from the manifest or history.",
-		)
-		.addButton((button) =>
-			button
-				.setButtonText("Deep-clean")
-				.setWarning()
-				.onClick(() => void handleDeepClean(plugin)),
-		);
-
-	new Setting(parent)
-		.setName("Reset remote storage")
-		.setDesc(
-			"Delete the remote Obsync manifest and objects on the configured backend.",
-		)
-		.addButton((button) =>
-			button
-				.setButtonText("Reset remote")
-				.setWarning()
-				.onClick(() => void handleResetRemote(plugin)),
-		);
-}
-
-async function handleVerifyRemote(plugin: ObsyncPlugin): Promise<void> {
-	try {
-		const result = await plugin.controller.verifyRemote(true);
-		if (!result) {
-			reportError("Configure a storage backend first.");
-			return;
-		}
-		if (result.missing.length === 0 && result.corrupt.length === 0) {
-			notifyInfo(`Integrity OK — ${result.checked} object(s) verified.`);
-			return;
-		}
-		reportError(
-			`Integrity issues: ${result.missing.length} missing, ${result.corrupt.length} corrupt. See logs.`,
-		);
-	} catch (err) {
-		reportError(err);
+	for (const action of MAINTENANCE_ACTIONS) {
+		new Setting(parent)
+			.setName(action.name)
+			.setDesc(action.desc)
+			.addButton((button) => {
+				button
+					.setButtonText(action.buttonText)
+					.onClick(() => void action.run(plugin));
+				if (action.warning) button.setWarning();
+			});
 	}
-}
-
-async function handleDeepClean(plugin: ObsyncPlugin): Promise<void> {
-	const confirmed = await openConfirmModal({
-		app: plugin.app,
-		title: "Deep-clean orphaned objects?",
-		body: [
-			"Permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
-			"Safe in normal operation, but cannot be undone.",
-		],
-		confirmLabel: "Deep-clean",
-		confirmClass: "mod-warning",
-	});
-	if (!confirmed) return;
-	try {
-		const result = await plugin.controller.deepCleanRemote();
-		if (!result) {
-			reportError("Configure a storage backend first.");
-			return;
-		}
-		notifyInfo(
-			`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
-		);
-	} catch (err) {
-		reportError(err);
-	}
-}
-
-async function handleResetLocal(plugin: ObsyncPlugin): Promise<void> {
-	const confirmed = await openConfirmModal({
-		app: plugin.app,
-		title: "Reset local state?",
-		body: [
-			"This clears the local sync baseline, the adopted remote vault record, and the file hash cache on this device.",
-			"Remote storage, local vault files, cached passphrases, and Obsync settings are not deleted.",
-		],
-		confirmLabel: "Reset local",
-		confirmClass: "mod-warning",
-	});
-	if (!confirmed) return;
-	try {
-		await plugin.resetLocalState();
-		notifyInfo("local state reset.");
-	} catch (err) {
-		reportError(err);
-	}
-}
-
-async function handleResetRemote(plugin: ObsyncPlugin): Promise<void> {
-	const confirmed = await confirmRemoteReset(plugin.app, {
-		description: describeStorageTarget(activeStorage(plugin.settings)),
-	});
-	if (!confirmed) return;
-	const ok = await plugin.controller.resetRemoteStorage();
-	if (!ok) {
-		reportError(plugin.controller.getSnapshot().error ?? "Unknown reset error");
-		return;
-	}
-	notifyInfo("remote storage reset.");
-}
-
-function reportError(err: unknown): void {
-	const message = err instanceof Error ? err.message : String(err);
-	notifyError(message);
-	console.error("[obsync]", err);
 }

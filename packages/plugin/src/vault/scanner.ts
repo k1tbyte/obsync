@@ -1,6 +1,6 @@
 import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
-import { RACY_INDEX_WINDOW_MS } from "../constants";
+import { DEFAULT_CONCURRENCY, RACY_INDEX_WINDOW_MS } from "../constants";
 import { sha256Hex } from "../crypto";
 import type {
 	HashCacheEntry,
@@ -44,38 +44,42 @@ export async function scanVault(
 		ROOT,
 	);
 	let scanned = 0;
-	await runWithConcurrency(paths, options.concurrency ?? 4, async (path) => {
-		if (!scope.includes(path)) {
-			if (scope.isIgnoredByPattern(path)) ignoredPaths.push(path);
-			return;
-		}
-		const stat = await adapter.stat(path);
-		if (!stat || stat.type !== "file") return;
-		if (stat.size > options.maxFileBytes) {
-			skipped.push({
+	await runWithConcurrency(
+		paths,
+		options.concurrency ?? DEFAULT_CONCURRENCY,
+		async (path) => {
+			if (!scope.includes(path)) {
+				if (scope.isIgnoredByPattern(path)) ignoredPaths.push(path);
+				return;
+			}
+			const stat = await adapter.stat(path);
+			if (stat?.type !== "file") return;
+			if (stat.size > options.maxFileBytes) {
+				skipped.push({
+					path,
+					reason: `File exceeds max size (${stat.size} bytes)`,
+				});
+				return;
+			}
+			const cached = hashCache[path];
+			const entry = await buildEntry(
+				adapter,
 				path,
-				reason: `File exceeds max size (${stat.size} bytes)`,
-			});
-			return;
-		}
-		const cached = hashCache[path];
-		const entry = await buildEntry(
-			adapter,
-			path,
-			stat.size,
-			stat.mtime,
-			scope.classify(path),
-			cached,
-		);
-		files[path] = entry;
-		updatedCache[path] = {
-			mtime: stat.mtime,
-			size: stat.size,
-			hash: entry.hash,
-		};
-		const count = ++scanned;
-		if (options.onProgress && count % 500 === 0) options.onProgress(count);
-	});
+				stat.size,
+				stat.mtime,
+				scope.classify(path),
+				cached,
+			);
+			files[path] = entry;
+			updatedCache[path] = {
+				mtime: stat.mtime,
+				size: stat.size,
+				hash: entry.hash,
+			};
+			const count = ++scanned;
+			if (options.onProgress && count % 500 === 0) options.onProgress(count);
+		},
+	);
 
 	if (Platform.isWin) {
 		const lower = new Map<string, string>();

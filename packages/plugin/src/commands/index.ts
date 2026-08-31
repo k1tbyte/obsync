@@ -1,17 +1,17 @@
 import { MarkdownView } from "obsidian";
 import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
 import type ObsyncPlugin from "@/main";
-import { activeStorage } from "@/settings/model";
-import { describeStorageTarget } from "@/storage";
 import {
-	confirmRemoteReset,
+	deepCleanOrphanedObjects,
 	notifyError,
 	notifyInfo,
-	openConfirmModal,
 	openDiffView,
 	openSourceControlHistory,
 	openSourceControlView,
+	resetRemoteStorage,
+	verifyRemoteIntegrity,
 } from "@/ui";
+import { JoinShareModal } from "@/ui/modals/share-modals";
 
 export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
@@ -48,7 +48,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
 		id: "reset-remote-storage",
 		name: "Reset remote storage",
-		callback: () => void runResetRemoteStorage(plugin),
+		callback: () => void resetRemoteStorageCommand(plugin),
 	});
 
 	plugin.addCommand({
@@ -76,13 +76,35 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	plugin.addCommand({
 		id: "verify-remote-integrity",
 		name: "Verify remote integrity",
-		callback: () => void runVerifyRemote(plugin),
+		callback: () => void verifyRemoteIntegrity(plugin),
 	});
 
 	plugin.addCommand({
 		id: "deep-clean-orphans",
 		name: "Deep-clean orphaned objects",
-		callback: () => void runDeepClean(plugin),
+		callback: () => void deepCleanOrphanedObjects(plugin),
+	});
+
+	plugin.addCommand({
+		id: "join-shared-folder",
+		name: "Join a shared folder",
+		callback: () => {
+			const modal = new JoinShareModal(plugin);
+			modal.open();
+		},
+	});
+
+	plugin.addCommand({
+		id: "sync-shared-folders",
+		name: "Sync shared folders now",
+		checkCallback: (checking) => {
+			if (plugin.settings.sharedFolders.length === 0) return false;
+			if (checking) return true;
+			void plugin.shares
+				?.syncAll()
+				.then(() => notifyInfo("shared folders synced."));
+			return true;
+		},
 	});
 
 	plugin.addCommand({
@@ -146,63 +168,7 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 	}
 }
 
-async function runVerifyRemote(plugin: ObsyncPlugin): Promise<void> {
-	try {
-		const result = await plugin.controller.verifyRemote(true);
-		if (!result) {
-			notifyError("Configure a storage backend first.");
-			return;
-		}
-		if (result.missing.length === 0 && result.corrupt.length === 0) {
-			notifyInfo(`Integrity OK — ${result.checked} object(s) verified.`);
-			return;
-		}
-		notifyError(
-			`Integrity issues: ${result.missing.length} missing, ${result.corrupt.length} corrupt. See logs.`,
-		);
-	} catch (err) {
-		notifyError("Verify failed", err);
-	}
-}
-
-async function runDeepClean(plugin: ObsyncPlugin): Promise<void> {
-	const confirmed = await openConfirmModal({
-		app: plugin.app,
-		title: "Deep-clean orphaned objects?",
-		body: [
-			"Lists remote storage and permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
-			"Safe in normal operation, but cannot be undone.",
-		],
-		confirmLabel: "Deep-clean",
-		confirmClass: "mod-warning",
-	});
-	if (!confirmed) return;
-	try {
-		const result = await plugin.controller.deepCleanRemote();
-		if (!result) {
-			notifyError("Configure a storage backend first.");
-			return;
-		}
-		notifyInfo(
-			`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
-		);
-	} catch (err) {
-		notifyError("Deep-clean failed", err);
-	}
-}
-
-async function runResetRemoteStorage(plugin: ObsyncPlugin): Promise<void> {
-	const confirmed = await confirmRemoteReset(plugin.app, {
-		description: describeStorageTarget(activeStorage(plugin.settings)),
-	});
-	if (!confirmed) return;
-	const ok = await plugin.controller.resetRemoteStorage();
-	if (!ok) {
-		const message =
-			plugin.controller.getSnapshot().error ?? "Unknown reset error";
-		notifyError(message);
-		return;
-	}
-	notifyInfo("remote storage reset.");
+async function resetRemoteStorageCommand(plugin: ObsyncPlugin): Promise<void> {
+	if (!(await resetRemoteStorage(plugin))) return;
 	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 }

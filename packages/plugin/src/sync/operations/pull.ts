@@ -1,4 +1,5 @@
-import { decryptBytes, sha256Hex } from "../../crypto";
+import { LOG_PATH_LIMIT } from "../../constants";
+import { sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
 import type { Manifest, ManifestEntry } from "../../types";
@@ -8,14 +9,15 @@ import {
 	mergeBaselineIntoCache,
 	updateBaselineEntry,
 } from "../baseline";
-import { textToBytes } from "../content";
+import {
+	loadLocalText,
+	loadRemoteText,
+	textToBytes,
+	writeRemoteObject,
+} from "../content";
 import { pullPaths } from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
-import { objectKey } from "../manifest";
-import { loadLocalText, loadRemoteText } from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
-
-const LOG_PATH_LIMIT = 50;
 
 export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 	deps,
@@ -60,7 +62,7 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 		throw new Error("Cannot pull: remote manifest is missing");
 	const remoteEntry = result.remote.files[path];
 	if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
-	const left = (await loadLocalText(deps, path)) ?? "";
+	const left = (await loadLocalText(deps.adapter, path)) ?? "";
 	const right = (await loadRemoteText(deps, remoteEntry.hash)) ?? "";
 	const { hunks } = computeHunks(left, right);
 	const merged = applyHunks(left, hunks, selected);
@@ -108,7 +110,7 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 	for (const path of conflictPaths) {
 		const remoteEntry = remote.files[path];
 		if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
-		const plaintext = await fetchAndWriteRemote(deps, path, remoteEntry);
+		const plaintext = await writeRemoteObject(deps, path, remoteEntry.hash);
 		baselineFiles[path] = remoteEntry;
 		nextHashCache[path] = {
 			mtime: Date.now(),
@@ -133,17 +135,3 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 	ctx.setProgress(null);
 	return { newRemote: remote, touchedPaths: new Set(conflictPaths) };
 };
-
-async function fetchAndWriteRemote(
-	deps: Parameters<Operation<ReadonlySet<string>>>[0],
-	path: string,
-	entry: ManifestEntry,
-): Promise<Uint8Array> {
-	const blob = await deps.storage.get(objectKey(entry.hash));
-	if (!blob) throw new Error(`Missing remote object for ${path}`);
-	const plaintext = await decryptBytes(deps.key, blob);
-	const verify = await sha256Hex(plaintext);
-	if (verify !== entry.hash) throw new Error(`Hash mismatch resolving ${path}`);
-	await writeBinary(deps.adapter, path, plaintext);
-	return plaintext;
-}

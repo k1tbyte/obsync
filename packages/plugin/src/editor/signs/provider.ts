@@ -1,10 +1,10 @@
 import { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { editorInfoField } from "obsidian";
 
 import type { SyncController } from "@/sync/controller";
 import { notifyError, notifyInfo } from "@/ui";
 
+import { pathFromState } from "./compute";
 import { setCompareTextEffect } from "./state";
 
 const BASELINE_CACHE_MAX = 64;
@@ -115,7 +115,7 @@ export class SignsProvider {
 	recheckAll(): void {
 		const snapshot = [...this.viewToPath.entries()];
 		for (const [view, storedPath] of snapshot) {
-			const current = pathFromView(view);
+			const current = pathFromState(view.state);
 			if (current && current !== storedPath) {
 				this.changeViewPath(view, current);
 			} else if (!current && storedPath) {
@@ -226,13 +226,4 @@ function toCmText(raw: string): Text {
 	let normalized = raw.replace(/\r\n?/g, "\n");
 	if (normalized.endsWith("\n")) normalized = normalized.slice(0, -1);
 	return Text.of(normalized.split("\n"));
-}
-
-function pathFromView(view: EditorView): string | null {
-	try {
-		const info = view.state.field(editorInfoField, false);
-		return info?.file?.path ?? null;
-	} catch {
-		return null;
-	}
 }

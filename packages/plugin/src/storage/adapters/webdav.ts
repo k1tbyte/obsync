@@ -1,5 +1,7 @@
 import { requestUrl } from "obsidian";
 
+import { DEFAULT_CONCURRENCY } from "../../constants";
+import { normalizeKeyPrefix } from "../../shared/path";
 import { EStorageBackend, type WebDAVStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -7,6 +9,7 @@ import {
 	type SettingsFieldSpec,
 } from "../field-spec";
 import type { StorageAdapter } from "../types";
+import { delay, RETRY_DELAYS_MS } from "./util";
 
 const PROPFIND_BODY =
 	'<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>';
@@ -16,7 +19,6 @@ const HTTP_NOT_FOUND = 404;
 const HTTP_METHOD_NOT_ALLOWED = 405;
 const HTTP_CONFLICT = 409;
 const HTTP_MULTI_STATUS = 207;
-const WEBDAV_RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
 export const WEBDAV_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -45,7 +47,7 @@ export function defaultWebDAVConfig(): WebDAVStorageConfig {
 		basePath: "obsync/",
 		username: "",
 		password: "",
-		concurrency: 4,
+		concurrency: DEFAULT_CONCURRENCY,
 	};
 }
 
@@ -68,7 +70,7 @@ export function createWebDAVAdapter(
 ): StorageAdapter {
 	assertConfig(config);
 	const baseUrl = ensureTrailingSlash(config.baseUrl);
-	const basePath = normalizeBasePath(config.basePath);
+	const basePath = normalizeKeyPrefix(config.basePath);
 	const rootUrl = baseUrl + basePath;
 	const auth = `Basic ${btoa(`${config.username}:${config.password}`)}`;
 	const knownDirs = new Set<string>();
@@ -114,7 +116,7 @@ export function createWebDAVAdapter(
 	}
 
 	return {
-		capabilities: { canList: true, hasConditionalWrites: false },
+		capabilities: { canList: true },
 		identity() {
 			return webdavIdentity(config);
 		},
@@ -192,10 +194,6 @@ export function createWebDAVAdapter(
 	};
 }
 
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 /**
  * `requestUrl` with bounded retry/backoff. All WebDAV verbs used here are
  * idempotent, so retrying a thrown network error or a 5xx is safe. Non-5xx
@@ -205,18 +203,18 @@ async function davRequest(
 	params: Parameters<typeof requestUrl>[0],
 ): Promise<Awaited<ReturnType<typeof requestUrl>>> {
 	let lastErr: unknown;
-	for (let attempt = 0; attempt <= WEBDAV_RETRY_DELAYS_MS.length; attempt++) {
+	for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
 		try {
 			const res = await requestUrl(params);
-			if (res.status >= 500 && attempt < WEBDAV_RETRY_DELAYS_MS.length) {
-				await delay(WEBDAV_RETRY_DELAYS_MS[attempt] as number);
+			if (res.status >= 500 && attempt < RETRY_DELAYS_MS.length) {
+				await delay(RETRY_DELAYS_MS[attempt] as number);
 				continue;
 			}
 			return res;
 		} catch (err) {
 			lastErr = err;
-			if (attempt === WEBDAV_RETRY_DELAYS_MS.length) break;
-			await delay(WEBDAV_RETRY_DELAYS_MS[attempt] as number);
+			if (attempt === RETRY_DELAYS_MS.length) break;
+			await delay(RETRY_DELAYS_MS[attempt] as number);
 		}
 	}
 	throw lastErr;
@@ -232,12 +230,6 @@ function assertConfig(config: WebDAVStorageConfig): void {
 function ensureTrailingSlash(value: string): string {
 	if (!value) return value;
 	return value.endsWith("/") ? value : `${value}/`;
-}
-
-function normalizeBasePath(value: string): string {
-	if (!value) return "";
-	const trimmed = value.replace(/^\/+|\/+$/g, "");
-	return trimmed ? `${trimmed}/` : "";
 }
 
 function encodeKey(key: string): string {

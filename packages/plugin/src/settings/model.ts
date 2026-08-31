@@ -2,6 +2,7 @@ import {
 	DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
 	DEFAULT_MAX_FILE_BYTES,
 } from "@/constants";
+import type { SharedFolderConfig } from "@/share/types";
 import {
 	defaultS3Config,
 	type EStorageBackend,
@@ -34,6 +35,9 @@ export interface ObsyncSettings {
 	activeStorageKind: EStorageBackend;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
+	/** Skip symlinks, junctions and directory links: they point outside the
+	 * vault and exist only on this device. */
+	ignoreSymlinks: boolean;
 	maxFileBytes: number;
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
@@ -47,6 +51,12 @@ export interface ObsyncSettings {
 	realtimeServerUrl: string;
 	realtimeToken: string;
 	cachePassphrase: boolean;
+	/** Folders shared with other people; each syncs to its own encrypted
+	 * remote location with its own key. */
+	sharedFolders: SharedFolderConfig[];
+	/** Self-hosted broker that signs share access for invitees. */
+	shareBrokerUrl: string;
+	shareBrokerAdminSecret: string;
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
 	showFileExplorerIndicators: boolean;
@@ -61,6 +71,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	activeStorageKind: DEFAULT_STORAGE.kind,
 	settingsSync: DEFAULT_SETTINGS_SYNC,
 	ignorePatterns: "",
+	ignoreSymlinks: true,
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
@@ -74,6 +85,9 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	realtimeServerUrl: "",
 	realtimeToken: "",
 	cachePassphrase: true,
+	sharedFolders: [],
+	shareBrokerUrl: "",
+	shareBrokerAdminSecret: "",
 	showStatusBar: true,
 	showRibbonIcon: true,
 	showFileExplorerIndicators: true,
@@ -137,7 +151,21 @@ export function mergeSettings(
 				| Partial<SettingsSyncCategories>
 				| undefined) ?? {}),
 		},
+		sharedFolders: normalizeSharedFolders(stored?.sharedFolders),
 	} as ObsyncSettings & LegacyStorageShape;
 	delete merged.storage;
 	return merged;
+}
+
+function normalizeSharedFolders(value: unknown): SharedFolderConfig[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter(
+		(entry): entry is SharedFolderConfig =>
+			Boolean(entry) &&
+			typeof entry === "object" &&
+			typeof (entry as SharedFolderConfig).id === "string" &&
+			typeof (entry as SharedFolderConfig).localRoot === "string" &&
+			typeof (entry as SharedFolderConfig).keyB64 === "string" &&
+			typeof (entry as SharedFolderConfig).storage === "object",
+	);
 }

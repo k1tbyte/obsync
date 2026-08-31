@@ -1,10 +1,10 @@
 import "./polyfills";
-import { type ObsidianProtocolData, Plugin } from "obsidian";
+import { type ObsidianProtocolData, Plugin, TFolder } from "obsidian";
 
 import { registerCommands } from "@/commands";
 import type { LogService, PassphraseManager, StatePersister } from "@/core";
 import { registerEditorSigns, type SignsHandle } from "@/editor/signs";
-import type { SyncLogEntry } from "@/logs/store";
+import { ESyncLogOperation, type SyncLogEntry } from "@/logs/store";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
@@ -15,14 +15,18 @@ import {
 import type { ObsyncSettingTab } from "@/settings/tab";
 import {
 	createSettingsTransferPackage as buildSettingsTransferPackage,
-	createSettingsTransferUrl,
 	mergeTransferredSettings,
-	type ObsyncTransferSettings,
 	readSettingsTransfer,
 	type SettingsTransferExportOptions,
 	type SettingsTransferPackage,
-	settingsTransferAction,
+	TRANSFER_ACTION,
 } from "@/settings/transfer";
+import {
+	findShareForPath,
+	SHARE_INVITE_ACTION,
+	type SharedFolderConfig,
+	ShareSyncService,
+} from "@/share";
 import { createStorageAdapter, handleStorageProtocol } from "@/storage";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { defaultDeviceName } from "@/sync/device";
@@ -30,13 +34,14 @@ import { rotatePassphrase } from "@/sync/keyfile";
 import type { RealtimePresenceDevice } from "@/sync/realtime";
 import { registerScheduler } from "@/sync/scheduler";
 import { loadState } from "@/sync/state";
-import type { LocalState } from "@/types";
 import {
 	confirmAdoptNewVault,
 	confirmSettingsTransferImport,
+	type IndicatorHandle,
 	notifyError,
 	notifyInfo,
 } from "@/ui";
+import { CreateShareModal, JoinShareModal } from "@/ui/modals/share-modals";
 import { bootstrapPluginRuntime } from "./plugin/bootstrap";
 import {
 	registerFileHistoryMenu,
@@ -56,6 +61,7 @@ const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 export default class ObsyncPlugin extends Plugin {
 	settings: ObsyncSettings = DEFAULT_SETTINGS;
 	controller!: SyncController;
+	shares: ShareSyncService | null = null;
 	private settingsTab?: ObsyncSettingTab;
 	private logs!: LogService;
 	private statePersister!: StatePersister;
@@ -64,6 +70,7 @@ export default class ObsyncPlugin extends Plugin {
 	private realtime: PluginRealtime | null = null;
 	private adoptPromptActive = false;
 	private editorSigns: SignsHandle | null = null;
+	private fileIndicators: IndicatorHandle | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -80,6 +87,8 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager = runtime.passphraseManager;
 		this.controller = runtime.controller;
 		this.realtime = new PluginRealtime(this.controller, () => this.settings);
+		this.initRealtime();
+		this.initShares();
 
 		this.register(
 			this.controller.subscribe((snapshot) => {
@@ -87,17 +96,18 @@ export default class ObsyncPlugin extends Plugin {
 			}),
 		);
 
-		this.settingsTab = registerPluginUi(this, this.controller).settingsTab;
+		const registeredUi = registerPluginUi(this, this.controller);
+		this.settingsTab = registeredUi.settingsTab;
+		this.fileIndicators = registeredUi.fileIndicators;
 		this.editorSigns = registerEditorSigns(this);
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
 		registerFileHistoryMenu(this);
-		this.initRealtime();
 
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
-		this.registerObsidianProtocolHandler(settingsTransferAction(), (params) => {
+		this.registerObsidianProtocolHandler(TRANSFER_ACTION, (params) => {
 			void this.handleSettingsTransferProtocol(params);
 		});
 
@@ -122,15 +132,84 @@ export default class ObsyncPlugin extends Plugin {
 		}
 		this.editorSigns?.dispose();
 		this.editorSigns = null;
+		this.fileIndicators = null;
 		this.statePersister?.dispose();
 		this.controller?.dispose();
 		this.passphraseManager?.dispose();
 		this.realtime?.dispose();
 		this.realtime = null;
+		this.shares?.dispose();
+		this.shares = null;
+	}
+
+	private initShares(): void {
+		this.shares = new ShareSyncService({
+			app: this.app,
+			getSettings: () => this.settings,
+			getState: () => this.statePersister.state,
+			ensureState: async () => {
+				const state =
+					this.statePersister.state ??
+					(await loadState(this.app.vault.adapter, this.app.vault.configDir));
+				this.statePersister.setInitial(state);
+				return state;
+			},
+			persistState: (state) => this.statePersister.persist(state),
+			log: (level, message, details) => {
+				const op = ESyncLogOperation.Share;
+				if (level === "error") return this.logs.error(op, message, details);
+				if (level === "warn") return this.logs.warn(op, message, details);
+				return this.logs.info(op, message, details);
+			},
+		});
+		this.shares.start(this);
+		this.registerObsidianProtocolHandler(SHARE_INVITE_ACTION, (params) => {
+			const data = params.d ?? params.data;
+			new JoinShareModal(this, typeof data === "string" ? data : "").open();
+		});
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFolder)) return;
+				const share = findShareForPath(this.settings.sharedFolders, file.path);
+				menu.addItem((item) =>
+					item
+						.setTitle(
+							share ? "Obsync: Sync shared folder" : "Obsync: Share folder…",
+						)
+						.setIcon("users")
+						.onClick(() => {
+							if (share) {
+								this.shares?.scheduleSync(share.id);
+								return;
+							}
+							new CreateShareModal(this, file.path).open();
+						}),
+				);
+			}),
+		);
+	}
+
+	async addSharedFolder(share: SharedFolderConfig): Promise<void> {
+		this.settings.sharedFolders.push(share);
+		await this.saveSettings();
+		this.shares?.refresh();
+		this.shares?.scheduleSync(share.id);
+	}
+
+	async removeSharedFolder(shareId: string): Promise<void> {
+		this.settings.sharedFolders = this.settings.sharedFolders.filter(
+			(share) => share.id !== shareId,
+		);
+		await this.saveSettings();
+		await this.shares?.forgetShareState(shareId);
 	}
 
 	refreshEditorSigns(enabled: boolean): void {
 		this.editorSigns?.refresh(enabled);
+	}
+
+	refreshFileIndicators(enabled: boolean): void {
+		this.fileIndicators?.refresh(enabled);
 	}
 
 	private async maybePromptAdoptVault(
@@ -167,12 +246,6 @@ export default class ObsyncPlugin extends Plugin {
 		}, SCOPE_REFRESH_DEBOUNCE_MS);
 	}
 
-	async createSettingsTransferUrl(): Promise<string | null> {
-		const passphrase = await this.requireTransferPassphrase();
-		if (!passphrase) return null;
-		return createSettingsTransferUrl(this.settings, passphrase);
-	}
-
 	async createSettingsTransferPackage(
 		options: SettingsTransferExportOptions,
 	): Promise<SettingsTransferPackage | null> {
@@ -185,10 +258,10 @@ export default class ObsyncPlugin extends Plugin {
 		const passphrase = await this.requireTransferPassphrase();
 		if (!passphrase) return false;
 		const imported = await readSettingsTransfer(input, passphrase);
-		const settings = mergeTransferredSettings(this.settings, imported);
-		const confirmed = await confirmSettingsTransferImport(this.app, settings);
+		const merged = mergeTransferredSettings(this.settings, imported);
+		const confirmed = await confirmSettingsTransferImport(this.app, merged);
 		if (!confirmed) return false;
-		await this.applyImportedSettings(imported);
+		await this.applyImportedSettings(merged);
 		return true;
 	}
 
@@ -258,20 +331,14 @@ export default class ObsyncPlugin extends Plugin {
 		return epoch;
 	}
 
-	applyState(state: LocalState): void {
-		this.statePersister.setInitial(state);
-	}
-
 	private async requireTransferPassphrase(): Promise<string | null> {
 		if (!(await this.passphraseManager.prompt(false))) return null;
 		return this.passphraseManager.current();
 	}
 
-	private async applyImportedSettings(
-		settings: ObsyncTransferSettings,
-	): Promise<void> {
-		const nextSettings = mergeTransferredSettings(this.settings, settings);
-		Object.assign(this.settings, nextSettings);
+	/** Applies the settings the user just confirmed in the import dialog. */
+	private async applyImportedSettings(merged: ObsyncSettings): Promise<void> {
+		Object.assign(this.settings, merged);
 		this.passphraseManager.invalidateKey();
 		await this.saveSettings();
 		await this.passphraseManager.persistIfEnabled();

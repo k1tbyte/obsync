@@ -1,0 +1,4 @@
+# The working tree matches the repository: LF everywhere, on every platform.
+# Without this a Windows checkout gets CRLF via core.autocrlf and every file
+# fails `biome check`.
+* text=auto eol=lf

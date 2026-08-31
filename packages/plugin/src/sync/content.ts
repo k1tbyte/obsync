@@ -1,13 +1,18 @@
 import type { DataAdapter } from "obsidian";
 
-import { HUNK_TEXT_MAX_BYTES, TEXT_SNIFF_BYTES } from "../constants";
+import {
+	HUNK_TEXT_MAX_BYTES,
+	KNOWN_BINARY_EXTENSIONS,
+	TEXT_SNIFF_BYTES,
+} from "../constants";
 import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 import type { Manifest } from "../types";
-import { readBinary } from "../vault/io";
+import { readBinary, writeBinary } from "../vault/io";
 import { objectKey } from "./manifest";
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
+const encoder = new TextEncoder();
 
 export interface RemoteFetchOptions {
 	storage: ObjectStorage;
@@ -46,6 +51,21 @@ export async function loadRemoteBytes(
 	return plaintext;
 }
 
+/**
+ * Downloads one object, verifies it against its hash, and writes it to `path`.
+ * The single path for materialising a remote object on disk.
+ */
+export async function writeRemoteObject(
+	deps: RemoteFetchOptions & { adapter: DataAdapter },
+	path: string,
+	hash: string,
+): Promise<Uint8Array> {
+	const bytes = await loadRemoteBytes(deps, hash);
+	if (!bytes) throw new Error(`Missing remote object for ${path}`);
+	await writeBinary(deps.adapter, path, bytes);
+	return bytes;
+}
+
 export async function loadRemoteText(
 	deps: RemoteFetchOptions,
 	hash: string,
@@ -63,6 +83,10 @@ export async function loadBaselineText(
 ): Promise<string | null> {
 	const entry = baseline?.files[path];
 	if (!entry) return null;
+	// The manifest already knows the plaintext size and the path tells us the
+	// kind — don't download content that can never be shown as text.
+	if (entry.size > HUNK_TEXT_MAX_BYTES) return null;
+	if (hasKnownBinaryExtension(path)) return null;
 	return loadRemoteText(deps, entry.hash);
 }
 
@@ -70,6 +94,17 @@ export function isLikelyText(bytes: Uint8Array): boolean {
 	if (bytes.length === 0) return true;
 	if (bytes.length > HUNK_TEXT_MAX_BYTES) return false;
 	return !hasBinaryBytes(bytes);
+}
+
+/**
+ * Extension-based binary detection. Lets diff/merge code classify a file as
+ * binary from its path alone, without reading (or downloading) any content.
+ */
+export function hasKnownBinaryExtension(path: string): boolean {
+	const dot = path.lastIndexOf(".");
+	if (dot < 0 || dot === path.length - 1) return false;
+	const ext = path.slice(dot + 1).toLowerCase();
+	return KNOWN_BINARY_EXTENSIONS.has(ext);
 }
 
 /** Size-independent binary sniff: a NUL within the first {@link TEXT_SNIFF_BYTES}. */
@@ -86,5 +121,5 @@ export function bytesToText(bytes: Uint8Array): string {
 }
 
 export function textToBytes(text: string): Uint8Array {
-	return new TextEncoder().encode(text);
+	return encoder.encode(text);
 }

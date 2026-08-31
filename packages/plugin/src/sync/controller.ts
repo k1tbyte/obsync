@@ -35,8 +35,7 @@ import {
 	FileDiffService,
 	type PathStatus,
 } from "./runtime/file-diff-service";
-import { HistoryQueryService } from "./runtime/history-query-service";
-import { HistoryWriteService } from "./runtime/history-write-service";
+import { HistoryService } from "./runtime/history-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
 import { OperationRunner } from "./runtime/operation-runner";
 
@@ -90,8 +89,7 @@ export class SyncController {
 	private readonly runtimeState: SyncControllerRuntimeState;
 	private readonly fileDiffs: FileDiffService;
 	private readonly operations: OperationRunner;
-	private readonly historyQueries: HistoryQueryService;
-	private readonly historyWrites: HistoryWriteService;
+	private readonly history: HistoryService;
 	private readonly maintenance: MaintenanceService;
 
 	constructor(host: SyncControllerHost) {
@@ -109,10 +107,7 @@ export class SyncController {
 			runtimeState: this.runtimeState,
 			clearFileDiffs: () => this.fileDiffs.clear(),
 		});
-		this.historyQueries = new HistoryQueryService({
-			openSession: () => this.host.openSession(),
-		});
-		this.historyWrites = new HistoryWriteService({
+		this.history = new HistoryService({
 			openSession: () => this.host.openSession(),
 			enqueue: (task) => this.runtimeState.enqueue(task),
 			refresh: () => this.operations.refreshNow(),
@@ -201,15 +196,11 @@ export class SyncController {
 	}
 
 	async getFileHistory(path: string): Promise<FileVersion[]> {
-		return this.historyQueries.getFileHistory(path);
-	}
-
-	async loadFileVersionBytes(hash: string): Promise<Uint8Array> {
-		return this.historyQueries.loadFileVersionBytes(hash);
+		return this.history.getFileHistory(path);
 	}
 
 	async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<void> {
-		await this.historyQueries.setSnapshotPinned(snapshotId, pinned);
+		await this.history.setSnapshotPinned(snapshotId, pinned);
 	}
 
 	async verifyRemote(deep: boolean): Promise<VerifyResult | null> {
@@ -221,7 +212,7 @@ export class SyncController {
 	}
 
 	async restoreFileVersion(path: string, hash: string): Promise<void> {
-		await this.historyWrites.restoreFileVersion(path, hash);
+		await this.history.restoreFileVersion(path, hash);
 	}
 
 	async getHistoryDiff(
@@ -229,8 +220,15 @@ export class SyncController {
 		hash: string,
 		label: string,
 		forceText = false,
+		versionSize?: number,
 	): Promise<FileDiffModel | null> {
-		return this.historyQueries.getHistoryDiff(path, hash, label, forceText);
+		return this.history.getHistoryDiff(
+			path,
+			hash,
+			label,
+			forceText,
+			versionSize,
+		);
 	}
 
 	async restoreHistoryHunks(
@@ -238,7 +236,7 @@ export class SyncController {
 		hash: string,
 		selected: ReadonlySet<number>,
 	): Promise<void> {
-		await this.historyWrites.restoreHistoryHunks(path, hash, selected);
+		await this.history.restoreHistoryHunks(path, hash, selected);
 	}
 
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {
@@ -349,9 +347,5 @@ export class SyncController {
 	/** Loads the baseline text for any tracked path (for live editor signs). */
 	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
 		return this.fileDiffs.loadBaselineForPath(path);
-	}
-
-	clearDiffCache(): void {
-		this.fileDiffs.clear();
 	}
 }

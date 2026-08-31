@@ -24,6 +24,7 @@ const OPERATION_LABELS: Record<ESyncLogOperation, string> = {
 	[ESyncLogOperation.Pull]: "Pull",
 	[ESyncLogOperation.Reset]: "Reset",
 	[ESyncLogOperation.Session]: "Session",
+	[ESyncLogOperation.Share]: "Share",
 };
 
 export function renderLogsView(

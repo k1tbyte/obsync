@@ -11,6 +11,7 @@ import {
 	importAesKey,
 	randomBytes,
 } from "../crypto";
+import { errorMessage } from "../shared/errors";
 import type { ObjectStorage } from "../storage/types";
 import { base64ToBytes, bytesToBase64 } from "../utils/base64";
 import { loadOrCreateSalt } from "./session";
@@ -61,9 +62,7 @@ export async function readKeyfile(
 		// Present but unparseable. Returning null would make the caller mint a
 		// fresh data key and orphan every encrypted object — fail loudly.
 		throw new Error(
-			`Keyfile present but unreadable; refusing to treat it as absent: ${
-				err instanceof Error ? err.message : String(err)
-			}`,
+			`Keyfile present but unreadable; refusing to treat it as absent: ${errorMessage(err)}`,
 		);
 	}
 }

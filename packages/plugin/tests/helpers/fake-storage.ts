@@ -6,9 +6,10 @@ import type {
 /** In-memory {@link StorageAdapter} for tests. `map` is exposed for assertions. */
 export class FakeStorage implements StorageAdapter {
 	readonly map = new Map<string, Uint8Array>();
+	/** Counts existence probes, so tests can assert redundant ones are skipped. */
+	existsCalls = 0;
 	readonly capabilities: StorageCapabilities = {
 		canList: true,
-		hasConditionalWrites: false,
 	};
 
 	identity(): string {
@@ -16,6 +17,7 @@ export class FakeStorage implements StorageAdapter {
 	}
 
 	exists(key: string): Promise<boolean> {
+		this.existsCalls++;
 		return Promise.resolve(this.map.has(key));
 	}
 

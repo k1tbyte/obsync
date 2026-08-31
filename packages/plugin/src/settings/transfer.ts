@@ -2,6 +2,7 @@ import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
 import { getDescriptor } from "../storage";
 import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
 import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
+import { deflateBytes, inflateBytes } from "../utils/compress";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
@@ -14,9 +15,8 @@ import {
 const TRANSFER_VERSION = 4;
 const TRANSFER_SALT_BYTES = 16;
 const TRANSFER_PARTS = 4;
-const TRANSFER_ACTION = "obsync";
+export const TRANSFER_ACTION = "obsync";
 const TRANSFER_PARAM = "d";
-const TRANSFER_COMPRESSION_FORMAT: CompressionFormat = "deflate-raw";
 const SETTINGS_TRANSFER_MAX_QR_BYTES = 1024;
 const MAX_SYNC_MASK = 0b111111;
 const SYNC_MASK_KEY = "y";
@@ -41,6 +41,7 @@ export interface ObsyncTransferSettings
 			| "activeStorageKind"
 			| "settingsSync"
 			| "ignorePatterns"
+			| "ignoreSymlinks"
 			| "maxFileBytes"
 			| "autoPullOnStartup"
 			| "autoPullIntervalMinutes"
@@ -111,6 +112,12 @@ const TRANSFER_FIELDS: ReadonlyArray<FieldSpec> = [
 		settingsKey: "ignorePatterns",
 		transferKey: "i",
 		kind: ETransferFieldKind.Str,
+	},
+	{
+		section: ETransferSection.Scope,
+		settingsKey: "ignoreSymlinks",
+		transferKey: "k",
+		kind: ETransferFieldKind.Bool,
 	},
 	{
 		section: ETransferSection.Scope,
@@ -226,11 +233,7 @@ const TRANSFER_ENCODINGS: Readonly<Record<string, ETransferEncoding>> = {
 	[ETransferEncoding.Deflate]: ETransferEncoding.Deflate,
 };
 
-export function settingsTransferAction(): string {
-	return TRANSFER_ACTION;
-}
-
-export function normalizeSettingsTransferExportOptions(
+function normalizeSettingsTransferExportOptions(
 	options?: Partial<SettingsTransferExportOptions>,
 ): SettingsTransferExportOptions {
 	return {
@@ -428,7 +431,7 @@ function isValidFieldValue(
 async function encodeTransferBytes(
 	plaintext: Uint8Array,
 ): Promise<EncodedTransferBytes> {
-	const compressed = await compressTransferBytes(plaintext);
+	const compressed = await deflateBytes(plaintext);
 	if (compressed === null || compressed.length >= plaintext.length) {
 		return { bytes: plaintext, encoding: ETransferEncoding.Plain };
 	}
@@ -440,27 +443,7 @@ async function decodeTransferBytes(
 	bytes: Uint8Array,
 ): Promise<Uint8Array> {
 	if (encoding === ETransferEncoding.Plain) return bytes;
-	return decompressTransferBytes(bytes);
-}
-
-async function compressTransferBytes(
-	bytes: Uint8Array,
-): Promise<Uint8Array | null> {
-	if (typeof CompressionStream !== "function") return null;
-	const stream = new Blob([bytes as any])
-		.stream()
-		.pipeThrough(new CompressionStream(TRANSFER_COMPRESSION_FORMAT));
-	return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function decompressTransferBytes(bytes: Uint8Array): Promise<Uint8Array> {
-	if (typeof DecompressionStream !== "function") {
-		throw new Error("This device cannot import compressed Obsync setup links");
-	}
-	const stream = new Blob([bytes as any])
-		.stream()
-		.pipeThrough(new DecompressionStream(TRANSFER_COMPRESSION_FORMAT));
-	return new Uint8Array(await new Response(stream).arrayBuffer());
+	return inflateBytes(bytes);
 }
 
 function parseTransferToken(token: string): ParsedTransferToken {

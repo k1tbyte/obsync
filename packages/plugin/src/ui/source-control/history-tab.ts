@@ -1,4 +1,5 @@
 import type ObsyncPlugin from "../../main";
+import { errorMessage } from "../../shared/errors";
 import { formatBytes } from "../../shared/format";
 import { deviceLabel } from "../../sync/device";
 import type { FileVersion } from "../../sync/history";
@@ -15,7 +16,7 @@ export class HistoryTab {
 		private readonly onRerender: () => void,
 		private readonly openDiff: (
 			path: string,
-			history?: { hash: string; label: string },
+			history?: { hash: string; label: string; size?: number },
 		) => Promise<void>,
 	) {}
 
@@ -101,7 +102,7 @@ export class HistoryTab {
 					body.empty();
 					body.createDiv({
 						cls: "obsync-history-error",
-						text: `Could not load history: ${errorText(err)}`,
+						text: `Could not load history: ${errorMessage(err)}`,
 					});
 				});
 			return;
@@ -142,6 +143,7 @@ export class HistoryTab {
 					void this.openDiff(path, {
 						hash: version.hash,
 						label: `${label} · ${formatTimestamp(version.createdAt)}`,
+						size: version.size,
 					}),
 			);
 			const restoreBtn = actions.createEl("button", {
@@ -213,8 +215,4 @@ export class HistoryTab {
 
 function formatTimestamp(ms: number): string {
 	return new Date(ms).toLocaleString();
-}
-
-function errorText(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }

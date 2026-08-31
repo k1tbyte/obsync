@@ -1,4 +1,4 @@
-import type { ChangeDesc, Text } from "@codemirror/state";
+import type { ChangeDesc, EditorState, Text } from "@codemirror/state";
 import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { debounce, editorInfoField } from "obsidian";
 
@@ -119,9 +119,7 @@ function changeSize(changes: ChangeDesc): number {
 	return total;
 }
 
-function pathFromState(
-	state: import("@codemirror/state").EditorState,
-): string | null {
+export function pathFromState(state: EditorState): string | null {
 	try {
 		return state.field(editorInfoField, false)?.file?.path ?? null;
 	} catch {

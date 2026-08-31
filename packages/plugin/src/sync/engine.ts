@@ -1,11 +1,6 @@
 import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
-import {
-	decryptBytes,
-	type EncryptionKey,
-	encryptBytes,
-	sha256Hex,
-} from "../crypto";
+import { type EncryptionKey, encryptBytes, sha256Hex } from "../crypto";
 import type { StorageAdapter } from "../storage/types";
 import {
 	type DiffResult,
@@ -18,15 +13,11 @@ import {
 	type SessionState,
 } from "../types";
 import { runWithConcurrency } from "../utils/concurrency";
-import {
-	deletePath,
-	ensureDir,
-	readBinary,
-	removeEmptyDir,
-	writeBinary,
-} from "../vault/io";
+import { deletePath, ensureDir, readBinary, removeEmptyDir } from "../vault/io";
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
+import { mergeFolderArrays } from "./baseline";
+import { writeRemoteObject } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
 import {
@@ -148,17 +139,14 @@ export async function pushPaths(
 	);
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
+	// Any hash the remote manifest already references is provably stored, so
+	// skip the existence probe for it — otherwise a first sync costs one extra
+	// round-trip per file.
+	const knownHashes = knownRemoteHashes(compareResult, deps.state.baseline);
 	let done = 0;
 	await runWithConcurrency(uploads, concurrency, async (entry) => {
-		const exists = await deps.storage.exists(objectKey(entry.hash));
-		if (!exists) {
-			const plaintext = await readBinary(deps.adapter, entry.path);
-			const verifyHash = await sha256Hex(plaintext);
-			if (verifyHash !== entry.hash) {
-				throw new Error(`Hash mismatch while uploading ${entry.path}`);
-			}
-			const blob = await encryptBytes(deps.key, plaintext);
-			await deps.storage.put(objectKey(entry.hash), blob);
+		if (!knownHashes.has(entry.hash)) {
+			await uploadObject(deps, entry);
 		}
 		onProgress?.(++done, uploads.length);
 	});
@@ -168,31 +156,7 @@ export async function pushPaths(
 		snapshot: compareResult.snapshot,
 		localChanges,
 	});
-	const folders = mergeFolderState(
-		compareResult.remote,
-		compareResult.snapshot,
-	);
-	const vaultId =
-		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
-	const manifest = buildManifest(
-		deps.state.deviceId,
-		deps.state.deviceName,
-		vaultId,
-		compareResult.remote,
-		{
-			files: nextFiles,
-			skipped: [],
-			emptyFolders: folders,
-			ignoredPaths: [],
-		},
-	);
-	await publishManifestWithHistory(
-		deps.storage,
-		deps.key,
-		manifest,
-		compareResult.remote?.snapshotId ?? null,
-		deps.history,
-	);
+	const manifest = await publishFileMap(deps, compareResult, nextFiles);
 	return manifest;
 }
 
@@ -220,14 +184,7 @@ export async function pullPaths(
 	await runWithConcurrency(downloads, concurrency, async (change) => {
 		const entry = remote.files[change.path];
 		if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
-		const blob = await deps.storage.get(objectKey(entry.hash));
-		if (!blob) throw new Error(`Missing remote object for ${change.path}`);
-		const plaintext = await decryptBytes(deps.key, blob);
-		const verifyHash = await sha256Hex(plaintext);
-		if (verifyHash !== entry.hash) {
-			throw new Error(`Hash mismatch while downloading ${change.path}`);
-		}
-		await writeBinary(deps.adapter, change.path, plaintext);
+		await writeRemoteObject(deps, change.path, entry.hash);
 		onProgress?.(++done, total);
 	});
 
@@ -285,21 +242,33 @@ export async function pushSingleFile(
 		...baseFiles,
 		[input.path]: entry,
 	};
-	const folders = mergeFolderState(
-		compareResult.remote,
-		compareResult.snapshot,
-	);
-	const vaultId =
-		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId;
+	const manifest = await publishFileMap(deps, compareResult, nextFiles);
+	return { manifest, entry };
+}
+
+/**
+ * Builds the next manifest from a complete file map and publishes it (with a
+ * history snapshot when enabled). Every write path funnels through here so the
+ * folder merge, vault-id fallback, and optimistic-concurrency parent are
+ * decided in exactly one place.
+ */
+export async function publishFileMap(
+	deps: EngineDependencies,
+	compareResult: CompareResult,
+	files: Record<string, ManifestEntry>,
+): Promise<Manifest> {
 	const manifest = buildManifest(
 		deps.state.deviceId,
 		deps.state.deviceName,
-		vaultId,
+		deps.state.vaultId ?? compareResult.remote?.vaultId ?? deps.state.deviceId,
 		compareResult.remote,
 		{
-			files: nextFiles,
+			files,
 			skipped: [],
-			emptyFolders: folders,
+			emptyFolders: mergeFolderArrays(
+				compareResult.remote?.folders,
+				compareResult.snapshot.emptyFolders,
+			),
 			ignoredPaths: [],
 		},
 	);
@@ -310,7 +279,7 @@ export async function pushSingleFile(
 		compareResult.remote?.snapshotId ?? null,
 		deps.history,
 	);
-	return { manifest, entry };
+	return manifest;
 }
 
 function buildPartialFileMap(input: {
@@ -328,18 +297,6 @@ function buildPartialFileMap(input: {
 		if (entry) next[change.path] = entry;
 	}
 	return next;
-}
-
-function mergeFolderState(
-	remote: Manifest | null,
-	snapshot: LocalSnapshot,
-): string[] {
-	if (remote?.folders && remote.folders.length > 0) {
-		const merged = new Set<string>(remote.folders);
-		for (const dir of snapshot.emptyFolders) merged.add(dir);
-		return Array.from(merged);
-	}
-	return snapshot.emptyFolders;
 }
 
 function buildAdvancedBaseline(input: {
@@ -369,6 +326,36 @@ function buildAdvancedBaseline(input: {
 		files,
 		folders: input.remote.folders,
 	};
+}
+
+/** Hashes the remote already stores, from the manifests we have in hand. */
+function knownRemoteHashes(
+	compareResult: CompareResult,
+	baseline: Manifest | null,
+): Set<string> {
+	const hashes = new Set<string>();
+	for (const entry of Object.values(compareResult.remote?.files ?? {})) {
+		hashes.add(entry.hash);
+	}
+	for (const entry of Object.values(baseline?.files ?? {})) {
+		hashes.add(entry.hash);
+	}
+	return hashes;
+}
+
+/** Reads, verifies against the scanned hash, encrypts, and stores one object. */
+async function uploadObject(
+	deps: EngineDependencies,
+	entry: { path: string; hash: string },
+): Promise<void> {
+	if (await deps.storage.exists(objectKey(entry.hash))) return;
+	const plaintext = await readBinary(deps.adapter, entry.path);
+	const verifyHash = await sha256Hex(plaintext);
+	if (verifyHash !== entry.hash) {
+		throw new Error(`Hash mismatch while uploading ${entry.path}`);
+	}
+	const blob = await encryptBytes(deps.key, plaintext);
+	await deps.storage.put(objectKey(entry.hash), blob);
 }
 
 function collectUploads(

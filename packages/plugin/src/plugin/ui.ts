@@ -4,7 +4,9 @@ import { ObsyncSettingTab } from "@/settings/tab";
 import type { SyncController } from "@/sync/controller";
 import {
 	DiffView,
+	type IndicatorHandle,
 	type RealtimeStatusHandle,
+	registerFileContextIndicators,
 	registerFileExplorerIndicators,
 	registerRibbon,
 	registerStatusBar,
@@ -13,6 +15,7 @@ import {
 
 interface RegisteredPluginUi {
 	settingsTab: ObsyncSettingTab;
+	fileIndicators: IndicatorHandle;
 }
 
 export function registerPluginUi(
@@ -38,11 +41,17 @@ export function registerPluginUi(
 		};
 		registerRibbon(plugin, controller, realtimeHandle);
 	}
-	if (plugin.settings.showFileExplorerIndicators) {
-		registerFileExplorerIndicators(plugin, controller);
-	}
+	const explorerIndicators = registerFileExplorerIndicators(plugin, controller);
+	const contextIndicators = registerFileContextIndicators(plugin);
+	const fileIndicators: IndicatorHandle = {
+		refresh(enabled) {
+			explorerIndicators.refresh(enabled);
+			contextIndicators.refresh(enabled);
+		},
+	};
+	fileIndicators.refresh(plugin.settings.showFileExplorerIndicators);
 
-	return { settingsTab };
+	return { settingsTab, fileIndicators };
 }
 
 export function refreshOpenHistoryViewsAfterPush(plugin: ObsyncPlugin): void {

@@ -280,6 +280,49 @@ describe("engine round-trip", () => {
 		// index.json.enc + one blob per retained entry.
 		expect(snapshotBlobs.length).toBe(index.entries.length + 1);
 	});
+	it("skips the existence probe for objects the remote already references", async () => {
+		const adapter = new InMemoryAdapter();
+		const storage = new FakeStorage();
+		adapter.putText("a.md", "one");
+		adapter.putText("b.md", "two");
+		let state = freshState("A");
+
+		const first = await compare(deps(adapter, storage, state));
+		const manifest = await pushPaths(deps(adapter, storage, state), first, [
+			"a.md",
+			"b.md",
+		]);
+		state = advanceSessionAfterPush(state, first, manifest);
+		expect(storage.existsCalls).toBe(2);
+
+		// Re-push an unchanged file plus a new one. Only the new hash is unknown,
+		// so exactly one probe should be issued.
+		adapter.putText("c.md", "three");
+		storage.existsCalls = 0;
+		const second = await compare(deps(adapter, storage, state));
+		await pushPaths(deps(adapter, storage, state), second, ["c.md"]);
+		expect(storage.existsCalls).toBe(1);
+	});
+
+	it("re-pushing an unchanged hash issues no probe at all", async () => {
+		const adapter = new InMemoryAdapter();
+		const storage = new FakeStorage();
+		adapter.putText("a.md", "same");
+		let state = freshState("A");
+
+		const first = await compare(deps(adapter, storage, state));
+		const manifest = await pushPaths(deps(adapter, storage, state), first, [
+			"a.md",
+		]);
+		state = advanceSessionAfterPush(state, first, manifest);
+
+		// A second file with identical content reuses the already-stored hash.
+		adapter.putText("copy.md", "same");
+		storage.existsCalls = 0;
+		const second = await compare(deps(adapter, storage, state));
+		await pushPaths(deps(adapter, storage, state), second, ["copy.md"]);
+		expect(storage.existsCalls).toBe(0);
+	});
 });
 
 function matchPaths(...paths: ReadonlyArray<string>) {

@@ -93,5 +93,8 @@ export function mergeSessionIntoLocal(
 		deviceName: session.deviceName,
 		storages,
 		hashCache: session.hashCache,
+		// Shared-folder caches are owned by the share service; a main-sync
+		// persist must carry them through untouched, not drop them.
+		shareCaches: current?.shareCaches ?? {},
 	};
 }

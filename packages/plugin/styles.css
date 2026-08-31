@@ -503,6 +503,133 @@
 	font-weight: 700;
 }
 
+.nav-file-title.obsync-has-path-badge,
+.nav-folder-title.obsync-has-path-badge {
+	display: flex;
+	align-items: center;
+}
+
+.nav-file-title.obsync-has-path-badge .nav-file-title-content,
+.nav-folder-title.obsync-has-path-badge .nav-folder-title-content {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.obsync-path-badge {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 1.1rem;
+	height: 1.1rem;
+	margin-inline-start: var(--size-4-1);
+	color: var(--text-muted);
+}
+
+.obsync-path-badge svg,
+.obsync-context-chip svg {
+	width: 0.9rem;
+	height: 0.9rem;
+}
+
+.obsync-share-badge.obsync-share-active,
+.obsync-share-active.obsync-context-action,
+.obsync-context-chip.obsync-share-active {
+	color: var(--interactive-accent);
+}
+
+.obsync-share-badge.obsync-share-syncing,
+.obsync-share-syncing.obsync-context-action,
+.obsync-context-chip.obsync-share-syncing {
+	color: var(--interactive-accent);
+}
+
+.obsync-share-badge.obsync-share-syncing svg,
+.obsync-share-syncing.obsync-context-action > svg,
+.obsync-context-chip.obsync-share-syncing > svg {
+	animation: obsync-pulse 1.2s ease-in-out infinite;
+}
+
+.obsync-share-badge.obsync-share-error,
+.obsync-share-error.obsync-context-action,
+.obsync-context-chip.obsync-share-error {
+	color: var(--color-red);
+}
+
+.obsync-share-badge.obsync-share-paused,
+.obsync-share-paused.obsync-context-action,
+.obsync-context-chip.obsync-share-paused {
+	color: var(--text-faint);
+}
+
+.obsync-share-badge.obsync-share-offline,
+.obsync-share-offline.obsync-context-action,
+.obsync-context-chip.obsync-share-offline {
+	color: var(--color-orange);
+}
+
+.obsync-link-badge,
+.obsync-link-context {
+	color: var(--color-cyan);
+}
+
+.obsync-presence-count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 0.9rem;
+	height: 0.9rem;
+	padding: 0 0.2rem;
+	border-radius: 999px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: 0.6rem;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.obsync-path-badge .obsync-presence-count,
+.obsync-context-action .obsync-presence-count {
+	position: absolute;
+	top: -0.35rem;
+	right: -0.45rem;
+}
+
+.obsync-file-context {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	cursor: pointer;
+}
+
+.obsync-file-context:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+	border-radius: var(--radius-s);
+}
+
+.obsync-file-context.obsync-hidden {
+	display: none;
+}
+
+.obsync-context-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	max-width: 18rem;
+}
+
+.obsync-context-chip > span:not(.obsync-presence-count) {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsync-context-action {
+	position: relative;
+}
+
 /* Status bar */
 .obsync-status-bar {
 	cursor: pointer;
@@ -533,6 +660,20 @@
 @keyframes obsync-spin {
 	to {
 		transform: rotate(360deg);
+	}
+}
+
+@keyframes obsync-pulse {
+	50% {
+		opacity: 0.45;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.obsync-share-badge.obsync-share-syncing svg,
+	.obsync-share-syncing.obsync-context-action > svg,
+	.obsync-context-chip.obsync-share-syncing > svg {
+		animation: none;
 	}
 }
 
@@ -900,4 +1041,63 @@
 
 .obsync-hunk-popup-push {
 	cursor: pointer;
+}
+
+/* Shared folders */
+
+.obsync-share-list {
+	display: grid;
+	gap: var(--size-4-2);
+	margin-block: var(--size-4-2) var(--size-4-4);
+}
+
+.obsync-share-row {
+	padding: var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: var(--radius-s);
+	background: var(--background-primary-alt);
+}
+
+.obsync-share-row.obsync-share-syncing {
+	border-left-color: var(--interactive-accent);
+}
+
+.obsync-share-row.obsync-share-error {
+	border-left-color: var(--color-red);
+}
+
+.obsync-share-row.obsync-share-paused,
+.obsync-share-row.obsync-share-offline {
+	border-left-color: var(--text-faint);
+}
+
+.obsync-share-row .setting-item-name {
+	word-break: break-word;
+}
+
+.obsync-share-path {
+	overflow: hidden;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsync-share-status {
+	margin-top: var(--size-4-1);
+}
+
+.obsync-share-remove {
+	color: var(--color-red);
+}
+
+.obsync-share-invite-link {
+	width: 100%;
+	resize: vertical;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	word-break: break-all;
+	margin-top: var(--size-4-2);
 }
