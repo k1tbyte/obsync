@@ -1,6 +1,6 @@
 {
 	"name": "obsync-monorepo",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Monorepo for the Obsync Obsidian plugin and its companion services.",
 	"private": true,
 	"type": "module",
