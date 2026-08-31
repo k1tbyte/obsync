@@ -2,11 +2,7 @@ name = "obsync-auth"
 main = "src/index.ts"
 compatibility_date = "2024-05-14"
 
-# Shared-folder broker: stores participant tokens. CI injects the namespace id
-# from the SHARE_TOKENS_KV_ID GitHub secret.
-[[kv_namespaces]]
-binding = "SHARE_TOKENS"
-id = ""
+# CI appends the SHARE_TOKENS binding before deployment.
 
 [vars]
 SHARE_S3_REGION = "auto"

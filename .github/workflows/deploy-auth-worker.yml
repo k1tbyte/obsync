@@ -30,7 +30,12 @@ jobs:
             echo "::error::SHARE_TOKENS_KV_ID must be a 32-character hexadecimal KV namespace ID."
             exit 1
           fi
-          sed -i "s/^id = \"\"$/id = \"$SHARE_TOKENS_KV_ID\"/" wrangler.toml
+          cat >> wrangler.toml <<EOF
+
+          [[kv_namespaces]]
+          binding = "SHARE_TOKENS"
+          id = "$SHARE_TOKENS_KV_ID"
+          EOF
           grep -q "^id = \"$SHARE_TOKENS_KV_ID\"$" wrangler.toml
 
       - name: Deploy
