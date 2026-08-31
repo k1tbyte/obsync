@@ -87,10 +87,12 @@ const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 	},
 	{
 		kind: EFieldKind.Toggle,
-		name: "File explorer indicators",
-		desc: "Color file names in the file tree by change status.",
+		name: "File and folder indicators",
+		desc: "Show sync status, shared folders, linked paths, and active-file context.",
 		get: (s) => s.showFileExplorerIndicators,
 		set: (v) => ({ showFileExplorerIndicators: v }),
+		after: (plugin) =>
+			plugin.refreshFileIndicators(plugin.settings.showFileExplorerIndicators),
 	},
 	{
 		kind: EFieldKind.Toggle,

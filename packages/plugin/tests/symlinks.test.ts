@@ -22,14 +22,19 @@ describe("symlinkDetector", () => {
 		expect(detector.isLink("linked")).toBe(true);
 		// The target is a real file; only the ancestor gives it away.
 		expect(detector.isLink("linked/note.md")).toBe(true);
+		expect(detector.findLink?.("linked/note.md")).toBe("linked");
 	});
 
 	it("flags a linked file", () => {
-		expect(symlinkDetector(vault, linkProbe).isLink("alias.md")).toBe(true);
+		const detector = symlinkDetector(vault, linkProbe);
+		expect(detector.isLink("alias.md")).toBe(true);
+		expect(detector.findLink?.("alias.md")).toBe("alias.md");
 	});
 
 	it("treats a missing path as ordinary", () => {
-		expect(symlinkDetector(vault, linkProbe).isLink("gone/x.md")).toBe(false);
+		const detector = symlinkDetector(vault, linkProbe);
+		expect(detector.isLink("gone/x.md")).toBe(false);
+		expect(detector.findLink?.("gone/x.md")).toBeNull();
 	});
 
 	it("probes each path prefix once", () => {
@@ -72,7 +77,11 @@ describe("scope policy with symlinks", () => {
 			themes: false,
 		},
 		configDir: ".obsidian",
-		symlinks: { isLink: (path) => path.split("/")[0] === "Junction" },
+		symlinks: {
+			isLink: (path) => path.split("/")[0] === "Junction",
+			findLink: (path) =>
+				path.split("/")[0] === "Junction" ? "Junction" : null,
+		},
 	});
 
 	it("keeps linked paths out of the scan and the diff", () => {

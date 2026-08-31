@@ -46,16 +46,25 @@ export interface ShareStatus {
 	state: EShareSyncState;
 	lastSyncAt: number | null;
 	error: string | null;
+	/** File counts from the last completed cycle; null before the first sync. */
+	lastActivity: ShareSyncActivity | null;
 	/** Relay connection state; false when the share has no relay configured. */
 	relayConnected: boolean;
 	/** Other participants currently connected to the share's relay room. */
 	peers: ReadonlyArray<{ id: string; name: string }>;
 }
 
+export interface ShareSyncActivity {
+	pulled: number;
+	pushed: number;
+	conflictCopies: number;
+}
+
 export const IDLE_SHARE_STATUS: ShareStatus = {
 	state: EShareSyncState.Idle,
 	lastSyncAt: null,
 	error: null,
+	lastActivity: null,
 	relayConnected: false,
 	peers: [],
 };

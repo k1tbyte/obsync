@@ -20,7 +20,8 @@ import { runWithConcurrency } from "../utils/concurrency";
 import { createSymlinkDetector } from "../vault/symlinks";
 import { createShareScopePolicy } from "./scope";
 import { ScopedVaultAdapter } from "./scoped-adapter";
-import { runShareSyncCycle } from "./sync-cycle";
+import { sameShareStatus } from "./status";
+import { runShareSyncCycle, type ShareCycleOutcome } from "./sync-cycle";
 import {
 	EShareSyncState,
 	IDLE_SHARE_STATUS,
@@ -109,6 +110,7 @@ export class ShareSyncService {
 		if (this.disposed) return;
 		const shares = this.host.getSettings().sharedFolders;
 		const byId = new Map(shares.map((share) => [share.id, share]));
+		let changed = false;
 
 		for (const [id, entry] of [...this.realtime]) {
 			const share = byId.get(id);
@@ -121,29 +123,40 @@ export class ShareSyncService {
 			) {
 				entry.client.dispose();
 				this.realtime.delete(id);
-				this.patchStatus(id, { relayConnected: false, peers: [] });
+				changed =
+					this.patchStatus(id, { relayConnected: false, peers: [] }, false) ||
+					changed;
 			}
 		}
 		for (const share of shares) {
 			if (share.paused) {
-				this.patchStatus(share.id, {
-					state: EShareSyncState.Paused,
-					error: null,
-				});
+				changed =
+					this.patchStatus(
+						share.id,
+						{
+							state: EShareSyncState.Paused,
+							error: null,
+						},
+						false,
+					) || changed;
 				continue;
 			}
 			const status = this.statuses.get(share.id);
 			if (status?.state === EShareSyncState.Paused) {
-				this.patchStatus(share.id, { state: EShareSyncState.Idle });
+				changed =
+					this.patchStatus(share.id, { state: EShareSyncState.Idle }, false) ||
+					changed;
 			}
 			if (share.relayUrl && !this.realtime.has(share.id)) {
 				this.connectRealtime(share);
 			}
 		}
 		for (const id of [...this.statuses.keys()]) {
-			if (!byId.has(id)) this.statuses.delete(id);
+			if (byId.has(id)) continue;
+			this.statuses.delete(id);
+			changed = true;
 		}
-		this.emit();
+		if (changed) this.emit();
 	}
 
 	getStatus(shareId: string): ShareStatus {
@@ -255,10 +268,11 @@ export class ShareSyncService {
 		});
 		try {
 			await this.ensureShareRoot(share);
+			let outcome: ShareCycleOutcome | null = null;
 			for (let attempt = 0; ; attempt++) {
 				const deps = await this.openShareSession(share);
 				try {
-					await this.syncOnce(share, deps);
+					outcome = await this.syncOnce(share, deps);
 					break;
 				} catch (err) {
 					if (
@@ -274,6 +288,13 @@ export class ShareSyncService {
 				state: EShareSyncState.Idle,
 				lastSyncAt: Date.now(),
 				error: null,
+				lastActivity: outcome
+					? {
+							pulled: outcome.pulled,
+							pushed: outcome.pushed,
+							conflictCopies: outcome.conflictCopies.length,
+						}
+					: null,
 			});
 		} catch (err) {
 			const message = errorMessage(err);
@@ -286,8 +307,8 @@ export class ShareSyncService {
 	private async syncOnce(
 		share: SharedFolderConfig,
 		deps: EngineDependencies,
-	): Promise<void> {
-		await runShareSyncCycle(share.name, deps, {
+	): Promise<ShareCycleOutcome> {
+		return runShareSyncCycle(share.name, deps, {
 			persist: (session) => this.persistShareSession(share, session),
 			log: (level, message, details) => this.host.log(level, message, details),
 			notifyPeers: () => this.realtime.get(share.id)?.client.notifySync(),
@@ -408,10 +429,17 @@ export class ShareSyncService {
 		client.connect();
 	}
 
-	private patchStatus(shareId: string, patch: Partial<ShareStatus>): void {
+	private patchStatus(
+		shareId: string,
+		patch: Partial<ShareStatus>,
+		notify = true,
+	): boolean {
 		const current = this.statuses.get(shareId) ?? IDLE_SHARE_STATUS;
-		this.statuses.set(shareId, { ...current, ...patch });
-		this.emit();
+		const next = { ...current, ...patch };
+		if (sameShareStatus(current, next)) return false;
+		this.statuses.set(shareId, next);
+		if (notify) this.emit();
+		return true;
 	}
 
 	private failStatus(shareId: string, message: string): void {

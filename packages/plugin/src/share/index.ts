@@ -22,6 +22,13 @@ export {
 	SHARE_INVITE_ACTION,
 	type ShareInvite,
 } from "./invite";
+export {
+	describeShareStatus,
+	describeShareTooltip,
+	findShareForPath,
+	type ShareIndicatorState,
+	shareIndicatorState,
+} from "./presentation";
 export { createShareScopePolicy } from "./scope";
 export { ScopedVaultAdapter } from "./scoped-adapter";
 export { type ShareServiceHost, ShareSyncService } from "./service";
@@ -39,5 +46,6 @@ export {
 	normalizeShareRoot,
 	type SharedFolderConfig,
 	type ShareStatus,
+	type ShareSyncActivity,
 	shareSlotKey,
 } from "./types";

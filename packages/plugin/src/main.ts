@@ -22,7 +22,7 @@ import {
 	TRANSFER_ACTION,
 } from "@/settings/transfer";
 import {
-	isPathInShare,
+	findShareForPath,
 	SHARE_INVITE_ACTION,
 	type SharedFolderConfig,
 	ShareSyncService,
@@ -37,6 +37,7 @@ import { loadState } from "@/sync/state";
 import {
 	confirmAdoptNewVault,
 	confirmSettingsTransferImport,
+	type IndicatorHandle,
 	notifyError,
 	notifyInfo,
 } from "@/ui";
@@ -69,6 +70,7 @@ export default class ObsyncPlugin extends Plugin {
 	private realtime: PluginRealtime | null = null;
 	private adoptPromptActive = false;
 	private editorSigns: SignsHandle | null = null;
+	private fileIndicators: IndicatorHandle | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -85,6 +87,8 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager = runtime.passphraseManager;
 		this.controller = runtime.controller;
 		this.realtime = new PluginRealtime(this.controller, () => this.settings);
+		this.initRealtime();
+		this.initShares();
 
 		this.register(
 			this.controller.subscribe((snapshot) => {
@@ -92,14 +96,14 @@ export default class ObsyncPlugin extends Plugin {
 			}),
 		);
 
-		this.settingsTab = registerPluginUi(this, this.controller).settingsTab;
+		const registeredUi = registerPluginUi(this, this.controller);
+		this.settingsTab = registeredUi.settingsTab;
+		this.fileIndicators = registeredUi.fileIndicators;
 		this.editorSigns = registerEditorSigns(this);
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
 		registerFileHistoryMenu(this);
-		this.initRealtime();
-		this.initShares();
 
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
@@ -128,6 +132,7 @@ export default class ObsyncPlugin extends Plugin {
 		}
 		this.editorSigns?.dispose();
 		this.editorSigns = null;
+		this.fileIndicators = null;
 		this.statePersister?.dispose();
 		this.controller?.dispose();
 		this.passphraseManager?.dispose();
@@ -165,21 +170,16 @@ export default class ObsyncPlugin extends Plugin {
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
 				if (!(file instanceof TFolder)) return;
-				const shared = this.settings.sharedFolders.some((share) =>
-					isPathInShare(file.path, share.localRoot),
-				);
+				const share = findShareForPath(this.settings.sharedFolders, file.path);
 				menu.addItem((item) =>
 					item
 						.setTitle(
-							shared ? "Obsync: Sync shared folder" : "Obsync: Share folder…",
+							share ? "Obsync: Sync shared folder" : "Obsync: Share folder…",
 						)
 						.setIcon("users")
 						.onClick(() => {
-							if (shared) {
-								const share = this.settings.sharedFolders.find((entry) =>
-									isPathInShare(file.path, entry.localRoot),
-								);
-								if (share) this.shares?.scheduleSync(share.id);
+							if (share) {
+								this.shares?.scheduleSync(share.id);
 								return;
 							}
 							new CreateShareModal(this, file.path).open();
@@ -206,6 +206,10 @@ export default class ObsyncPlugin extends Plugin {
 
 	refreshEditorSigns(enabled: boolean): void {
 		this.editorSigns?.refresh(enabled);
+	}
+
+	refreshFileIndicators(enabled: boolean): void {
+		this.fileIndicators?.refresh(enabled);
 	}
 
 	private async maybePromptAdoptVault(

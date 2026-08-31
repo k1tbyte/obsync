@@ -12,6 +12,8 @@ import { type DataAdapter, FileSystemAdapter } from "obsidian";
  */
 export interface SymlinkDetector {
 	isLink(path: string): boolean;
+	/** Returns the linked path itself, or its linked ancestor. */
+	findLink(path: string): string | null;
 }
 
 /** Answers whether an absolute filesystem path is itself a link. */
@@ -21,7 +23,10 @@ interface NodeFs {
 	lstatSync(path: string): { isSymbolicLink(): boolean };
 }
 
-const NEVER: SymlinkDetector = { isLink: () => false };
+const NEVER: SymlinkDetector = {
+	isLink: () => false,
+	findLink: () => null,
+};
 
 /**
  * @param root Vault-relative folder that the detector's paths are relative to,
@@ -49,24 +54,28 @@ export function symlinkDetector(
 	probe: LinkProbe,
 ): SymlinkDetector {
 	const cache = new Map<string, boolean>();
+	const findLink = (path: string): string | null => {
+		let prefix = "";
+		for (const segment of path.split("/")) {
+			if (!segment) continue;
+			prefix = prefix ? `${prefix}/${segment}` : segment;
+			let link = cache.get(prefix);
+			if (link === undefined) {
+				link = probe(joinPath(base, prefix));
+				cache.set(prefix, link);
+			}
+			if (link) return prefix;
+		}
+		return null;
+	};
 	return {
 		isLink(path) {
 			// A file under a linked folder is an ordinary file, so every ancestor
 			// has to be probed. Caching each prefix keeps that to roughly one
 			// filesystem call per path across a whole scan.
-			let prefix = "";
-			for (const segment of path.split("/")) {
-				if (!segment) continue;
-				prefix = prefix ? `${prefix}/${segment}` : segment;
-				let link = cache.get(prefix);
-				if (link === undefined) {
-					link = probe(joinPath(base, prefix));
-					cache.set(prefix, link);
-				}
-				if (link) return true;
-			}
-			return false;
+			return findLink(path) !== null;
 		},
+		findLink,
 	};
 }
 

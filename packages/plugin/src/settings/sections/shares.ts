@@ -1,13 +1,16 @@
-import { Setting } from "obsidian";
+import { type ButtonComponent, Setting } from "obsidian";
 
 import type ObsyncPlugin from "@/main";
 import {
-	EShareSyncState,
+	describeShareStatus,
+	describeShareTooltip,
+	IDLE_SHARE_STATUS,
 	isOwnedShare,
 	listShareParticipants,
 	revokeAllShareTokens,
 	revokeShareToken,
 	type SharedFolderConfig,
+	shareIndicatorState,
 } from "@/share";
 import { notifyError, notifyInfo, openConfirmModal } from "@/ui";
 import {
@@ -68,15 +71,24 @@ export function renderSharesSection(
 				.onClick(() => new JoinShareModal(plugin).open()),
 		);
 
-	const listEl = parent.createDiv();
+	const listEl = parent.createDiv({ cls: "obsync-share-list" });
+	const rowUpdates = new Map<string, () => void>();
 	const renderList = (): void => {
 		listEl.empty();
+		rowUpdates.clear();
 		for (const share of plugin.settings.sharedFolders) {
-			renderShareRow(listEl, plugin, share, onDisplay);
+			rowUpdates.set(
+				share.id,
+				renderShareRow(listEl, plugin, share, onDisplay),
+			);
 		}
 	};
 	renderList();
-	return plugin.shares?.subscribe(renderList) ?? null;
+	return (
+		plugin.shares?.subscribe(() => {
+			for (const update of rowUpdates.values()) update();
+		}) ?? null
+	);
 }
 
 function renderShareRow(
@@ -84,16 +96,20 @@ function renderShareRow(
 	plugin: ObsyncPlugin,
 	share: SharedFolderConfig,
 	onDisplay: () => void,
-): void {
-	const status = plugin.shares?.getStatus(share.id);
-	const setting = new Setting(parent)
-		.setName(`${share.name} — ${share.localRoot}/`)
-		.setDesc(describeStatus(share, status));
+): () => void {
+	const setting = new Setting(parent).setName(share.name);
 	setting.settingEl.addClass("obsync-share-row");
+	setting.descEl.empty();
+	setting.descEl.createDiv({
+		cls: "obsync-share-path",
+		text: `${share.localRoot}/`,
+	});
+	const statusEl = setting.descEl.createDiv({ cls: "obsync-share-status" });
+	let syncButton: ButtonComponent | null = null;
 
-	setting.addButton((b) =>
-		b
-			.setButtonText("Sync now")
+	setting.addButton((b) => {
+		syncButton = b;
+		b.setButtonText("Sync now")
 			.setTooltip("Compare and sync this share immediately")
 			.onClick(async () => {
 				try {
@@ -102,72 +118,67 @@ function renderShareRow(
 				} catch (err) {
 					notifyError(`Sync of "${share.name}" failed`, err);
 				}
-			}),
-	);
+			});
+	});
 	// Only the owner runs the broker, so only they can invite or revoke.
 	if (isOwnedShare(share)) {
-		setting.addButton((b) =>
+		setting.addExtraButton((b) =>
 			b
-				.setButtonText("Invite…")
+				.setIcon("send")
 				.setTooltip("Create an encrypted invite link")
 				.onClick(() => new ShareInviteModal(plugin, share).open()),
 		);
-		setting.addButton((b) =>
+		setting.addExtraButton((b) =>
 			b
-				.setButtonText("People…")
+				.setIcon("users")
 				.setTooltip("Revoke someone's access to this share")
 				.onClick(() => void managePeople(plugin, share)),
 		);
 	}
-	setting.addButton((b) =>
-		b.setButtonText(share.paused ? "Resume" : "Pause").onClick(async () => {
-			share.paused = !share.paused;
-			await plugin.saveSettings();
-			plugin.shares?.refresh();
-			onDisplay();
-		}),
-	);
-	setting.addButton((b) =>
+	setting.addExtraButton((b) =>
 		b
-			.setButtonText("Remove")
-			.setWarning()
+			.setIcon(share.paused ? "play" : "pause")
+			.setTooltip(share.paused ? "Resume this share" : "Pause this share")
+			.onClick(async () => {
+				share.paused = !share.paused;
+				await plugin.saveSettings();
+				plugin.shares?.refresh();
+				onDisplay();
+			}),
+	);
+	setting.addExtraButton((b) =>
+		b
+			.setIcon("trash-2")
+			.setTooltip(isOwnedShare(share) ? "Stop sharing" : "Leave share")
 			.onClick(() => void removeShare(plugin, share, onDisplay)),
 	);
-}
+	const removeButton = setting.controlEl.lastElementChild;
+	removeButton?.addClass("obsync-share-remove");
 
-function describeStatus(
-	share: SharedFolderConfig,
-	status:
-		| ReturnType<NonNullable<ObsyncPlugin["shares"]>["getStatus"]>
-		| undefined,
-): string {
-	if (share.paused) return "Paused.";
-	if (!status) return "";
-	const parts: string[] = [];
-	switch (status.state) {
-		case EShareSyncState.Syncing:
-			parts.push("Syncing…");
-			break;
-		case EShareSyncState.Error:
-			parts.push(`Error: ${status.error ?? "unknown"}`);
-			break;
-		default:
-			parts.push(
-				status.lastSyncAt
-					? `Last sync ${new Date(status.lastSyncAt).toLocaleString()}`
-					: "Not synced yet",
-			);
-	}
-	if (share.relayUrl) {
-		parts.push(
-			status.relayConnected
-				? status.peers.length > 0
-					? `online: ${status.peers.map((p) => p.name).join(", ")}`
-					: "relay connected, no one else online"
-				: "relay offline",
+	const renderStatus = (): void => {
+		const status = plugin.shares?.getStatus(share.id) ?? IDLE_SHARE_STATUS;
+		const state = shareIndicatorState(share, status);
+		for (const name of ["active", "syncing", "error", "paused", "offline"]) {
+			setting.settingEl.removeClass(`obsync-share-${name}`);
+		}
+		setting.settingEl.addClass(`obsync-share-${state}`);
+		setting.settingEl.setAttr(
+			"aria-label",
+			describeShareTooltip(share, status),
 		);
-	}
-	return parts.join(" · ");
+		statusEl.setText(describeShareStatus(share, status));
+		if (status.peers.length > 0) {
+			statusEl.setAttr(
+				"aria-label",
+				`Online: ${status.peers.map((peer) => peer.name).join(", ")}`,
+			);
+		} else {
+			statusEl.removeAttribute("aria-label");
+		}
+		syncButton?.setDisabled(state === "syncing" || state === "paused");
+	};
+	renderStatus();
+	return renderStatus;
 }
 
 /** Lists the share's participants and revokes the one the owner picks. */
