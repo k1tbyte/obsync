@@ -1,3 +1,4 @@
+import { HUNK_TEXT_MAX_BYTES } from "../../constants";
 import {
 	bytesToText,
 	isLikelyText,
@@ -15,6 +16,9 @@ export async function loadBaselineOrRemoteText(
 	const remoteEntry = result.remote?.files[path];
 	const entry = baselineEntry ?? remoteEntry;
 	if (!entry) return "";
+	// The manifest knows the plaintext size; oversized content can never be
+	// treated as text, so skip the download instead of fetching and dropping.
+	if (entry.size > HUNK_TEXT_MAX_BYTES) return "";
 	const text = await loadRemoteText(deps, entry.hash);
 	return text ?? "";
 }

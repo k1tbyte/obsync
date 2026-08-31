@@ -46,6 +46,101 @@ export const HUNK_TEXT_MAX_BYTES = 2 * 1024 * 1024;
 export const TEXT_SNIFF_BYTES = 8 * 1024;
 /** Hard ceiling for an on-demand ("show anyway") diff of a size-capped file. */
 export const FORCE_DIFF_MAX_BYTES = 16 * 1024 * 1024;
+/** Total text bytes the in-memory diff model cache may retain. */
+export const DIFF_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Extensions that are always binary. Used to classify a diff side without
+ * reading its content — opening a diff for e.g. a large video must not load
+ * the file (locally or from remote) at all.
+ */
+export const KNOWN_BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+	// Images
+	"png",
+	"jpg",
+	"jpeg",
+	"gif",
+	"bmp",
+	"webp",
+	"avif",
+	"heic",
+	"heif",
+	"ico",
+	"icns",
+	"tif",
+	"tiff",
+	"psd",
+	"raw",
+	// Audio
+	"mp3",
+	"wav",
+	"m4a",
+	"ogg",
+	"oga",
+	"flac",
+	"aac",
+	"wma",
+	"aiff",
+	"opus",
+	// Video
+	"mp4",
+	"m4v",
+	"mov",
+	"avi",
+	"mkv",
+	"webm",
+	"wmv",
+	"flv",
+	"mpg",
+	"mpeg",
+	"3gp",
+	// Documents
+	"pdf",
+	"doc",
+	"docx",
+	"xls",
+	"xlsx",
+	"ppt",
+	"pptx",
+	"odt",
+	"ods",
+	"odp",
+	"pages",
+	"numbers",
+	// Archives
+	"zip",
+	"rar",
+	"7z",
+	"gz",
+	"bz2",
+	"xz",
+	"zst",
+	"tar",
+	"tgz",
+	"jar",
+	// Fonts
+	"ttf",
+	"otf",
+	"woff",
+	"woff2",
+	"eot",
+	// Executables / bundles
+	"exe",
+	"dll",
+	"so",
+	"dylib",
+	"bin",
+	"apk",
+	"ipa",
+	"dmg",
+	"iso",
+	// Data
+	"db",
+	"sqlite",
+	"sqlite3",
+	"pickle",
+	"parquet",
+]);
 
 export const CONFIG_CORE_FILES: ReadonlyArray<string> = [
 	"app.json",

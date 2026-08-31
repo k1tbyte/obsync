@@ -579,7 +579,7 @@ export class SourceControlView extends ItemView {
 export async function openDiffView(
 	plugin: ObsyncPlugin,
 	path: string,
-	history?: { hash: string; label: string },
+	history?: { hash: string; label: string; size?: number },
 ): Promise<void> {
 	const existing = plugin.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE);
 	const leaf = existing[0] ?? plugin.app.workspace.getLeaf(true);
@@ -590,6 +590,7 @@ export async function openDiffView(
 			path,
 			historyHash: history?.hash,
 			historyLabel: history?.label,
+			historySize: history?.size,
 		},
 	});
 	await plugin.app.workspace.revealLeaf(leaf);

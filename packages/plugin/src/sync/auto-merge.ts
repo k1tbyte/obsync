@@ -1,9 +1,15 @@
 import { diff3Merge } from "node-diff3";
 
+import { HUNK_TEXT_MAX_BYTES } from "../constants";
 import { ESyncLogOperation } from "../logs/store";
-import type { SessionState } from "../types";
+import type { Manifest, SessionState } from "../types";
 import { writeBinary } from "../vault/io";
-import { loadLocalText, loadRemoteText, textToBytes } from "./content";
+import {
+	hasKnownBinaryExtension,
+	loadLocalText,
+	loadRemoteText,
+	textToBytes,
+} from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
 
@@ -18,6 +24,18 @@ export async function autoMergeOp(
 	for (const conflict of result.diff.conflicts) {
 		// Skip delete conflicts and conflicts without a common ancestor
 		if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash)
+			continue;
+
+		// Rule out binary/oversized files from path + manifest sizes alone —
+		// never download megabytes just to discover the file can't be merged.
+		if (
+			!(await isTextMergeCandidate(
+				deps,
+				conflict.path,
+				result.remote,
+				deps.state.baseline,
+			))
+		)
 			continue;
 
 		const [baseText, remoteText, localText] = await Promise.all([
@@ -73,4 +91,31 @@ export async function autoMergeOp(
  * produce a spurious whole-file diff in the three-way merge. */
 function toLines(value: string): string[] {
 	return value.replace(/\r\n/g, "\n").split("\n");
+}
+
+/**
+ * Cheap pre-flight for a three-way text merge: the path must not be a known
+ * binary type and every side must be within the text diff cap. Sizes come
+ * from `stat` and the manifests, so nothing is read or downloaded.
+ */
+export async function isTextMergeCandidate(
+	deps: Pick<EngineDependencies, "adapter">,
+	path: string,
+	remote: Manifest | null,
+	baseline: Manifest | null,
+): Promise<boolean> {
+	if (hasKnownBinaryExtension(path)) return false;
+	const remoteSize = remote?.files[path]?.size;
+	if (remoteSize !== undefined && remoteSize > HUNK_TEXT_MAX_BYTES)
+		return false;
+	const baselineSize = baseline?.files[path]?.size;
+	if (baselineSize !== undefined && baselineSize > HUNK_TEXT_MAX_BYTES)
+		return false;
+	try {
+		const stat = await deps.adapter.stat(path);
+		if (stat?.type === "file" && stat.size > HUNK_TEXT_MAX_BYTES) return false;
+	} catch {
+		// stat failures fall through to the content-based checks
+	}
+	return true;
 }
