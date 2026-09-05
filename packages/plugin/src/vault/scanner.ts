@@ -169,10 +169,13 @@ async function listAllFiles(
 				ignored.push(folder);
 			}
 		}
+		// Only a directory that is genuinely empty needs an entry: one that holds
+		// ignored or excluded content is not empty, and publishing it would
+		// recreate it as a ghost on every other device.
 		if (
 			current !== dir &&
-			includedFiles.length === 0 &&
-			includedFolders.length === 0
+			listing.files.length === 0 &&
+			listing.folders.length === 0
 		) {
 			emptyFolders.push(current);
 		}

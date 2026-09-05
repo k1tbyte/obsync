@@ -106,7 +106,11 @@ function keyFor(
 	status: PathStatusInput,
 	forceText: boolean,
 ): string {
+	// A conflict and a change can carry the same pair of hashes but project to
+	// different models, so the kind has to be part of the key.
+	const kind = status.conflict ? "c" : (status.change?.type ?? "none");
 	const local = status.change?.localHash ?? status.conflict?.localHash ?? "";
 	const remote = status.change?.remoteHash ?? status.conflict?.remoteHash ?? "";
-	return `${path}|${local}|${remote}|${forceText ? "f" : ""}`;
+	const base = status.conflict?.baselineHash ?? "";
+	return `${kind}|${path}|${local}|${remote}|${base}|${forceText ? "f" : ""}`;
 }

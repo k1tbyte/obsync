@@ -46,6 +46,13 @@ export class InMemoryAdapter {
 		return new TextDecoder().decode(entry.data);
 	}
 
+	/** Test helper: force a file's mtime, for cache-staleness scenarios. */
+	setMtime(path: string, mtime: number): void {
+		const entry = this.files.get(norm(path));
+		if (!entry) throw new Error(`Missing file: ${path}`);
+		entry.mtime = mtime;
+	}
+
 	hasFile(path: string): boolean {
 		return this.files.has(norm(path));
 	}
