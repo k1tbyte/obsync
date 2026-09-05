@@ -115,10 +115,11 @@ export async function pushPaths(
 	);
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
-	// Any hash the remote manifest already references is provably stored, so
-	// skip the existence probe for it — otherwise a first sync costs one extra
-	// round-trip per file.
-	const knownHashes = knownRemoteHashes(compareResult, deps.state.baseline);
+	// Only the current remote head proves an object is stored. The baseline used
+	// to count too, but history GC deletes objects no live manifest references —
+	// trusting a stale baseline would skip the upload and publish a manifest
+	// pointing at a blob that is already gone.
+	const knownHashes = knownRemoteHashes(compareResult);
 	let done = 0;
 	await runWithConcurrency(uploads, concurrency, async (entry) => {
 		if (!knownHashes.has(entry.hash)) {
@@ -291,16 +292,10 @@ function buildPartialFileMap(input: {
 	return next;
 }
 
-/** Hashes the remote already stores, from the manifests we have in hand. */
-function knownRemoteHashes(
-	compareResult: CompareResult,
-	baseline: Manifest | null,
-): Set<string> {
+/** Hashes the current remote head references, and therefore still stores. */
+function knownRemoteHashes(compareResult: CompareResult): Set<string> {
 	const hashes = new Set<string>();
 	for (const entry of Object.values(compareResult.remote?.files ?? {})) {
-		hashes.add(entry.hash);
-	}
-	for (const entry of Object.values(baseline?.files ?? {})) {
 		hashes.add(entry.hash);
 	}
 	return hashes;

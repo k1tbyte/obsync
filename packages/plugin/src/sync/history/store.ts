@@ -32,9 +32,32 @@ export async function readSnapshotIndex(
 		);
 	}
 	if (!Array.isArray(parsed.entries)) {
-		return { version: SNAPSHOT_INDEX_VERSION, entries: [] };
+		// Same reasoning as above: an index that is present but malformed must not
+		// be silently replaced with an empty one.
+		throw new Error("Snapshot index is malformed; refusing to reset it.");
 	}
 	return parsed;
+}
+
+/**
+ * Applies a change to the index and confirms it survived. Publishers are
+ * serialised by the manifest guard, but history updates are not, so a second
+ * writer can land between the read and the write and drop an entry.
+ */
+export async function updateSnapshotIndex(
+	storage: ObjectStorage,
+	key: EncryptionKey,
+	mutate: (index: SnapshotIndex) => SnapshotIndex,
+	survived: (index: SnapshotIndex) => boolean,
+): Promise<SnapshotIndex> {
+	let next = mutate(await readSnapshotIndex(storage, key));
+	await writeSnapshotIndex(storage, key, next);
+	const verify = await readSnapshotIndex(storage, key);
+	if (survived(verify)) return next;
+	// Someone else wrote in between; replay the change onto their version.
+	next = mutate(verify);
+	await writeSnapshotIndex(storage, key, next);
+	return next;
 }
 
 export async function writeSnapshotIndex(
@@ -84,15 +107,20 @@ export async function setSnapshotPinned(
 	snapshotId: string,
 	pinned: boolean,
 ): Promise<void> {
-	const index = await readSnapshotIndex(storage, key);
-	let changed = false;
-	const entries = index.entries.map((entry) => {
-		if (entry.snapshotId !== snapshotId) return entry;
-		changed = true;
-		return { ...entry, pinned };
-	});
-	if (!changed) return;
-	await writeSnapshotIndex(storage, key, { ...index, entries });
+	await updateSnapshotIndex(
+		storage,
+		key,
+		(index) => ({
+			...index,
+			entries: index.entries.map((entry) =>
+				entry.snapshotId === snapshotId ? { ...entry, pinned } : entry,
+			),
+		}),
+		(index) =>
+			index.entries.some(
+				(entry) => entry.snapshotId === snapshotId && entry.pinned === pinned,
+			),
+	);
 }
 
 export function prependIndexEntry(
