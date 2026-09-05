@@ -1,8 +1,11 @@
 import { type App, Modal, Setting } from "obsidian";
 
+import { openPromiseModal } from "./promise-modal";
+
 export class PassphraseModal extends Modal {
 	private readonly resolveValue: (value: string | null) => void;
 	private value = "";
+	private errorEl: HTMLElement | null = null;
 
 	constructor(app: App, resolveValue: (value: string | null) => void) {
 		super(app);
@@ -26,6 +29,8 @@ export class PassphraseModal extends Modal {
 			});
 		});
 
+		this.errorEl = contentEl.createEl("p", { cls: "mod-warning" });
+
 		new Setting(contentEl)
 			.addButton((b) =>
 				b.setButtonText("Cancel").onClick(() => {
@@ -46,7 +51,10 @@ export class PassphraseModal extends Modal {
 	}
 
 	private submit(): void {
-		if (!this.value) return;
+		if (!this.value) {
+			this.errorEl?.setText("Enter the passphrase, or cancel.");
+			return;
+		}
 		this.resolveValue(this.value);
 		this.close();
 	}
@@ -88,7 +96,7 @@ class NewPassphraseModal extends Modal {
 		});
 
 		this.errorEl = contentEl.createEl("p", { cls: "mod-warning" });
-		this.errorEl.style.display = "none";
+		this.errorEl.hidden = true;
 
 		new Setting(contentEl)
 			.addButton((b) =>
@@ -125,30 +133,20 @@ class NewPassphraseModal extends Modal {
 	private showError(message: string): void {
 		if (!this.errorEl) return;
 		this.errorEl.setText(message);
-		this.errorEl.style.display = "";
+		this.errorEl.hidden = false;
 	}
 }
 
 export function askNewPassphrase(app: App): Promise<string | null> {
-	return new Promise((resolve) => {
-		let settled = false;
-		const modal = new NewPassphraseModal(app, (value) => {
-			if (settled) return;
-			settled = true;
-			resolve(value);
-		});
-		modal.open();
-	});
+	return openPromiseModal<string | null>(
+		(answer) => new NewPassphraseModal(app, answer),
+		null,
+	);
 }
 
 export function askPassphrase(app: App): Promise<string | null> {
-	return new Promise((resolve) => {
-		let settled = false;
-		const modal = new PassphraseModal(app, (value) => {
-			if (settled) return;
-			settled = true;
-			resolve(value);
-		});
-		modal.open();
-	});
+	return openPromiseModal<string | null>(
+		(answer) => new PassphraseModal(app, answer),
+		null,
+	);
 }

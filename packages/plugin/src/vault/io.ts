@@ -22,7 +22,12 @@ export async function deletePath(
 	path: string,
 ): Promise<void> {
 	if (!(await adapter.exists(path))) return;
-	await adapter.remove(path);
+	try {
+		await adapter.remove(path);
+	} catch {
+		// The file can disappear between the check and the call; that is the
+		// outcome the caller asked for anyway.
+	}
 }
 
 export async function ensureDir(
@@ -45,12 +50,17 @@ export async function removeEmptyDir(
 	}
 }
 
+/** Creates every missing ancestor, not just the immediate parent. */
 async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
 	const slash = path.lastIndexOf("/");
 	if (slash <= 0) return;
-	const parent = path.slice(0, slash);
-	if (await adapter.exists(parent)) return;
-	await adapter.mkdir(parent);
+	const segments = path.slice(0, slash).split("/").filter(Boolean);
+	let cursor = "";
+	for (const segment of segments) {
+		cursor = cursor ? `${cursor}/${segment}` : segment;
+		if (await adapter.exists(cursor)) continue;
+		await adapter.mkdir(cursor);
+	}
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

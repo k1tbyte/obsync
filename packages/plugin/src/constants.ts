@@ -142,11 +142,12 @@ export const KNOWN_BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 	"parquet",
 ]);
 
+/** community-plugins.json is deliberately absent: it has its own toggle, and
+ * listing it here would let "core settings" sync it behind that toggle. */
 export const CONFIG_CORE_FILES: ReadonlyArray<string> = [
 	"app.json",
 	"appearance.json",
 	"core-plugins.json",
-	"community-plugins.json",
 	"graph.json",
 	"bookmarks.json",
 	"templates.json",

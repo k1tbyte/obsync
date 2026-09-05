@@ -20,6 +20,7 @@ interface CachedKey {
 export class PassphraseManager {
 	private passphrase: string | null = null;
 	private cachedKey: CachedKey | null = null;
+	private pendingPrompt: Promise<boolean> | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -55,8 +56,20 @@ export class PassphraseManager {
 		this.cachedKey = null;
 	}
 
+	/**
+	 * Startup auto-pull, the share service and a user command can all ask at
+	 * once; they share one prompt instead of stacking three modals.
+	 */
 	async prompt(replace: boolean): Promise<boolean> {
 		if (this.passphrase && !replace) return true;
+		if (this.pendingPrompt) return this.pendingPrompt;
+		this.pendingPrompt = this.runPrompt(replace).finally(() => {
+			this.pendingPrompt = null;
+		});
+		return this.pendingPrompt;
+	}
+
+	private async runPrompt(replace: boolean): Promise<boolean> {
 		if (!replace && (await this.tryLoadCached())) return true;
 		const value = await askPassphrase(this.app);
 		if (!value) return false;

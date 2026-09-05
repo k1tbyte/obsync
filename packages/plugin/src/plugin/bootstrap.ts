@@ -79,8 +79,10 @@ async function ensureDeviceNamePersisted(
 	const adapter = app.vault.adapter;
 	const configDir = app.vault.configDir;
 	const state = await loadState(adapter, configDir);
-	statePersister.setInitial(state);
 	if (!(await adapter.exists(stateFilePath(configDir)))) {
+		// Before setInitial: persist() compares against the current state, and
+		// comparing the object with itself would debounce the very first write.
 		await statePersister.persist(state);
 	}
+	statePersister.setInitial(state);
 }

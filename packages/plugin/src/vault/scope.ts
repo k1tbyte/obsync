@@ -89,8 +89,11 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			}
 
 			if (dir === configDir) return hasConfigDescendants();
+			// Same rule as isPathAllowed: the config directory is the only dot
+			// segment allowed, never one nested inside it.
+			if (hasDotSegment(stripConfigPrefix(dir, configPrefix))) return false;
 			if (dirPath.startsWith(configPrefix)) return canDescendConfigDir(dirPath);
-			return !hasDotSegment(dir);
+			return true;
 		},
 		classify(rawPath) {
 			const path = normalizePath(rawPath);
@@ -118,10 +121,12 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		// so a link never reads as a deletion of what other devices store here.
 		if (symlinks?.isLink(path)) return false;
 
+		// Checked before the config branch: a .git or .cache directory nested in a
+		// plugin's data folder must not ride along with that plugin's config.
+		if (hasDotSegment(stripConfigPrefix(path, configPrefix))) return false;
 		if (path.startsWith(configPrefix)) {
 			return isConfigAllowed(path);
 		}
-		if (hasDotSegment(path)) return false;
 		return true;
 	}
 
@@ -179,8 +184,15 @@ function isInVaultDenylist(path: string): boolean {
 	return VAULT_SUBDIR_DENYLIST.some((d) => path.startsWith(d));
 }
 
+/** The config directory itself starts with a dot; everything below it must
+ * still be checked for dot segments. */
+function stripConfigPrefix(path: string, configPrefix: string): string {
+	return path.startsWith(configPrefix) ? path.slice(configPrefix.length) : path;
+}
+
 function stripTrailingSlash(value: string): string {
-	return value.endsWith("/") ? value.slice(0, -1) : value;
+	const normalized = value.replace(/\\/g, "/");
+	return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
 function isIgnoredDir(
