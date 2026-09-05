@@ -94,6 +94,13 @@ async function localSide(
 	deps: EngineDependencies,
 	path: string,
 ): Promise<string> {
+	// Decide from the path and the stat, so a gigabyte of binary is never read
+	// into memory only to be rejected.
+	if (hasKnownBinaryExtension(path)) throw new Error(NOT_TEXT);
+	const stat = await deps.adapter.stat(path).catch(() => null);
+	if (stat?.type === "file" && stat.size > HUNK_TEXT_MAX_BYTES) {
+		throw new Error(NOT_TEXT);
+	}
 	const bytes = await loadLocalBytes(deps.adapter, path);
 	if (!bytes) return "";
 	if (!isLikelyText(bytes)) throw new Error(NOT_TEXT);
