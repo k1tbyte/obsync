@@ -166,6 +166,9 @@ function normalizeSharedFolders(value: unknown): SharedFolderConfig[] {
 			typeof (entry as SharedFolderConfig).id === "string" &&
 			typeof (entry as SharedFolderConfig).localRoot === "string" &&
 			typeof (entry as SharedFolderConfig).keyB64 === "string" &&
+			// typeof null is "object": a null here reaches isAdapterConfigured and
+			// takes the plugin down on load.
+			(entry as SharedFolderConfig).storage !== null &&
 			typeof (entry as SharedFolderConfig).storage === "object",
 	);
 }

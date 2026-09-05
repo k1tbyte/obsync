@@ -83,3 +83,28 @@ export function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
 	}
 	modal.open();
 }
+
+/** Revert discards local edits that were never pushed, so it is confirmed. */
+export function confirmRevert(
+	app: App,
+	paths: ReadonlyArray<string>,
+): Promise<boolean> {
+	const first = paths.slice(0, 5);
+	return openConfirmModal({
+		app,
+		title:
+			paths.length === 1
+				? `Revert "${paths[0]}"?`
+				: `Revert ${paths.length} file(s)?`,
+		body: [
+			"Local changes to these files are replaced with the last synced version. This cannot be undone.",
+			...first,
+			...(paths.length > first.length
+				? [`… and ${paths.length - first.length} more`]
+				: []),
+		],
+		confirmLabel: "Revert",
+		cancelLabel: "Keep my changes",
+		confirmClass: "mod-warning",
+	});
+}

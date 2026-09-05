@@ -26,7 +26,14 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 export function base64UrlToBytes(value: string): Uint8Array {
-	const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-	const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+	// Strip anything that is not base64url first: a token pasted with a trailing
+	// newline would otherwise be padded to an invalid length and throw.
+	const normalized = value
+		.replace(/[^A-Za-z0-9\-_]/g, "")
+		.replace(/-/g, "+")
+		.replace(/_/g, "/");
+	const remainder = normalized.length % 4;
+	const padded =
+		remainder === 0 ? normalized : normalized + "=".repeat(4 - remainder);
 	return base64ToBytes(padded);
 }

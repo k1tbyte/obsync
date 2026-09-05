@@ -4,5 +4,12 @@
  * everywhere.
  */
 export function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
+	if (err instanceof Error) return err.message;
+	// Plain rejection values often carry a message without being Error instances
+	// (worker responses, structured-cloned errors); "[object Object]" helps no one.
+	if (err && typeof err === "object") {
+		const message = (err as { message?: unknown }).message;
+		if (typeof message === "string" && message) return message;
+	}
+	return String(err);
 }

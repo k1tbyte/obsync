@@ -142,11 +142,12 @@ export const KNOWN_BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 	"parquet",
 ]);
 
+/** community-plugins.json is deliberately absent: it has its own toggle, and
+ * listing it here would let "core settings" sync it behind that toggle. */
 export const CONFIG_CORE_FILES: ReadonlyArray<string> = [
 	"app.json",
 	"appearance.json",
 	"core-plugins.json",
-	"community-plugins.json",
 	"graph.json",
 	"bookmarks.json",
 	"templates.json",
@@ -203,6 +204,9 @@ export const SHARE_STARTUP_DELAY_MS = 5_000;
 /** Retries when another participant pushes between our compare and publish. */
 export const SHARE_PUSH_RETRIES = 3;
 export const SHARE_KEY_BYTES = 32;
+
+/** How often the auto-pull timer wakes up to check whether it is due. */
+export const SCHEDULER_HEARTBEAT_MS = 30_000;
 
 export const SCHEDULER_BACKOFF_THRESHOLD = 3;
 export const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;

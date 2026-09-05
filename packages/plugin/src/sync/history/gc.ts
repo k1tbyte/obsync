@@ -5,6 +5,7 @@ import {
 	FILE_HISTORY_MIN_SNAPSHOTS,
 } from "../../constants";
 import type { EncryptionKey } from "../../crypto";
+import { reportWarning } from "../../shared/diagnostics";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
 import { fetchRemoteManifest, objectKey } from "../manifest";
@@ -159,6 +160,9 @@ async function safeDelete(
 	try {
 		await storage.delete(storageKey);
 	} catch (err) {
-		console.warn("[obsync] gc delete failed", storageKey, err);
+		reportWarning(
+			`Could not delete "${storageKey}" during history cleanup.`,
+			err,
+		);
 	}
 }

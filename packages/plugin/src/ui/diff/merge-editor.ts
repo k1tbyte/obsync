@@ -1,4 +1,5 @@
-import { EditorView } from "@codemirror/view";
+import { history, historyKeymap } from "@codemirror/commands";
+import { EditorView, keymap } from "@codemirror/view";
 import type ObsyncPlugin from "../../main";
 import {
 	buildMergedConflict,
@@ -52,7 +53,11 @@ export class MergeEditorPanel {
 		const host = parent.createDiv({ cls: "obsync-merge-host" });
 		this.view = new EditorView({
 			doc: this.text,
-			extensions: [EditorView.lineWrapping],
+			extensions: [
+				history(),
+				keymap.of(historyKeymap),
+				EditorView.lineWrapping,
+			],
 			parent: host,
 		});
 	}

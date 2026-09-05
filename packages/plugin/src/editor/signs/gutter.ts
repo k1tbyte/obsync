@@ -79,7 +79,9 @@ export const signsField = StateField.define<RangeSet<GutterMarker>>({
 			prevChunks === nextChunks &&
 			prevBase === nextBase
 		) {
-			return prev;
+			// The chunk set has not been recomputed yet, but the document moved:
+			// unmapped ranges would point past the end and the gutter would throw.
+			return tr.docChanged ? prev.map(tr.changes) : prev;
 		}
 		return buildMarkers(tr.state);
 	},

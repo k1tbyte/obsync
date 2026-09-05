@@ -72,10 +72,11 @@ export class SectionStateManager {
 		this.sectionState[section].selected.clear();
 	}
 
-	takeSelection(section: ESection): string[] {
-		const paths = Array.from(this.sectionState[section].selected);
-		this.sectionState[section].selected.clear();
-		return paths;
+	/** Reads the selection without clearing it: an operation that fails should
+	 * leave the user their choices to retry. Call {@link clearSelection} after a
+	 * successful run. */
+	selectedPaths(section: ESection): string[] {
+		return Array.from(this.sectionState[section].selected);
 	}
 
 	updateSectionUi(section: ESection, rowsLen: number, busy: boolean): void {

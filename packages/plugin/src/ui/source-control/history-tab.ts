@@ -207,6 +207,9 @@ export class HistoryTab {
 		try {
 			await this.plugin.controller.restoreFileVersion(path, hash);
 			notifyInfo("Restored. Review and push the change when ready.");
+			// The file changed on disk, so the version list and its diff are stale.
+			this.clearVersions();
+			this.onRerender();
 		} catch (err) {
 			notifyError("Restore failed", err);
 		}

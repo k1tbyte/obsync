@@ -12,6 +12,8 @@ import { RealtimeClient, type RealtimePresenceDevice } from "@/sync/realtime";
 
 export class PluginRealtime {
 	private client: RealtimeClient | null = null;
+	private onRemoteSync: ReturnType<typeof debounce> | null = null;
+	private channelId: string | null = null;
 	private connected = false;
 	private readonly listeners = new Set<(connected: boolean) => void>();
 	private devices: RealtimePresenceDevice[] = [];
@@ -44,32 +46,51 @@ export class PluginRealtime {
 		return () => this.deviceListeners.delete(listener);
 	}
 
+	/** Reconnects when the room or the credentials changed; otherwise leaves an
+	 * established connection alone. */
+	restartIfChanged(): void {
+		const settings = this.getSettings();
+		const next =
+			settings.realtimeSync && isStorageConfigured(settings)
+				? storageIdentity(activeStorage(settings))
+				: null;
+		if (next === this.channelId && this.client) return;
+		this.restart();
+	}
+
 	restart(): void {
 		this.client?.dispose();
 		this.client = null;
+		this.onRemoteSync?.cancel();
+		this.onRemoteSync = null;
 		this.emitDevices([]);
 		this.emitStatus(false);
 
 		const settings = this.getSettings();
+		this.channelId = null;
 		if (!settings.realtimeSync) return;
 		if (!settings.realtimeServerUrl) return;
 		if (!isStorageConfigured(settings)) return;
 
 		const channelId = storageIdentity(activeStorage(settings));
+		this.channelId = channelId;
 		const currentDevice = this.controller.currentDevice();
+		// resetTimer is deliberately off: a steady stream of remote signals must
+		// still let a pull through instead of pushing the deadline out forever.
+		this.onRemoteSync = debounce(
+			() => {
+				void this.controller.refreshAndAutoPull();
+			},
+			REALTIME_SYNC_DEBOUNCE_MS,
+			false,
+		);
 		this.client = new RealtimeClient({
 			serverUrl: settings.realtimeServerUrl,
 			channelId,
 			token: settings.realtimeToken || undefined,
 			deviceId: currentDevice?.id,
 			deviceName: currentDevice?.name,
-			onRemoteSync: debounce(
-				() => {
-					void this.controller.refreshAndAutoPull();
-				},
-				REALTIME_SYNC_DEBOUNCE_MS,
-				true,
-			),
+			onRemoteSync: () => this.onRemoteSync?.(),
 			onPresenceChange: (devices) =>
 				this.emitDevices(filterCurrentDevice(devices, currentDevice?.id)),
 			onConnectionChange: (connected) => {
@@ -87,6 +108,9 @@ export class PluginRealtime {
 	dispose(): void {
 		this.client?.dispose();
 		this.client = null;
+		this.onRemoteSync?.cancel();
+		this.onRemoteSync = null;
+		this.channelId = null;
 		this.connected = false;
 		this.devices = [];
 		this.listeners.clear();

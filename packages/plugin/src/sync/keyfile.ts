@@ -57,7 +57,13 @@ export async function readKeyfile(
 	const bytes = await storage.get(REMOTE_KEYFILE_KEY);
 	if (!bytes) return null;
 	try {
-		return JSON.parse(decoder.decode(bytes)) as Keyfile;
+		const parsed = JSON.parse(decoder.decode(bytes)) as unknown;
+		if (!isKeyfile(parsed)) {
+			// A malformed keyfile reported as "wrong passphrase" sends the user
+			// hunting for a rotation that never happened.
+			throw new Error("unexpected shape");
+		}
+		return parsed;
 	} catch (err) {
 		// Present but unparseable. Returning null would make the caller mint a
 		// fresh data key and orphan every encrypted object — fail loudly.
@@ -65,6 +71,17 @@ export async function readKeyfile(
 			`Keyfile present but unreadable; refusing to treat it as absent: ${errorMessage(err)}`,
 		);
 	}
+}
+
+function isKeyfile(value: unknown): value is Keyfile {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<Keyfile>;
+	return (
+		typeof candidate.version === "number" &&
+		typeof candidate.epoch === "number" &&
+		typeof candidate.wrapped === "string" &&
+		candidate.wrapped.length > 0
+	);
 }
 
 export async function writeKeyfile(
@@ -169,9 +186,15 @@ async function unwrapRawKey(
 	kek: EncryptionKey,
 	wrapped: string,
 ): Promise<Uint8Array> {
+	let raw: Uint8Array;
 	try {
-		return await decryptBytes(kek, base64ToBytes(wrapped));
+		raw = await decryptBytes(kek, base64ToBytes(wrapped));
 	} catch {
 		throw new PassphraseRotatedError();
 	}
+	// A truncated key would import as a weaker AES variant instead of failing.
+	if (raw.length !== DATA_KEY_BYTES) {
+		throw new Error("Keyfile holds a data key of the wrong size.");
+	}
+	return raw;
 }

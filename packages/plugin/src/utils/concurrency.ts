@@ -5,14 +5,22 @@ export async function runWithConcurrency<T>(
 ): Promise<void> {
 	const limit = Math.max(1, concurrency);
 	let cursor = 0;
+	// One worker failing aborts the run, so the others must stop pulling work:
+	// a failed push should not keep uploading behind the error the user sees.
+	let failed = false;
 	const runners: Promise<void>[] = [];
 	for (let i = 0; i < limit; i++) {
 		runners.push(
 			(async () => {
-				while (true) {
+				while (!failed) {
 					const index = cursor++;
 					if (index >= items.length) return;
-					await worker(items[index] as T, index);
+					try {
+						await worker(items[index] as T, index);
+					} catch (err) {
+						failed = true;
+						throw err;
+					}
 				}
 			})(),
 		);

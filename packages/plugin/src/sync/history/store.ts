@@ -4,6 +4,7 @@ import {
 	SNAPSHOT_INDEX_VERSION,
 } from "../../constants";
 import { decryptJson, type EncryptionKey, encryptJson } from "../../crypto";
+import { reportWarning } from "../../shared/diagnostics";
 import { errorMessage } from "../../shared/errors";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
@@ -96,7 +97,7 @@ export async function fetchArchivedManifest(
 	try {
 		return await decryptJson<Manifest>(key, blob);
 	} catch (err) {
-		console.warn("[obsync] archived snapshot unreadable", snapshotId, err);
+		reportWarning(`Archived snapshot "${snapshotId}" is unreadable.`, err);
 		return null;
 	}
 }

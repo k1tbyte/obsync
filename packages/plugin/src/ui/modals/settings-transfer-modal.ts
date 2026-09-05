@@ -16,6 +16,7 @@ import {
 } from "@/settings/transfer";
 import { errorMessage } from "@/shared/errors";
 import { describeStorageTarget } from "@/storage";
+import { openPromiseModal } from "./promise-modal";
 
 interface SettingsTransferExportModalOptions {
 	createPackage: (
@@ -401,16 +402,18 @@ export function showSettingsTransferExport(
 }
 
 export function askSettingsTransferInput(app: App): Promise<string | null> {
-	return new Promise((resolve) => {
-		new SettingsTransferImportModal(app, resolve).open();
-	});
+	return openPromiseModal<string | null>(
+		(answer) => new SettingsTransferImportModal(app, answer),
+		null,
+	);
 }
 
 export function confirmSettingsTransferImport(
 	app: App,
 	settings: ObsyncSettings,
 ): Promise<boolean> {
-	return new Promise((resolve) => {
-		new SettingsTransferConfirmModal(app, settings, resolve).open();
-	});
+	return openPromiseModal<boolean>(
+		(answer) => new SettingsTransferConfirmModal(app, settings, answer),
+		false,
+	);
 }

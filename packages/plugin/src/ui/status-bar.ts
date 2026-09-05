@@ -10,8 +10,17 @@ export function registerStatusBar(
 ): void {
 	const root = plugin.addStatusBarItem();
 	root.addClass("obsync-status-bar");
-	root.addEventListener("click", () => {
+	root.setAttr("role", "button");
+	root.setAttr("tabindex", "0");
+	root.setAttr("aria-label", "Open Obsync source control");
+	const open = (): void => {
 		void openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+	};
+	root.addEventListener("click", open);
+	root.addEventListener("keydown", (event: KeyboardEvent) => {
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		open();
 	});
 
 	const spinner = root.createSpan({
@@ -39,7 +48,7 @@ function formatStatus(snapshot: SyncStatusSnapshot): string {
 	if (snapshot.pendingRemote > 0) parts.push(`↓${snapshot.pendingRemote}`);
 	if (snapshot.conflicts > 0) parts.push(`⚠${snapshot.conflicts}`);
 	if (parts.length === 0) return "Obsync: clean";
-	return `Obsync ${parts.join(" ")}`;
+	return `Obsync: ${parts.join(" ")}`;
 }
 
 function buildTooltip(snapshot: SyncStatusSnapshot): string {
@@ -47,7 +56,7 @@ function buildTooltip(snapshot: SyncStatusSnapshot): string {
 	const last = snapshot.lastCompareAt
 		? `Last compared ${relativeTime(snapshot.lastCompareAt)}`
 		: "Not compared yet";
-	return `${last} — click to open source control`;
+	return `${last}. Click to open source control.`;
 }
 
 function relativeTime(ts: number): string {

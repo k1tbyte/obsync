@@ -56,7 +56,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		name: "Forget cached passphrase",
 		callback: async () => {
 			await plugin.forgetPassphrase();
-			notifyInfo("passphrase forgotten.");
+			notifyInfo("Passphrase forgotten.");
 		},
 	});
 
@@ -68,7 +68,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			const file = plugin.app.workspace.getActiveFile();
 			if (!file) return false;
 			if (checking) return true;
-			void openSourceControlHistory(plugin);
+			void openSourceControlHistory(plugin, file.path);
 			return true;
 		},
 	});
@@ -102,7 +102,10 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			if (checking) return true;
 			void plugin.shares
 				?.syncAll()
-				.then(() => notifyInfo("shared folders synced."));
+				.then(() => notifyInfo("Shared folders synced."))
+				.catch((err: unknown) =>
+					notifyError("Could not sync shared folders", err),
+				);
 			return true;
 		},
 	});
@@ -134,19 +137,18 @@ async function runCompare(plugin: ObsyncPlugin): Promise<void> {
 
 async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
 	try {
-		const snapshot = plugin.controller.getSnapshot();
-		const diff = snapshot.result?.diff;
-		if (!diff || diff.localChanges.length === 0) {
-			await plugin.controller.refresh();
-		}
-		const refreshed = plugin.controller.getSnapshot().result?.diff;
-		const paths = refreshed?.localChanges.map((c) => c.path) ?? [];
+		// Always re-compare first: acting on a stale diff can push a file another
+		// device has since changed, and can miss conflicts entirely.
+		await plugin.controller.refresh();
+		const diff = plugin.controller.getSnapshot().result?.diff;
+		if (await announceConflicts(plugin, diff?.conflicts.length ?? 0)) return;
+		const paths = diff?.localChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			notifyInfo("nothing to push");
+			notifyInfo("Nothing to push.");
 			return;
 		}
 		await plugin.controller.pushPaths(paths);
-		notifyInfo(`pushed ${paths.length} file(s)`);
+		notifyInfo(`Pushed ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Push all failed", err);
 	}
@@ -156,16 +158,28 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 	try {
 		await plugin.controller.refresh();
 		const diff = plugin.controller.getSnapshot().result?.diff;
+		if (await announceConflicts(plugin, diff?.conflicts.length ?? 0)) return;
 		const paths = diff?.remoteChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			notifyInfo("nothing to pull");
+			notifyInfo("Nothing to pull.");
 			return;
 		}
 		await plugin.controller.pullPaths(paths);
-		notifyInfo(`pulled ${paths.length} file(s)`);
+		notifyInfo(`Pulled ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Pull all failed", err);
 	}
+}
+
+/** Push and pull must never choose a side silently; conflicts go to the user. */
+async function announceConflicts(
+	plugin: ObsyncPlugin,
+	count: number,
+): Promise<boolean> {
+	if (count === 0) return false;
+	notifyInfo(`Resolve ${count} conflict(s) first.`);
+	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+	return true;
 }
 
 async function resetRemoteStorageCommand(plugin: ObsyncPlugin): Promise<void> {

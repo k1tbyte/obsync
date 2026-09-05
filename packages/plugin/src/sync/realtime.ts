@@ -20,6 +20,9 @@ import { requestUrl } from "obsidian";
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 const PING_INTERVAL_MS = 30_000;
+/** A link with no traffic for this long is treated as dead and reopened. */
+const SILENCE_TIMEOUT_MS = 90_000;
+const UNAUTHORIZED_CLOSE_CODE = 4001;
 
 export interface RealtimePresenceDevice {
 	id: string;
@@ -55,6 +58,7 @@ export class RealtimeClient {
 	private pingTimer: number | null = null;
 	private disposed = false;
 	private roomToken: Promise<string> | null = null;
+	private lastMessageAt = 0;
 	private readonly options: RealtimeClientOptions;
 
 	constructor(options: RealtimeClientOptions) {
@@ -91,12 +95,14 @@ export class RealtimeClient {
 		socket.addEventListener("open", () => {
 			if (this.ws !== socket) return;
 			this.reconnectAttempts = 0;
+			this.lastMessageAt = Date.now();
 			this.startPing();
 			this.options.onConnectionChange?.(true);
 		});
 
 		socket.addEventListener("message", (event) => {
 			if (this.ws !== socket) return;
+			this.lastMessageAt = Date.now();
 			const data = typeof event.data === "string" ? event.data : "";
 			try {
 				const msg = JSON.parse(data) as RealtimeServerMessage;
@@ -114,11 +120,14 @@ export class RealtimeClient {
 			}
 		});
 
-		socket.addEventListener("close", () => {
+		socket.addEventListener("close", (event) => {
 			if (this.ws !== socket) return;
 			this.stopPing();
 			this.options.onPresenceChange?.([]);
 			this.options.onConnectionChange?.(false);
+			// A rejected token is terminal: reconnecting would hammer the relay
+			// forever with the same credentials.
+			if (event.code === UNAUTHORIZED_CLOSE_CODE) return;
 			if (!this.disposed) this.scheduleReconnect();
 		});
 
@@ -129,6 +138,7 @@ export class RealtimeClient {
 
 	/** Notify other devices that we just pushed changes. */
 	notifySync(): void {
+		if (this.disposed) return;
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
 			try {
 				this.ws.send("sync");
@@ -178,6 +188,11 @@ export class RealtimeClient {
 
 	private cleanup(): void {
 		this.stopPing();
+		// A pending reconnect belongs to the socket being replaced.
+		if (this.reconnectTimer !== null) {
+			window.clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
 		const socket = this.ws;
 		this.ws = null;
 		if (socket) {
@@ -208,9 +223,15 @@ export class RealtimeClient {
 	private startPing(): void {
 		this.stopPing();
 		this.pingTimer = window.setInterval(() => {
-			if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-				this.ws.send("ping");
+			if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+			// A TCP link can die without a close event; if nothing has arrived for
+			// a while, drop it so the reconnect path runs instead of pinging into
+			// a socket that will never answer.
+			if (Date.now() - this.lastMessageAt > SILENCE_TIMEOUT_MS) {
+				this.ws.close();
+				return;
 			}
+			this.ws.send("ping");
 		}, PING_INTERVAL_MS);
 	}
 

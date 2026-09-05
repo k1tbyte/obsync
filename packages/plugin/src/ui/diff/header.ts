@@ -55,7 +55,7 @@ export function renderDiffHeader(
 	if (state.direction === EDiffDirection.Conflict) {
 		appendButton(parent, "Keep local", actions.keepLocal);
 		appendButton(parent, "Accept remote", actions.acceptRemote);
-		appendButton(parent, "Merge…", actions.startMerge);
+		if (!state.isBinary) appendButton(parent, "Merge…", actions.startMerge);
 	}
 
 	appendHunkNavigation(parent, state, actions);
