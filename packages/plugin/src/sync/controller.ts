@@ -335,9 +335,9 @@ export class SyncController {
 	}
 
 	/**
-	 * Resolves a conflict with user-merged content: writes it locally and then
-	 * keeps the local side (uploads it, advancing the baseline to remote), the
-	 * same outcome as auto-merge.
+	 * Resolves a conflict with user-merged content: writes it locally, then keeps
+	 * the local side — which uploads the merged file and publishes a manifest.
+	 * Unlike auto-merge, which leaves the merge as an unpushed local change.
 	 */
 	async resolveConflictMerged(path: string, content: string): Promise<void> {
 		await this.operations.runOperation(

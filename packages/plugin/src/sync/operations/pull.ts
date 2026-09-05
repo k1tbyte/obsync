@@ -2,9 +2,10 @@ import { LOG_PATH_LIMIT } from "../../constants";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
 import type { Manifest, ManifestEntry } from "../../types";
+import { deletePath } from "../../vault/io";
 import {
 	buildSessionState,
-	mergeBaselineIntoCache,
+	mergeWrittenIntoCache,
 	updateBaselineEntry,
 } from "../baseline";
 import { textToBytes, writeRemoteObject } from "../content";
@@ -32,18 +33,24 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 		throw new Error("Cannot pull: conflicts must be resolved first");
 	}
 	const bytesDownloaded = sumBytes(paths, result.remote.files);
-	const baseline = await pullPaths(deps, result, paths, (done, total) => {
+	const pulled = await pullPaths(deps, result, paths, (done, total) => {
 		ctx.setProgress(`Pulling ${done}/${total}…`);
 	});
 	ctx.setProgress(null);
-	const hashCache = mergeBaselineIntoCache(baseline, result.updatedCache);
-	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
+	const hashCache = mergeWrittenIntoCache(pulled.written, result.updatedCache);
+	await ctx.persistState(
+		buildSessionState(deps.state, pulled.baseline, hashCache),
+	);
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
 		`Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
 		Array.from(pullSet).slice(0, LOG_PATH_LIMIT),
 	);
-	return { newRemote: result.remote, touchedPaths: pullSet };
+	return {
+		newRemote: result.remote,
+		touchedPaths: pullSet,
+		localEntries: pulled.written,
+	};
 };
 
 export interface PullHunksArgs {
@@ -115,17 +122,33 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 		...(deps.state.baseline?.files ?? remote.files),
 	};
 	const nextHashCache = { ...result.updatedCache };
+	const localEntries = new Map<string, ManifestEntry | null>();
 	let done = 0;
 	for (const path of conflictPaths) {
 		const remoteEntry = remote.files[path];
-		if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
-		const plaintext = await writeRemoteObject(deps, path, remoteEntry.hash);
-		baselineFiles[path] = remoteEntry;
-		nextHashCache[path] = {
-			mtime: Date.now(),
-			size: plaintext.length,
-			hash: remoteEntry.hash,
-		};
+		if (!remoteEntry) {
+			// Edit vs delete, accepting remote: the remote side is the deletion.
+			await deletePath(deps.adapter, path);
+			delete baselineFiles[path];
+			delete nextHashCache[path];
+			localEntries.set(path, null);
+		} else {
+			const plaintext = await writeRemoteObject(deps, path, remoteEntry.hash);
+			const stat = await deps.adapter.stat(path).catch(() => null);
+			const entry: ManifestEntry = {
+				hash: remoteEntry.hash,
+				size: plaintext.length,
+				mtime: stat?.mtime ?? Date.now(),
+				kind: remoteEntry.kind,
+			};
+			baselineFiles[path] = remoteEntry;
+			nextHashCache[path] = {
+				mtime: entry.mtime,
+				size: entry.size,
+				hash: entry.hash,
+			};
+			localEntries.set(path, entry);
+		}
 		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
 	}
 	const baseline: Manifest = {
@@ -142,5 +165,9 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 		conflictPaths.slice(0, LOG_PATH_LIMIT),
 	);
 	ctx.setProgress(null);
-	return { newRemote: remote, touchedPaths: new Set(conflictPaths) };
+	return {
+		newRemote: remote,
+		touchedPaths: new Set(conflictPaths),
+		localEntries,
+	};
 };

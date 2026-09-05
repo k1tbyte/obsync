@@ -44,8 +44,9 @@ export async function runAdoptNewVaultFlow(
 ): Promise<FlowResult> {
 	ctx.setProgress("Adopting new vault…");
 	const cleared = resetSessionState(deps.state);
-	await ctx.persistState(cleared);
 	ctx.setProgress("Refreshing…");
+	// Nothing is persisted until the compare succeeds: a network failure here
+	// must not leave the device without the sync state it still has.
 	const refreshed = await compare({ ...deps, state: cleared });
 	// Adopt whatever vaultId the remote currently carries so a subsequent
 	// compare no longer trips assertVaultCompatibility. If the remote is empty,

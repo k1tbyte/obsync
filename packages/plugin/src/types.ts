@@ -109,5 +109,11 @@ export interface DiffResult {
 	localChanges: FileChange[];
 	remoteChanges: FileChange[];
 	conflicts: Conflict[];
+	/**
+	 * Paths both sides changed to the same content. Nothing to sync, but the
+	 * baseline still points at the old hash: leaving it there turns the next
+	 * edit on either side into a spurious conflict.
+	 */
+	converged: string[];
 	remoteMoved: boolean;
 }

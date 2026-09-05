@@ -87,8 +87,13 @@ export async function publishManifestWithGuard(
 	key: EncryptionKey,
 	manifest: Manifest,
 	expectedParentSnapshotId: string | null,
+	baseline: Manifest | null = null,
 ): Promise<void> {
-	const precheck = await fetchRemoteManifest(storage, key);
+	// Both reads go through the same stale-read reconciliation as compare, so a
+	// backend that has not caught up with our own last write does not look like
+	// a competing writer.
+	const fetched = await fetchRemoteManifest(storage, key);
+	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
 	const precheckId = precheck?.snapshotId ?? null;
 	if (precheckId !== expectedParentSnapshotId) {
 		throw new ConcurrentPushError(
@@ -98,12 +103,14 @@ export async function publishManifestWithGuard(
 	}
 	await publishManifest(storage, key, manifest);
 	const verify = await fetchRemoteManifest(storage, key);
-	if (!verify || verify.snapshotId !== manifest.snapshotId) {
-		throw new ConcurrentPushError(
-			"Another device overwrote the manifest immediately after our push.",
-			verify,
-		);
-	}
+	if (verify?.snapshotId === manifest.snapshotId) return;
+	// Reading back the manifest we just replaced is a stale read of our own
+	// write, not somebody else's push.
+	if (verify && verify.snapshotId === manifest.parentSnapshotId) return;
+	throw new ConcurrentPushError(
+		"Another device overwrote the manifest immediately after our push.",
+		verify,
+	);
 }
 
 export function buildManifest(
