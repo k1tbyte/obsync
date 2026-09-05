@@ -1,6 +1,8 @@
 import { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
+import { sha256Hex } from "@/crypto";
+import { textToBytes } from "@/sync/content";
 import type { SyncController } from "@/sync/controller";
 import { notifyError, notifyInfo } from "@/ui";
 
@@ -73,10 +75,27 @@ export class SignsProvider {
 		return this.cache.has(path);
 	}
 
-	async pushHunk(path: string, index: number): Promise<void> {
+	/**
+	 * `currentText` is the editor buffer the hunk index was computed against.
+	 * The operation reads the file from disk, so the two are compared before
+	 * anything is published: an unsaved buffer must not push a different hunk.
+	 */
+	async pushHunk(
+		path: string,
+		index: number,
+		currentText: string,
+	): Promise<void> {
+		const baseline = this.cache.get(path);
+		if (!baseline) {
+			notifyError("Push hunk failed", new Error("Baseline is not loaded yet"));
+			return;
+		}
 		try {
-			await this.controller.pushHunks(path, new Set([index]));
-			notifyInfo("pushed hunk");
+			await this.controller.pushHunks(path, new Set([index]), {
+				left: baseline.hash,
+				right: await sha256Hex(textToBytes(currentText)),
+			});
+			notifyInfo("Pushed hunk");
 		} catch (err) {
 			notifyError("Push hunk failed", err);
 		}

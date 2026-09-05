@@ -128,8 +128,7 @@ export class OperationRunner {
 				const recomputed = recomputeAfterWrite(
 					result,
 					freshState,
-					outcome.newRemote,
-					outcome.touchedPaths,
+					outcome,
 					session.scope,
 				);
 				this.deps.runtimeState.setResult(recomputed);

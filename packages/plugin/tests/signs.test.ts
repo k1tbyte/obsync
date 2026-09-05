@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerEditorSigns } from "../src/editor/signs";
 import { buildChunks } from "../src/editor/signs/diff";
 import {
-	findSyncHunkIndexForLine,
+	findSyncHunkForLine,
 	presentChunk,
 	shouldRedeliverBaseline,
 } from "../src/editor/signs/helpers";
@@ -60,7 +60,7 @@ describe("signs helpers", () => {
 		const baseline = Text.of(["There is second"]);
 		const current = Text.of(["There is second", "asdasd", "hello world"]);
 
-		expect(findSyncHunkIndexForLine(2, baseline, current)).toBe(0);
+		expect(findSyncHunkForLine(2, baseline, current)?.index).toBe(0);
 	});
 
 	it("presents filling an existing blank line with text as an add", () => {

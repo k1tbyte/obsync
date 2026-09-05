@@ -1,22 +1,22 @@
 import { LOG_PATH_LIMIT } from "../../constants";
-import { sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
 import type { Manifest, ManifestEntry } from "../../types";
-import { writeBinary } from "../../vault/io";
 import {
 	buildSessionState,
 	mergeBaselineIntoCache,
 	updateBaselineEntry,
 } from "../baseline";
-import {
-	loadLocalText,
-	loadRemoteText,
-	textToBytes,
-	writeRemoteObject,
-} from "../content";
+import { textToBytes, writeRemoteObject } from "../content";
 import { pullPaths } from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
+import { writeLocalFile } from "./local-write";
+import {
+	assertSidesUnchanged,
+	EHunkPair,
+	type HunkSidesHash,
+	loadHunkSides,
+} from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
 
 export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
@@ -49,6 +49,8 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 export interface PullHunksArgs {
 	path: string;
 	selected: ReadonlySet<number>;
+	/** sha256 of the two sides the view computed its hunk indices from. */
+	expected?: HunkSidesHash;
 }
 
 export const pullHunksOp: Operation<PullHunksArgs> = async (
@@ -58,16 +60,19 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 	ctx,
 ) => {
 	const { path, selected } = args;
-	if (!result.remote)
+	if (selected.size === 0) throw new Error("No hunks selected");
+	if (!result.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
+	}
 	const remoteEntry = result.remote.files[path];
 	if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
-	const left = (await loadLocalText(deps.adapter, path)) ?? "";
-	const right = (await loadRemoteText(deps, remoteEntry.hash)) ?? "";
-	const { hunks } = computeHunks(left, right);
-	const merged = applyHunks(left, hunks, selected);
-	const bytes = textToBytes(merged);
-	await writeBinary(deps.adapter, path, bytes);
+
+	const sides = await loadHunkSides(deps, result, path, EHunkPair.Remote);
+	await assertSidesUnchanged(sides, args.expected);
+	const { hunks } = computeHunks(sides.left, sides.right);
+	const merged = applyHunks(sides.left, hunks, selected);
+	const localEntry = await writeLocalFile(deps, path, textToBytes(merged));
+
 	const baseline = updateBaselineEntry(
 		deps.state.baseline ?? result.remote,
 		path,
@@ -75,16 +80,20 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 	);
 	const hashCache = { ...result.updatedCache };
 	hashCache[path] = {
-		mtime: Date.now(),
-		size: bytes.length,
-		hash: await sha256Hex(bytes),
+		mtime: localEntry.mtime,
+		size: localEntry.size,
+		hash: localEntry.hash,
 	};
 	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
 		`Pulled ${selected.size} hunk(s) of ${path}.`,
 	);
-	return { newRemote: result.remote, touchedPaths: new Set([path]) };
+	return {
+		newRemote: result.remote,
+		touchedPaths: new Set([path]),
+		localEntries: new Map([[path, localEntry]]),
+	};
 };
 
 export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
