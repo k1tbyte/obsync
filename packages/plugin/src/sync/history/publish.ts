@@ -1,4 +1,5 @@
 import type { EncryptionKey } from "../../crypto";
+import { reportWarning } from "../../shared/diagnostics";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
 import { publishManifestWithGuard } from "../manifest";
@@ -6,8 +7,7 @@ import { collectGarbage, shouldRunGc } from "./gc";
 import {
 	archiveManifest,
 	prependIndexEntry,
-	readSnapshotIndex,
-	writeSnapshotIndex,
+	updateSnapshotIndex,
 } from "./store";
 import type { HistoryConfig } from "./types";
 
@@ -28,23 +28,32 @@ export async function publishManifestWithHistory(
 	manifest: Manifest,
 	expectedParentSnapshotId: string | null,
 	history: HistoryConfig | undefined,
+	baseline: Manifest | null = null,
 ): Promise<void> {
 	await publishManifestWithGuard(
 		storage,
 		key,
 		manifest,
 		expectedParentSnapshotId,
+		baseline,
 	);
 	if (!history) return;
 	try {
 		await archiveManifest(storage, key, manifest);
-		const index = prependIndexEntry(await readSnapshotIndex(storage, key), {
+		const entry = {
 			snapshotId: manifest.snapshotId,
 			parentSnapshotId: manifest.parentSnapshotId,
 			createdAt: manifest.createdAt,
 			deviceId: manifest.deviceId,
 			deviceName: manifest.deviceName,
-		});
+		};
+		const index = await updateSnapshotIndex(
+			storage,
+			key,
+			(current) => prependIndexEntry(current, entry),
+			(current) =>
+				current.entries.some((e) => e.snapshotId === entry.snapshotId),
+		);
 		const nonPinned = index.entries.filter((e) => !e.pinned).length;
 		if (shouldRunGc(nonPinned, history.maxSnapshots)) {
 			await collectGarbage({
@@ -54,10 +63,11 @@ export async function publishManifestWithHistory(
 				maxSnapshots: history.maxSnapshots,
 				headManifest: manifest,
 			});
-		} else {
-			await writeSnapshotIndex(storage, key, index);
 		}
 	} catch (err) {
-		console.warn("[obsync] file history update failed (push succeeded)", err);
+		reportWarning(
+			"File history could not be updated; the push itself succeeded.",
+			err,
+		);
 	}
 }

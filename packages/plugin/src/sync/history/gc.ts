@@ -5,13 +5,14 @@ import {
 	FILE_HISTORY_MIN_SNAPSHOTS,
 } from "../../constants";
 import type { EncryptionKey } from "../../crypto";
+import { reportWarning } from "../../shared/diagnostics";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
-import { objectKey } from "../manifest";
+import { fetchRemoteManifest, objectKey } from "../manifest";
 import {
 	fetchArchivedManifest,
 	snapshotKey,
-	writeSnapshotIndex,
+	updateSnapshotIndex,
 } from "./store";
 import type { SnapshotIndex } from "./types";
 
@@ -119,8 +120,18 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	}
 
 	let deletedObjects = 0;
-	const skippedObjectSweep = !retainedComplete;
-	if (retainedComplete) {
+	// Reading the head again catches a device that published between the
+	// reachability walk and the sweep: its objects must not be collected.
+	const headNow = await readHead(storage, key);
+	if (headNow.manifest) collectHashes(headNow.manifest, liveHashes);
+	// A head that could not be read is not a head that did not move: sweeping
+	// on an unreadable head deletes objects it may well still reference.
+	const headUnchanged =
+		headNow.read &&
+		(headNow.manifest === null ||
+			headNow.manifest.snapshotId === input.headManifest.snapshotId);
+	const skippedObjectSweep = !retainedComplete || !headUnchanged;
+	if (!skippedObjectSweep) {
 		for (const hash of evictedHashes) {
 			if (liveHashes.has(hash)) continue;
 			await safeDelete(storage, objectKey(hash));
@@ -128,11 +139,22 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 		}
 	}
 
-	const nextIndex: SnapshotIndex = {
-		version: input.index.version,
-		entries: nextEntries,
-	};
-	await writeSnapshotIndex(storage, key, nextIndex);
+	// Another device may have pinned a snapshot while this ran: replaying the
+	// eviction onto whatever is there now keeps their pin instead of stamping
+	// this run's stale copy over it.
+	const evictedIds = new Set(evicted.map((entry) => entry.snapshotId));
+	const nextIndex = await updateSnapshotIndex(
+		storage,
+		key,
+		(index) => ({
+			...index,
+			entries: index.entries.filter(
+				(entry) => !evictedIds.has(entry.snapshotId),
+			),
+		}),
+		(index) =>
+			index.entries.every((entry) => !evictedIds.has(entry.snapshotId)),
+	);
 
 	return {
 		index: nextIndex,
@@ -153,6 +175,26 @@ async function safeDelete(
 	try {
 		await storage.delete(storageKey);
 	} catch (err) {
-		console.warn("[obsync] gc delete failed", storageKey, err);
+		reportWarning(
+			`Could not delete "${storageKey}" during history cleanup.`,
+			err,
+		);
+	}
+}
+
+/**
+ * The head plus whether it was actually read. `fetchRemoteManifest` returns
+ * null both for "no vault published yet" and after a failure that the caller
+ * must not mistake for an empty remote.
+ */
+async function readHead(
+	storage: ObjectStorage,
+	key: EncryptionKey,
+): Promise<{ read: boolean; manifest: Manifest | null }> {
+	try {
+		return { read: true, manifest: await fetchRemoteManifest(storage, key) };
+	} catch (err) {
+		reportWarning("Could not re-read the head before collecting garbage.", err);
+		return { read: false, manifest: null };
 	}
 }

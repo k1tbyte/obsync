@@ -2,12 +2,10 @@ import { diff3Merge, mergeDiff3 } from "node-diff3";
 import type { DataAdapter } from "obsidian";
 
 import type { Conflict } from "../types";
-import { writeBinary } from "../vault/io";
 import {
 	loadLocalText,
 	loadRemoteText,
 	type RemoteFetchOptions,
-	textToBytes,
 } from "./content";
 
 const LOCAL_LABEL = "Local";
@@ -53,10 +51,11 @@ export function hasUnresolvedMarkers(text: string): boolean {
 }
 
 /**
- * Attempts a clean three-way merge of one conflict and writes the result to
- * disk. Returns false — leaving the file untouched — when a side is binary,
- * missing, or has no common ancestor, or when any region is a real conflict
- * that a human has to resolve.
+ * Attempts a clean three-way merge of one conflict and returns the merged text.
+ * Returns null — meaning the caller must leave the file untouched — when a side
+ * is binary, missing, or has no common ancestor, or when any region is a real
+ * conflict that a human has to resolve. Writing is left to the caller so it can
+ * record what actually landed on disk.
  *
  * Callers should gate on `isTextMergeCandidate` first so an oversized or
  * known-binary path is rejected before anything is downloaded.
@@ -64,9 +63,9 @@ export function hasUnresolvedMarkers(text: string): boolean {
 export async function tryAutoMergeConflict(
 	deps: RemoteFetchOptions & { adapter: DataAdapter },
 	conflict: Conflict,
-): Promise<boolean> {
+): Promise<string | null> {
 	if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash) {
-		return false;
+		return null;
 	}
 	const [baseText, remoteText, localText] = await Promise.all([
 		loadRemoteText(deps, conflict.baselineHash),
@@ -74,19 +73,17 @@ export async function tryAutoMergeConflict(
 		loadLocalText(deps.adapter, conflict.path),
 	]);
 	if (baseText === null || remoteText === null || localText === null) {
-		return false;
+		return null;
 	}
 	const regions = diff3Merge(
 		toLines(localText),
 		toLines(baseText),
 		toLines(remoteText),
 	);
-	if (regions.some((region) => "conflict" in region)) return false;
-	const merged = regions
+	if (regions.some((region) => "conflict" in region)) return null;
+	return regions
 		.flatMap((region) => ("ok" in region ? region.ok : []))
 		.join("\n");
-	await writeBinary(deps.adapter, conflict.path, textToBytes(merged));
-	return true;
 }
 
 /** Splits text into lines after normalising CRLF so a mixed-EOL pair does not

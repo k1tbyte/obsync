@@ -1,5 +1,7 @@
 import type { DataAdapter } from "obsidian";
 
+import { toArrayBuffer } from "../utils/bytes";
+
 export async function readBinary(
 	adapter: DataAdapter,
 	path: string,
@@ -22,15 +24,25 @@ export async function deletePath(
 	path: string,
 ): Promise<void> {
 	if (!(await adapter.exists(path))) return;
-	await adapter.remove(path);
+	try {
+		await adapter.remove(path);
+	} catch {
+		// The file can disappear between the check and the call; that is the
+		// outcome the caller asked for anyway.
+	}
 }
 
+/** Creates `path` and every missing ancestor of it. */
 export async function ensureDir(
 	adapter: DataAdapter,
 	path: string,
 ): Promise<void> {
-	if (await adapter.exists(path)) return;
-	await adapter.mkdir(path);
+	let cursor = "";
+	for (const segment of path.split("/").filter(Boolean)) {
+		cursor = cursor ? `${cursor}/${segment}` : segment;
+		if (await adapter.exists(cursor)) continue;
+		await adapter.mkdir(cursor);
+	}
 }
 
 export async function removeEmptyDir(
@@ -45,17 +57,11 @@ export async function removeEmptyDir(
 	}
 }
 
-async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
+export async function ensureParent(
+	adapter: DataAdapter,
+	path: string,
+): Promise<void> {
 	const slash = path.lastIndexOf("/");
 	if (slash <= 0) return;
-	const parent = path.slice(0, slash);
-	if (await adapter.exists(parent)) return;
-	await adapter.mkdir(parent);
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer as ArrayBuffer;
-	}
-	return bytes.slice().buffer as ArrayBuffer;
+	await ensureDir(adapter, path.slice(0, slash));
 }

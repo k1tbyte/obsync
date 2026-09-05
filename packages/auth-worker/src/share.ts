@@ -31,10 +31,11 @@ export interface ShareEnv {
 	SHARE_S3_FORCE_PATH_STYLE?: string;
 }
 
-export enum EShareRole {
-	ReadWrite = "rw",
-	ReadOnly = "ro",
-}
+export const EShareRole = {
+	ReadWrite: "rw",
+	ReadOnly: "ro",
+} as const;
+export type EShareRole = (typeof EShareRole)[keyof typeof EShareRole];
 
 interface TokenRecord {
 	shareId: string;
@@ -62,17 +63,17 @@ export async function handleShareRequest(
 ): Promise<Response | null> {
 	if (!url.pathname.startsWith("/share/")) return null;
 
-	if (url.pathname === "/share/sign" && request.method === "POST") {
+	if (url.pathname === "/share/sign") {
+		if (request.method !== "POST") return methodNotAllowed("POST");
 		return signObject(request, env);
 	}
 	if (url.pathname === "/share/tokens") {
 		if (request.method === "POST") return issueToken(request, env);
 		if (request.method === "GET") return listTokens(request, env, url);
+		return methodNotAllowed("GET, POST");
 	}
-	if (
-		url.pathname.startsWith("/share/tokens/") &&
-		request.method === "DELETE"
-	) {
+	if (url.pathname.startsWith("/share/tokens/")) {
+		if (request.method !== "DELETE") return methodNotAllowed("DELETE");
 		return revokeToken(request, env, url);
 	}
 	return jsonError(404, "not_found", "Unknown broker route");
@@ -86,12 +87,23 @@ async function signObject(request: Request, env: ShareEnv): Promise<Response> {
 
 	let body: { op?: string; key?: string; prefix?: string; cursor?: string };
 	try {
-		body = (await request.json()) as typeof body;
+		// `null` is valid JSON, so the shape has to be checked before it is read.
+		const parsed = await request.json();
+		if (!parsed || typeof parsed !== "object") throw new Error("not an object");
+		body = parsed as typeof body;
 	} catch {
 		return jsonError(400, "bad_request", "Invalid JSON body");
 	}
 
-	const op = body.op ?? "";
+	// Every field is participant-controlled: a number here would reach
+	// assertSafeKey and throw a TypeError, answering 500 instead of 400.
+	if (!isOptionalString(body.key) || !isOptionalString(body.prefix)) {
+		return jsonError(400, "bad_request", "key and prefix must be strings");
+	}
+	if (!isOptionalString(body.cursor)) {
+		return jsonError(400, "bad_request", "cursor must be a string");
+	}
+	const op = typeof body.op === "string" ? body.op : "";
 	if (WRITE_OPS.has(op) && record.role !== EShareRole.ReadWrite) {
 		return jsonError(403, "read_only", "This share token is read-only");
 	}
@@ -134,6 +146,10 @@ async function signObject(request: Request, env: ShareEnv): Promise<Response> {
 	}
 }
 
+function isOptionalString(value: unknown): boolean {
+	return value === undefined || typeof value === "string";
+}
+
 function objectMethod(op: string): PresignMethod | null {
 	switch (op) {
 		case "get":
@@ -161,7 +177,7 @@ function listQuery(
 /* -------------------------------------------------------------------- admin */
 
 async function issueToken(request: Request, env: ShareEnv): Promise<Response> {
-	if (!isAdmin(request, env)) {
+	if (!(await isAdmin(request, env))) {
 		return jsonError(401, "unauthorized", "Invalid admin secret");
 	}
 	let body: {
@@ -169,10 +185,11 @@ async function issueToken(request: Request, env: ShareEnv): Promise<Response> {
 		participantId?: string;
 		role?: EShareRole;
 		label?: string;
-		ttlSeconds?: number;
 	};
 	try {
-		body = (await request.json()) as typeof body;
+		const parsed = await request.json();
+		if (!parsed || typeof parsed !== "object") throw new Error("not an object");
+		body = parsed as typeof body;
 	} catch {
 		return jsonError(400, "bad_request", "Invalid JSON body");
 	}
@@ -196,13 +213,16 @@ async function issueToken(request: Request, env: ShareEnv): Promise<Response> {
 		label: body.label,
 		createdAt: Date.now(),
 	};
-	const options = body.ttlSeconds ? { expirationTtl: body.ttlSeconds } : {};
-	await env.SHARE_TOKENS.put(`tok:${token}`, JSON.stringify(record), options);
-	await env.SHARE_TOKENS.put(
-		`pt:${record.shareId}:${record.participantId}`,
-		token,
-		options,
-	);
+	const pointer = `pt:${record.shareId}:${record.participantId}`;
+	// Re-inviting replaces this person's token, which means the previous one has
+	// to be destroyed: it is invisible to listTokens and revokeToken only ever
+	// follows the current pointer, so leaving it behind makes it unrevocable.
+	const previous = await env.SHARE_TOKENS.get(pointer);
+	await env.SHARE_TOKENS.put(`tok:${token}`, JSON.stringify(record));
+	await env.SHARE_TOKENS.put(pointer, token);
+	if (previous && previous !== token) {
+		await env.SHARE_TOKENS.delete(`tok:${previous}`);
+	}
 	return json({ token, ...record });
 }
 
@@ -211,16 +231,30 @@ async function listTokens(
 	env: ShareEnv,
 	url: URL,
 ): Promise<Response> {
-	if (!isAdmin(request, env)) {
+	if (!(await isAdmin(request, env))) {
 		return jsonError(401, "unauthorized", "Invalid admin secret");
 	}
 	const shareId = url.searchParams.get("shareId");
 	if (!shareId) return jsonError(400, "bad_request", "shareId required");
 
-	const listed = await env.SHARE_TOKENS.list({ prefix: `pt:${shareId}:` });
-	const participants = listed.keys.map((entry) => ({
-		participantId: entry.name.slice(`pt:${shareId}:`.length),
-	}));
+	try {
+		shareBasePrefix(env.SHARE_S3_PREFIX ?? "", shareId);
+	} catch {
+		return jsonError(400, "bad_request", "Invalid shareId");
+	}
+
+	const prefix = `pt:${shareId}:`;
+	const participants: { participantId: string }[] = [];
+	let cursor: string | undefined;
+	// KV lists at most 1000 keys per call; a share with more participants would
+	// otherwise show a silently truncated list.
+	do {
+		const listed = await env.SHARE_TOKENS.list({ prefix, cursor });
+		for (const entry of listed.keys) {
+			participants.push({ participantId: entry.name.slice(prefix.length) });
+		}
+		cursor = listed.list_complete ? undefined : listed.cursor;
+	} while (cursor);
 	return json({ participants });
 }
 
@@ -229,12 +263,17 @@ async function revokeToken(
 	env: ShareEnv,
 	url: URL,
 ): Promise<Response> {
-	if (!isAdmin(request, env)) {
+	if (!(await isAdmin(request, env))) {
 		return jsonError(401, "unauthorized", "Invalid admin secret");
 	}
-	const participantId = decodeURIComponent(
-		url.pathname.slice("/share/tokens/".length),
-	);
+	let participantId: string;
+	try {
+		participantId = decodeURIComponent(
+			url.pathname.slice("/share/tokens/".length),
+		);
+	} catch {
+		return jsonError(400, "bad_request", "Invalid participantId");
+	}
 	const shareId = url.searchParams.get("shareId");
 	if (!shareId || !participantId) {
 		return jsonError(400, "bad_request", "shareId and participantId required");
@@ -263,20 +302,38 @@ async function readToken(
 	)) as TokenRecord | null;
 }
 
-function isAdmin(request: Request, env: ShareEnv): boolean {
+async function isAdmin(request: Request, env: ShareEnv): Promise<boolean> {
 	const supplied = request.headers.get("X-Obsync-Admin") ?? "";
 	if (!env.SHARE_ADMIN_SECRET) return false;
 	return timingSafeEqual(supplied, env.SHARE_ADMIN_SECRET);
 }
 
-function timingSafeEqual(left: string, right: string): boolean {
-	const a = encoder.encode(left);
-	const b = encoder.encode(right);
-	if (a.length !== b.length) return false;
+/**
+ * Compares in time independent of the inputs, including their length: an early
+ * return on a length mismatch leaks how long the admin secret is.
+ */
+async function timingSafeEqual(left: string, right: string): Promise<boolean> {
+	const [a, b] = await Promise.all([digest(left), digest(right)]);
 	let diff = 0;
 	for (let i = 0; i < a.length; i++)
 		diff |= (a[i] as number) ^ (b[i] as number);
 	return diff === 0;
+}
+
+async function digest(value: string): Promise<Uint8Array> {
+	return new Uint8Array(
+		await crypto.subtle.digest("SHA-256", encoder.encode(value)),
+	);
+}
+
+function methodNotAllowed(allow: string): Response {
+	return new Response(
+		JSON.stringify({
+			error: "method_not_allowed",
+			message: `Allowed: ${allow}`,
+		}),
+		{ status: 405, headers: { ...JSON_HEADERS, Allow: allow } },
+	);
 }
 
 function s3Target(env: ShareEnv): S3Target {

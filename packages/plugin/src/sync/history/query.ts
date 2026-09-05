@@ -1,9 +1,9 @@
 import { DEFAULT_CONCURRENCY } from "../../constants";
-import { decryptBytes, type EncryptionKey, sha256Hex } from "../../crypto";
+import type { EncryptionKey } from "../../crypto";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
 import { runWithConcurrency } from "../../utils/concurrency";
-import { objectKey } from "../manifest";
+import { loadRemoteBytes } from "../content";
 import { fetchArchivedManifest, readSnapshotIndex } from "./store";
 import type { FileVersion } from "./types";
 
@@ -43,7 +43,10 @@ export async function getFileHistory(
 	let lastHash: string | null = null;
 	for (const entry of index.entries) {
 		const manifest = manifests.get(entry.snapshotId);
-		const file = manifest?.files[path];
+		// Unreadable snapshot: skip it without claiming the file was absent, or the
+		// next older version shows up again as a new one.
+		if (!manifest) continue;
+		const file = manifest.files[path];
 		if (!file) {
 			lastHash = null;
 			continue;
@@ -69,13 +72,9 @@ export async function loadVersionBytes(
 	key: EncryptionKey,
 	hash: string,
 ): Promise<Uint8Array> {
-	const blob = await storage.get(objectKey(hash));
-	if (!blob)
+	const plaintext = await loadRemoteBytes({ storage, key }, hash);
+	if (!plaintext) {
 		throw new Error(`Version content is no longer available (${hash})`);
-	const plaintext = await decryptBytes(key, blob);
-	const verify = await sha256Hex(plaintext);
-	if (verify !== hash) {
-		throw new Error(`Hash mismatch for historical object ${hash}`);
 	}
 	return plaintext;
 }

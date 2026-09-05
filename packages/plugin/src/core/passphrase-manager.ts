@@ -7,6 +7,7 @@ import {
 	saveCachedPassphrase,
 } from "@/crypto/passphrase-cache";
 import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import { reportWarning } from "@/shared/diagnostics";
 import { type ObjectStorage, storageIdentity } from "@/storage";
 import { resolveContentKey } from "@/sync/keyfile";
 import { askPassphrase } from "@/ui";
@@ -20,6 +21,7 @@ interface CachedKey {
 export class PassphraseManager {
 	private passphrase: string | null = null;
 	private cachedKey: CachedKey | null = null;
+	private pendingPrompt: Promise<boolean> | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -42,7 +44,7 @@ export class PassphraseManager {
 		try {
 			await clearCachedPassphrase(this.adapter, this.configDir);
 		} catch (err) {
-			console.warn("[obsync] failed to clear cached passphrase", err);
+			reportWarning("Could not clear the cached passphrase.", err);
 		}
 	}
 
@@ -55,8 +57,24 @@ export class PassphraseManager {
 		this.cachedKey = null;
 	}
 
+	/**
+	 * Startup auto-pull, the share service and a user command can all ask at
+	 * once; they share one prompt instead of stacking three modals.
+	 */
 	async prompt(replace: boolean): Promise<boolean> {
 		if (this.passphrase && !replace) return true;
+		// A forced prompt is a recovery path (the stored passphrase no longer
+		// opens the vault); joining an in-flight one would answer it with the
+		// very passphrase that failed.
+		if (this.pendingPrompt && !replace) return this.pendingPrompt;
+		if (this.pendingPrompt) await this.pendingPrompt.catch(() => undefined);
+		this.pendingPrompt = this.runPrompt(replace).finally(() => {
+			this.pendingPrompt = null;
+		});
+		return this.pendingPrompt;
+	}
+
+	private async runPrompt(replace: boolean): Promise<boolean> {
 		if (!replace && (await this.tryLoadCached())) return true;
 		const value = await askPassphrase(this.app);
 		if (!value) return false;
@@ -84,7 +102,7 @@ export class PassphraseManager {
 				this.bindingSignature(),
 			);
 		} catch (err) {
-			console.warn("[obsync] failed to cache passphrase", err);
+			reportWarning("Could not cache the passphrase.", err);
 		}
 	}
 

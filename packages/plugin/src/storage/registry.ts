@@ -42,16 +42,17 @@ export interface StorageDescriptor<
 > {
 	label: string;
 	defaults: () => T;
-	create: (config: T) => StorageAdapter;
+	create: (config: T, onConfigChanged?: () => void) => StorageAdapter;
 	isConfigured: (config: T) => boolean;
 	describeTarget: (config: T) => string;
 	identity: (config: T) => string;
 	fields: ReadonlyArray<SettingsFieldSpec>;
+	/** Returns false when the callback was not this backend's to handle. */
 	handleProtocol?: (
 		params: ObsidianProtocolData,
 		config: T,
 		saveCallback: () => Promise<void>,
-	) => Promise<void>;
+	) => Promise<boolean>;
 }
 
 const STORAGE_REGISTRY: {
@@ -126,11 +127,14 @@ export function listBackends(): ReadonlyArray<{
 
 export function createStorageAdapter(
 	config: StorageAdapterConfig,
+	/** Called when the adapter updates the config itself, e.g. after refreshing
+	 * an OAuth token, so the caller can persist it. */
+	onConfigChanged?: () => void,
 ): StorageAdapter {
 	const descriptor = STORAGE_REGISTRY[
 		config.kind
 	] as StorageDescriptor<StorageAdapterConfig>;
-	return descriptor.create(config);
+	return descriptor.create(config, onConfigChanged);
 }
 
 export function isAdapterConfigured(config: StorageAdapterConfig): boolean {
@@ -153,15 +157,27 @@ export function storageIdentity(config: StorageAdapterConfig): string {
 	] as StorageDescriptor<StorageAdapterConfig>;
 	return descriptor.identity(config);
 }
+/**
+ * Routes an `obsidian://` callback to the backend that owns it, not to the
+ * active one: configuring Google Drive while S3 is selected must still deliver
+ * the OAuth result.
+ */
 export async function handleStorageProtocol(
 	params: ObsidianProtocolData,
-	config: StorageAdapterConfig,
+	getConfig: (kind: EStorageBackend) => StorageAdapterConfig | undefined,
 	saveCallback: () => Promise<void>,
 ): Promise<void> {
-	const descriptor = STORAGE_REGISTRY[
-		config.kind
-	] as StorageDescriptor<StorageAdapterConfig>;
-	if (descriptor.handleProtocol) {
-		await descriptor.handleProtocol(params, config, saveCallback);
+	for (const [kind, entry] of Object.entries(STORAGE_REGISTRY)) {
+		const descriptor = entry as StorageDescriptor<StorageAdapterConfig>;
+		if (!descriptor.handleProtocol) continue;
+		const config = getConfig(kind as EStorageBackend);
+		if (!config) continue;
+		// A descriptor that does not recognise the callback returns false, so the
+		// next backend still gets a chance at it.
+		if (
+			(await descriptor.handleProtocol(params, config, saveCallback)) !== false
+		) {
+			return;
+		}
 	}
 }

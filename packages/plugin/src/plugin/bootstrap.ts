@@ -21,12 +21,13 @@ interface BootstrapPluginRuntimeOptions {
 	app: App;
 	settings: ObsyncSettings;
 	onPushComplete?: () => void;
+	persistSettings?: () => Promise<void>;
 }
 
 export async function bootstrapPluginRuntime(
 	options: BootstrapPluginRuntimeOptions,
 ): Promise<PluginRuntime> {
-	const { app, settings, onPushComplete } = options;
+	const { app, settings, onPushComplete, persistSettings } = options;
 	const logs = new LogService(app.vault.adapter, app.vault.configDir);
 	await logs.load();
 
@@ -48,6 +49,7 @@ export async function bootstrapPluginRuntime(
 		passphrase: passphraseManager,
 		state: statePersister,
 		logs,
+		persistSettings,
 	});
 
 	const controller = new SyncController({
@@ -77,8 +79,10 @@ async function ensureDeviceNamePersisted(
 	const adapter = app.vault.adapter;
 	const configDir = app.vault.configDir;
 	const state = await loadState(adapter, configDir);
-	statePersister.setInitial(state);
 	if (!(await adapter.exists(stateFilePath(configDir)))) {
+		// Before setInitial: persist() compares against the current state, and
+		// comparing the object with itself would debounce the very first write.
 		await statePersister.persist(state);
 	}
+	statePersister.setInitial(state);
 }

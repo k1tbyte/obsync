@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presignS3, type S3Target } from "../../auth-worker/src/sigv4";
+import { presignS3, type S3Target } from "../src/sigv4";
 
 function target(overrides: Partial<S3Target> = {}): S3Target {
 	return {

@@ -20,6 +20,9 @@ export class StatusBroadcaster<T> {
 	}
 
 	subscribe(listener: SnapshotListener<T>): () => void {
+		// After dispose the broadcaster never emits again, so keeping the listener
+		// would only pin whatever it closes over.
+		if (this.disposed) return () => undefined;
 		this.listeners.add(listener);
 		listener(this.getSnapshot());
 		return () => {
@@ -75,6 +78,10 @@ export class StatusBroadcaster<T> {
 				console.error("[obsync] listener failed", err);
 			}
 		}
-		this.emit?.(snapshot);
+		try {
+			this.emit?.(snapshot);
+		} catch (err) {
+			console.warn("[obsync] status emit failed", err);
+		}
 	}
 }

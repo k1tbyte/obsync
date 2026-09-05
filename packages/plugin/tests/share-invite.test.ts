@@ -7,7 +7,7 @@ import {
 	participantIdFromName,
 } from "../src/share/create";
 import { createShareInviteUrl, readShareInvite } from "../src/share/invite";
-import { isOwnedShare } from "../src/share/types";
+import { isOwnedShare, shareChannelId } from "../src/share/types";
 import { defaultS3Config } from "../src/storage/adapters/s3";
 import { defaultWebDAVConfig } from "../src/storage/adapters/webdav";
 import {
@@ -15,6 +15,7 @@ import {
 	type S3StorageConfig,
 	type ShareBrokerStorageConfig,
 } from "../src/storage/config";
+import { deriveRoomToken } from "../src/sync/realtime";
 
 function baseStorage(): S3StorageConfig {
 	return {
@@ -58,7 +59,28 @@ describe("share invites", () => {
 		expect(invite.keyB64).toBe(share.keyB64);
 		expect(invite.storage).toEqual(brokerStorage());
 		expect(invite.relayUrl).toBe("wss://relay.example.dev");
-		expect(invite.relayToken).toBe("secret");
+		// The room token, never the deployment secret it was derived from.
+		expect(invite.relayRoomToken).toMatch(/^[0-9a-f]{64}$/);
+		expect(invite.relayRoomToken).toBe(
+			await deriveRoomToken("secret", shareChannelId(share.id)),
+		);
+	});
+
+	it("never hands a participant the deployment relay secret", async () => {
+		const share = createSharedFolderConfig({
+			localRoot: "Team",
+			name: "Team",
+			baseStorage: baseStorage(),
+			relayUrl: "wss://relay.example.dev",
+			relayToken: "deployment-secret",
+		});
+
+		const url = await createShareInviteUrl(share, "pw", brokerStorage());
+		const invite = await readShareInvite(url, "pw");
+
+		// Holding the deployment secret would let a participant derive the room
+		// token of every other share on the same relay.
+		expect(JSON.stringify(invite)).not.toContain("deployment-secret");
 	});
 
 	it("never leaks storage credentials into the invite", async () => {
@@ -91,19 +113,21 @@ describe("share invites", () => {
 		).rejects.toThrow(/newer/);
 	});
 
-	it("rejects a legacy invite that carries storage credentials", async () => {
+	it("refuses to pack anything but a broker token into an invite", async () => {
 		const share = createSharedFolderConfig({
 			localRoot: "Team",
 			name: "Team",
 			baseStorage: baseStorage(),
 		});
-		// A pre-broker invite embedded the S3 config directly.
-		const legacy = await createShareInviteUrl(
-			share,
-			"pw",
-			share.storage as unknown as ShareBrokerStorageConfig,
-		);
-		await expect(readShareInvite(legacy, "pw")).rejects.toThrow(/no longer/);
+		// A pre-broker invite embedded the S3 config directly; building one now
+		// would leak the owner's credentials.
+		await expect(
+			createShareInviteUrl(
+				share,
+				"pw",
+				share.storage as unknown as ShareBrokerStorageConfig,
+			),
+		).rejects.toThrow(/share-broker/);
 	});
 
 	it("joining maps the invite to a local config", async () => {
@@ -147,7 +171,17 @@ describe("deriveShareStorageConfig", () => {
 describe("participantIdFromName", () => {
 	it("slugs a display name", () => {
 		expect(participantIdFromName("  Alice Smith ")).toBe("alice-smith");
-		expect(participantIdFromName("Борис")).toBe("");
+	});
+
+	it("still produces a stable id for a name with no Latin letters", () => {
+		const id = participantIdFromName("Борис");
+		expect(id).toMatch(/^p-[0-9a-f]{8}$/);
+		expect(participantIdFromName("Борис")).toBe(id);
+		expect(participantIdFromName("Мария")).not.toBe(id);
+	});
+
+	it("has no id for a blank name", () => {
+		expect(participantIdFromName("   ")).toBe("");
 	});
 });
 

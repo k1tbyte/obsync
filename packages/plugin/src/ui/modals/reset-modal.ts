@@ -1,6 +1,7 @@
 import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 
 import { RESET_CONFIRMATION_TEXT as CONFIRMATION_TEXT } from "../../constants";
+import { openPromiseModal } from "./promise-modal";
 
 export interface RemoteResetTarget {
 	description: string;
@@ -83,7 +84,8 @@ export function confirmRemoteReset(
 	app: App,
 	target: RemoteResetTarget,
 ): Promise<boolean> {
-	return new Promise((resolve) => {
-		new RemoteResetModal(app, target, resolve).open();
-	});
+	return openPromiseModal<boolean>(
+		(answer) => new RemoteResetModal(app, target, answer),
+		false,
+	);
 }

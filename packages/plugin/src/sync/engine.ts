@@ -1,6 +1,7 @@
 import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
 import { type EncryptionKey, encryptBytes, sha256Hex } from "../crypto";
+import { reportWarning } from "../shared/diagnostics";
 import type { StorageAdapter } from "../storage/types";
 import {
 	type DiffResult,
@@ -16,7 +17,7 @@ import { runWithConcurrency } from "../utils/concurrency";
 import { deletePath, ensureDir, readBinary, removeEmptyDir } from "../vault/io";
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
-import { mergeFolderArrays } from "./baseline";
+import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
 import { writeRemoteObject } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
@@ -48,6 +49,9 @@ export interface CompareResult {
 
 export async function compare(
 	deps: EngineDependencies,
+	/** A manifest the caller just fetched. Re-comparing after a local write
+	 * still needs a fresh scan, but not a second download of the same head. */
+	knownRemote?: Manifest | null,
 ): Promise<CompareResult> {
 	const [{ snapshot, updatedCache }, fetched] = await Promise.all([
 		scanVault(
@@ -60,15 +64,21 @@ export async function compare(
 			},
 			deps.state.hashCache,
 		),
-		fetchRemoteManifest(deps.storage, deps.key),
+		knownRemote === undefined
+			? fetchRemoteManifest(deps.storage, deps.key)
+			: Promise.resolve(knownRemote),
 	]);
 	assertVaultCompatibility(deps.state, fetched);
 	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
 	if (fetched && remote !== fetched) {
-		console.warn("[obsync] storage returned stale manifest", {
-			fetched: fetched.snapshotId,
-			baseline: deps.state.baseline?.snapshotId,
-		});
+		reportWarning(
+			"Storage returned a stale manifest; using the baseline.",
+			undefined,
+			[
+				`fetched: ${fetched.snapshotId}`,
+				`baseline: ${deps.state.baseline?.snapshotId ?? "none"}`,
+			],
+		);
 	}
 	const result = diff({
 		local: snapshot,
@@ -89,41 +99,12 @@ export function filterManifestForDiff(
 	for (const [path, entry] of Object.entries(manifest.files)) {
 		if (scope.includesInDiff(path)) files[path] = entry;
 	}
-	return { ...manifest, files };
-}
-
-export async function push(
-	deps: EngineDependencies,
-	compareResult: CompareResult,
-): Promise<Manifest> {
-	if (compareResult.diff.conflicts.length > 0) {
-		throw new Error("Cannot push: conflicts must be resolved first");
-	}
-	if (compareResult.diff.remoteChanges.length > 0) {
-		throw new Error("Cannot push: remote has changes; pull first");
-	}
-	return pushPaths(
-		deps,
-		compareResult,
-		compareResult.diff.localChanges.map((c) => c.path),
+	// Folders come from the manifest as well, and pull acts on them with mkdir
+	// and rmdir. Unfiltered, a participant could name a folder outside the share.
+	const folders = (manifest.folders ?? []).filter((dir) =>
+		scope.canDescend(dir),
 	);
-}
-
-export async function pull(
-	deps: EngineDependencies,
-	compareResult: CompareResult,
-): Promise<Manifest> {
-	if (compareResult.diff.conflicts.length > 0) {
-		throw new Error("Cannot pull: conflicts must be resolved first");
-	}
-	if (!compareResult.remote) {
-		throw new Error("Cannot pull: remote manifest is missing");
-	}
-	return pullPaths(
-		deps,
-		compareResult,
-		compareResult.diff.remoteChanges.map((c) => c.path),
-	);
+	return { ...manifest, files, folders };
 }
 
 export async function pushPaths(
@@ -139,10 +120,11 @@ export async function pushPaths(
 	);
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
-	// Any hash the remote manifest already references is provably stored, so
-	// skip the existence probe for it — otherwise a first sync costs one extra
-	// round-trip per file.
-	const knownHashes = knownRemoteHashes(compareResult, deps.state.baseline);
+	// Only the current remote head proves an object is stored. The baseline used
+	// to count too, but history GC deletes objects no live manifest references —
+	// trusting a stale baseline would skip the upload and publish a manifest
+	// pointing at a blob that is already gone.
+	const knownHashes = knownRemoteHashes(compareResult);
 	let done = 0;
 	await runWithConcurrency(uploads, concurrency, async (entry) => {
 		if (!knownHashes.has(entry.hash)) {
@@ -160,12 +142,18 @@ export async function pushPaths(
 	return manifest;
 }
 
+export interface PullResult {
+	baseline: Manifest;
+	/** What each pulled path now looks like on disk (null = deleted). */
+	written: Map<string, ManifestEntry | null>;
+}
+
 export async function pullPaths(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
 	paths: ReadonlyArray<string>,
 	onProgress?: (done: number, total: number) => void,
-): Promise<Manifest> {
+): Promise<PullResult> {
 	if (!compareResult.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
 	}
@@ -181,20 +169,36 @@ export async function pullPaths(
 	const total = downloads.length + deletions.length;
 	let done = 0;
 
+	const written = new Map<string, ManifestEntry | null>();
 	await runWithConcurrency(downloads, concurrency, async (change) => {
 		const entry = remote.files[change.path];
 		if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
-		await writeRemoteObject(deps, change.path, entry.hash);
+		const bytes = await writeRemoteObject(deps, change.path, entry.hash);
+		const stat = await deps.adapter.stat(change.path).catch(() => null);
+		written.set(change.path, {
+			hash: entry.hash,
+			size: bytes.length,
+			mtime: stat?.mtime ?? Date.now(),
+			kind: entry.kind,
+		});
 		onProgress?.(++done, total);
 	});
 
 	for (const change of deletions) {
 		await deletePath(deps.adapter, change.path);
+		written.set(change.path, null);
 		onProgress?.(++done, total);
 	}
 
-	const remoteFolders = remote.folders ?? [];
-	const baselineFolders = deps.state.baseline?.folders ?? [];
+	// pullPaths acts on these with mkdir and rmdir, and `remote` here is the
+	// raw manifest: a share participant could otherwise name a folder outside
+	// the share root and have every other client create or delete it.
+	const remoteFolders = (remote.folders ?? []).filter((dir) =>
+		deps.scope.canDescend(dir),
+	);
+	const baselineFolders = (deps.state.baseline?.folders ?? []).filter((dir) =>
+		deps.scope.canDescend(dir),
+	);
 	const remoteFolderSet = new Set(remoteFolders);
 
 	for (const dir of remoteFolders) {
@@ -206,11 +210,17 @@ export async function pullPaths(
 		}
 	}
 
-	return buildAdvancedBaseline({
-		previousBaseline: deps.state.baseline,
-		remote,
-		pulledPaths: pathSet,
-	});
+	return {
+		// `written`, not `paths`: a requested path with no remote change was never
+		// downloaded, and advancing its baseline would turn an unresolved conflict
+		// into a local edit that the next push publishes over the remote.
+		baseline: advanceBaselineForPaths(
+			deps.state.baseline,
+			remote,
+			new Set(written.keys()),
+		),
+		written,
+	};
 }
 
 export interface SingleFilePushInput {
@@ -268,8 +278,10 @@ export async function publishFileMap(
 			emptyFolders: mergeFolderArrays(
 				compareResult.remote?.folders,
 				compareResult.snapshot.emptyFolders,
+				deps.state.baseline?.folders,
 			),
 			ignoredPaths: [],
+			unreadableDirs: [],
 		},
 	);
 	await publishManifestWithHistory(
@@ -278,6 +290,7 @@ export async function publishFileMap(
 		manifest,
 		compareResult.remote?.snapshotId ?? null,
 		deps.history,
+		deps.state.baseline,
 	);
 	return manifest;
 }
@@ -299,45 +312,10 @@ function buildPartialFileMap(input: {
 	return next;
 }
 
-function buildAdvancedBaseline(input: {
-	previousBaseline: Manifest | null;
-	remote: Manifest;
-	pulledPaths: Set<string>;
-}): Manifest {
-	const baseline = input.previousBaseline;
-	const files: Record<string, ManifestEntry> = baseline
-		? { ...baseline.files }
-		: {};
-	for (const path of input.pulledPaths) {
-		const remoteEntry = input.remote.files[path];
-		if (remoteEntry) {
-			files[path] = remoteEntry;
-		} else {
-			delete files[path];
-		}
-	}
-	return {
-		version: input.remote.version,
-		vaultId: input.remote.vaultId,
-		snapshotId: input.remote.snapshotId,
-		parentSnapshotId: baseline?.snapshotId ?? null,
-		createdAt: input.remote.createdAt,
-		deviceId: input.remote.deviceId,
-		files,
-		folders: input.remote.folders,
-	};
-}
-
-/** Hashes the remote already stores, from the manifests we have in hand. */
-function knownRemoteHashes(
-	compareResult: CompareResult,
-	baseline: Manifest | null,
-): Set<string> {
+/** Hashes the current remote head references, and therefore still stores. */
+function knownRemoteHashes(compareResult: CompareResult): Set<string> {
 	const hashes = new Set<string>();
 	for (const entry of Object.values(compareResult.remote?.files ?? {})) {
-		hashes.add(entry.hash);
-	}
-	for (const entry of Object.values(baseline?.files ?? {})) {
 		hashes.add(entry.hash);
 	}
 	return hashes;

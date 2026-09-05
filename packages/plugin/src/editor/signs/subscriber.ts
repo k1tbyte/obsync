@@ -1,9 +1,8 @@
 import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import { editorInfoField } from "obsidian";
 
 import { shouldRedeliverBaseline } from "./helpers";
 import type { SignsProvider } from "./provider";
-import { compareTextField } from "./state";
+import { compareTextField, pathFromState } from "./state";
 
 export const subscriberPlugin = (provider: SignsProvider) =>
 	ViewPlugin.fromClass(
@@ -14,7 +13,7 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 
 			constructor(view: EditorView) {
 				this.view = view;
-				const next = pathFromView(view);
+				const next = pathFromState(view.state);
 				if (next) {
 					this.path = next;
 					provider.registerView(view, next);
@@ -22,7 +21,7 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 			}
 
 			update(u: ViewUpdate): void {
-				const next = pathFromView(u.view);
+				const next = pathFromState(u.view.state);
 				if (next === this.path) {
 					if (next && this.pendingPath === next) {
 						if (u.docChanged) {
@@ -38,8 +37,10 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 				}
 				if (this.path && next) {
 					this.path = next;
-					this.pendingPath = next;
-					provider.changeViewPath(this.view, next, false);
+					// Deliver straight away: waiting for the next document change left
+					// the gutter blank until the user typed something.
+					this.pendingPath = null;
+					provider.changeViewPath(this.view, next, true);
 					return;
 				}
 				if (this.path && !next) {
@@ -69,8 +70,3 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 			}
 		},
 	);
-
-function pathFromView(view: EditorView): string | null {
-	const info = view.state.field(editorInfoField, false);
-	return info?.file?.path ?? null;
-}

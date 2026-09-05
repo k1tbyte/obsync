@@ -18,9 +18,27 @@ import {
 
 type SectionActionKind = "push" | "pull" | "none";
 
-enum ESourceTab {
-	Changes = "changes",
-	History = "history",
+const ESourceTab = {
+	Changes: "changes",
+	History: "history",
+} as const;
+type ESourceTab = (typeof ESourceTab)[keyof typeof ESourceTab];
+
+/** Gives a clickable non-button the semantics a keyboard user needs. */
+function makeActivatable(
+	el: HTMLElement,
+	label: string,
+	activate: () => void,
+): void {
+	el.setAttr("role", "button");
+	el.setAttr("tabindex", "0");
+	el.setAttr("aria-label", label);
+	el.addEventListener("click", () => activate());
+	el.addEventListener("keydown", (event: KeyboardEvent) => {
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		activate();
+	});
 }
 
 export async function openSourceControlHistory(
@@ -60,6 +78,8 @@ export class SourceControlView extends ItemView {
 	private readonly previews: ConflictPreviewManager;
 	private readonly actions: SourceControlActions;
 	private root: HTMLElement | null = null;
+	private statusLineEl: HTMLElement | null = null;
+	private refreshButtonEl: HTMLButtonElement | null = null;
 	private unsubscribe: (() => void) | null = null;
 	private lastSignature = "";
 	private tab: ESourceTab = ESourceTab.Changes;
@@ -153,12 +173,16 @@ export class SourceControlView extends ItemView {
 		}
 		const signature = this.signatureOf(snapshot);
 		if (!force && signature === this.lastSignature) {
+			// Status, progress and button states change far more often than the
+			// tree; updating them in place is what keeps scrolling usable mid-push.
+			this.refreshStatus(snapshot);
 			this.updateSelectionState();
 			return;
 		}
 		const signatureChanged = signature !== this.lastSignature;
 		this.lastSignature = signature;
 		const root = this.root;
+		const scrollTop = root.scrollTop;
 		root.empty();
 		if (signatureChanged) {
 			this.previews.clearCache();
@@ -212,28 +236,48 @@ export class SourceControlView extends ItemView {
 			snapshot,
 			"pull",
 		);
+		root.scrollTop = scrollTop;
 	}
 
+	/** Re-renders only the parts that track sync progress. */
+	private refreshStatus(snapshot: SyncStatusSnapshot): void {
+		if (this.statusLineEl) {
+			this.statusLineEl.empty();
+			this.statusLineEl.removeClass("is-error");
+			this.fillStatusLine(this.statusLineEl, snapshot);
+		}
+		if (this.refreshButtonEl) this.refreshButtonEl.disabled = snapshot.busy;
+	}
+
+	/**
+	 * Identifies the rendered tree, and nothing else.
+	 *
+	 * Progress text and busy state used to be part of it, so every "Pushing
+	 * 3/12…" tick rebuilt the whole tree and threw away scroll position, focus
+	 * and expanded previews. Hashes are part of it, because editing a file that
+	 * is already listed changes no path and no type, and the view would not
+	 * notice.
+	 */
 	private signatureOf(snapshot: SyncStatusSnapshot): string {
 		const diff = snapshot.result?.diff;
-		if (!diff) {
-			return [
-				"empty",
-				snapshot.busy ? "busy" : "idle",
-				snapshot.error ?? "",
-				snapshot.progressText ?? "",
-				snapshot.staleReason ?? "",
-			].join("|");
-		}
+		if (!diff) return `empty|${snapshot.error ?? ""}`;
 		const summarize = (
-			list: ReadonlyArray<{ path: string; type?: string }>,
-		): string => list.map((c) => `${c.type ?? ""}:${c.path}`).join(",");
+			list: ReadonlyArray<{
+				path: string;
+				type?: string;
+				localHash?: string | null;
+				remoteHash?: string | null;
+			}>,
+		): string =>
+			list
+				.map(
+					(c) =>
+						`${c.type ?? ""}:${c.path}:${c.localHash ?? ""}:${c.remoteHash ?? ""}`,
+				)
+				.join(",");
 		return [
-			snapshot.busy ? "busy" : "idle",
 			snapshot.error ?? "",
-			snapshot.progressText ?? "",
-			snapshot.staleReason ?? "",
-			summarize(diff.conflicts.map((c) => ({ path: c.path }))),
+			summarize(diff.conflicts),
 			summarize(diff.localChanges),
 			summarize(diff.remoteChanges),
 		].join("|");
@@ -250,6 +294,7 @@ export class SourceControlView extends ItemView {
 			() => void this.plugin.controller.refresh(),
 		);
 		refresh.disabled = snapshot.busy;
+		this.refreshButtonEl = refresh;
 
 		const pushAll = bar.createEl("button", { text: "Push all" });
 		pushAll.addClass("is-primary");
@@ -306,7 +351,14 @@ export class SourceControlView extends ItemView {
 		parent: HTMLElement,
 		snapshot: SyncStatusSnapshot,
 	): void {
-		const line = parent.createDiv({ cls: "obsync-status-line" });
+		this.statusLineEl = parent.createDiv({ cls: "obsync-status-line" });
+		this.fillStatusLine(this.statusLineEl, snapshot);
+	}
+
+	private fillStatusLine(
+		line: HTMLElement,
+		snapshot: SyncStatusSnapshot,
+	): void {
 		if (snapshot.error) {
 			line.addClass("is-error");
 			line.setText(`Error: ${snapshot.error}`);
@@ -366,14 +418,17 @@ export class SourceControlView extends ItemView {
 			cls: "obsync-section-title",
 			text: title,
 		});
+		titleEl.setAttr(
+			"aria-expanded",
+			String(!this.sections.isCollapsed(section)),
+		);
 		const counts = header.createSpan({ cls: "obsync-section-count" });
 		this.sections.bindCounts(section, counts);
 		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-		titleEl.addEventListener("click", () => {
-			sectionEl.toggleClass(
-				"is-collapsed",
-				this.sections.toggleCollapsed(section),
-			);
+		makeActivatable(titleEl, `${title} section`, () => {
+			const collapsed = this.sections.toggleCollapsed(section);
+			sectionEl.toggleClass("is-collapsed", collapsed);
+			titleEl.setAttr("aria-expanded", String(!collapsed));
 		});
 
 		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
@@ -462,12 +517,14 @@ export class SourceControlView extends ItemView {
 			folder.setText(`${collapsed ? "▸" : "▾"} ${child.name}`);
 			const children = parent.createDiv({ cls: "obsync-tree-children" });
 			children.toggleClass("is-collapsed", collapsed);
-			folder.addEventListener("click", () => {
+			makeActivatable(folder, `${child.name} folder`, () => {
 				const nowCollapsed = this.sections.toggleFolder(section, folderPath);
 				children.toggleClass("is-collapsed", nowCollapsed);
 				folder.toggleClass("is-collapsed", nowCollapsed);
+				folder.setAttr("aria-expanded", String(!nowCollapsed));
 				folder.setText(`${nowCollapsed ? "▸" : "▾"} ${child.name}`);
 			});
+			folder.setAttr("aria-expanded", String(!collapsed));
 			this.renderTree(children, child, section, rowsLen);
 		}
 	}
@@ -480,6 +537,14 @@ export class SourceControlView extends ItemView {
 	): void {
 		const item = parent.createDiv({ cls: "obsync-file-row" });
 		if (row.isConflict) item.addClass("is-conflict");
+		item.setAttr("role", "button");
+		item.setAttr("tabindex", "0");
+		item.setAttr("aria-label", `Open diff for ${row.path}`);
+		item.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			void openDiffView(this.plugin, row.path);
+		});
 
 		const checkbox = item.createEl("input", { type: "checkbox" });
 		checkbox.checked = this.sections.isSelected(section, row.path);

@@ -1,8 +1,12 @@
-import { SHARE_LOG_PATH_LIMIT } from "../constants";
+import { CONFLICT_COPY_LIMIT, SHARE_LOG_PATH_LIMIT } from "../constants";
 import { isTextMergeCandidate } from "../sync/auto-merge";
-import { advanceSessionAfterPush, buildSessionState } from "../sync/baseline";
+import {
+	advanceSessionAfterPush,
+	buildSessionState,
+	mergeWrittenIntoCache,
+} from "../sync/baseline";
 import { tryAutoMergeConflict } from "../sync/conflict-merge";
-import { loadRemoteBytes } from "../sync/content";
+import { loadRemoteBytes, textToBytes } from "../sync/content";
 import {
 	type CompareResult,
 	compare,
@@ -70,7 +74,9 @@ export async function runShareSyncCycle(
 		if (resolution.baseline) {
 			session = { ...session, baseline: resolution.baseline };
 			await hooks.persist(session);
-			result = await compare(current());
+			// Resolution wrote files, so the folder has to be re-scanned — but the
+			// remote head has not moved, so it is not fetched again.
+			result = await compare(current(), result.remote);
 		}
 		if (result.diff.conflicts.length > 0) {
 			throw new Error(
@@ -81,11 +87,14 @@ export async function runShareSyncCycle(
 
 	const pullList = result.diff.remoteChanges.map((c) => c.path);
 	if (pullList.length > 0) {
-		const baseline = await pullPaths(current(), result, pullList);
+		const pulled = await pullPaths(current(), result, pullList);
 		session = buildSessionState(
 			session,
-			baseline,
-			withoutPaths(result.updatedCache, pullList),
+			pulled.baseline,
+			mergeWrittenIntoCache(
+				pulled.written,
+				withoutPaths(result.updatedCache, pullList),
+			),
 		);
 		await hooks.persist(session);
 		await hooks.log(
@@ -146,23 +155,28 @@ async function resolveConflicts(
 		}
 		if (!remoteEntry) continue;
 
-		const merged =
+		const mergeable =
 			Boolean(conflict.baselineHash) &&
 			(await isTextMergeCandidate(
 				deps,
 				conflict.path,
 				remote,
 				deps.state.baseline,
-			)) &&
-			(await tryAutoMergeConflict(deps, conflict));
-		if (!merged) {
-			const copyPath = await writeConflictCopy(
-				deps,
-				conflict.path,
-				remoteHash,
-				remote?.deviceName,
+			));
+		const merged = mergeable
+			? await tryAutoMergeConflict(deps, conflict)
+			: null;
+		if (merged !== null) {
+			await writeBinary(deps.adapter, conflict.path, textToBytes(merged));
+		} else {
+			copies.push(
+				await writeConflictCopy(
+					deps,
+					conflict.path,
+					remoteHash,
+					remote?.deviceName,
+				),
 			);
-			if (copyPath) copies.push(copyPath);
 		}
 		// Acknowledge the remote version so local becomes an ordinary
 		// local-modify (local wins; merged or original content is pushed).
@@ -174,20 +188,48 @@ async function resolveConflicts(
 	return { baseline: { ...template, files }, copies };
 }
 
+/**
+ * Preserves the remote side of an unmergeable conflict next to the file. Throws
+ * rather than giving up: the caller acknowledges the remote version right
+ * after, so a silent failure here would drop it for good.
+ */
 async function writeConflictCopy(
 	deps: EngineDependencies,
 	path: string,
 	remoteHash: string,
 	remoteDeviceName: string | undefined,
-): Promise<string | null> {
+): Promise<string> {
 	const bytes = await loadRemoteBytes(
 		{ storage: deps.storage, key: deps.key },
 		remoteHash,
 	);
-	if (!bytes) return null;
-	const copyPath = conflictCopyPath(path, remoteDeviceName);
+	if (!bytes) {
+		throw new Error(
+			`Cannot keep the remote version of "${path}": its object is missing`,
+		);
+	}
+	const copyPath = await freeConflictCopyPath(deps, path, remoteDeviceName);
 	await writeBinary(deps.adapter, copyPath, bytes);
 	return copyPath;
+}
+
+/** First unused conflict-copy name, so a second conflict the same day on the
+ * same file does not overwrite the first copy. */
+async function freeConflictCopyPath(
+	deps: EngineDependencies,
+	path: string,
+	remoteDeviceName: string | undefined,
+): Promise<string> {
+	const base = conflictCopyPath(path, remoteDeviceName);
+	if (!(await deps.adapter.exists(base))) return base;
+	const dot = base.lastIndexOf(".");
+	const stem = dot > 0 ? base.slice(0, dot) : base;
+	const ext = dot > 0 ? base.slice(dot) : "";
+	for (let n = 2; n < CONFLICT_COPY_LIMIT; n++) {
+		const candidate = `${stem} ${n}${ext}`;
+		if (!(await deps.adapter.exists(candidate))) return candidate;
+	}
+	throw new Error(`Too many conflict copies for "${path}"`);
 }
 
 /** "notes/todo.md" → "notes/todo (conflict from Phone 2026-07-05).md" */

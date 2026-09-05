@@ -83,6 +83,9 @@ npm run build
 - **Unit tests**: `vitest` is configured for core logic testing (`diff.ts`, `hunks.ts`, `concurrency.ts`, `ignore.ts`, etc.).
   - Run tests with `npm run test` or `npm run test:watch`.
   - ALL domain logic (diffs, merging, concurrency, hunks matching, baseline cache) must have complete unit-test coverage.
+- **Hunk source of truth**: a hunk operation must take both texts from `loadHunkSides`, the same function the projection uses, and must verify the sha256 of each side before it applies an index. A view that diffs one pair of texts while the operation recomputes from another will apply the wrong hunk.
+- **Baseline advance**: the baseline may only move for paths an operation actually wrote. Adopting a whole published or remote manifest silently claims every file this device has not downloaded, and the next push publishes them as deletions.
+- **Unreadable is not absent**: a file or directory the scan could not read is reported in `snapshot.skipped` and excluded from the diff. Treating it as missing turns a locked file into a remote deletion.
   - Tests live in the `tests/` directory at the root.
 - **Manual install for testing**: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
   ```
@@ -97,7 +100,7 @@ npm run build
 - Persist settings using `this.loadData()` / `this.saveData()`.
 - Use stable command IDs; avoid renaming once released.
 - Current Obsync sync flow is manual via the `compare`, `push`, and `pull` commands; push/pull run a compare preflight and must surface conflicts instead of choosing a side silently.
-- The `reset-remote-storage` command is destructive and must remain confirmation-gated. It deletes only `manifest.json.enc` and `objects/` in the configured remote prefix, preserves local vault files, clears local `baseline`/`vaultId`, and keeps `salt.bin` by default so the current passphrase-derived key remains valid.
+- The `reset-remote-storage` command is destructive and must remain confirmation-gated. It deletes `manifest.json.enc`, `objects/` and `snapshots/` in the configured remote prefix (history must not outlive the objects it references), preserves local vault files, clears local `baseline`/`vaultId`, and keeps `salt.bin` and `keys.json` so the current passphrase-derived key remains valid.
 - Device transfer exports only the main sync settings as a compact `obsidian://obsync?d=...` URL/QR. The payload should use short field names, omit default-valued fields, and may compress before encryption when that makes the token smaller. Never include the cached passphrase, passphrase cache settings, or local-only display preferences. Import must require the same passphrase and explicit confirmation.
 - Local diagnostics are stored only on the current device in `<configDir>/plugins/obsync/logs.json` and surfaced in the second tab of the plugin settings. They must stay excluded from sync.
 - Shared folders (`src/share/`) sync one vault folder to a share-specific storage prefix with a random per-share AES key (never the vault passphrase). Share manifests store share-root-relative paths (via `ScopedVaultAdapter`) so participants can mount a share at different local folders. Conflict handling must never lose data: clean three-way merge, otherwise local wins and the remote version is written as a conflict copy; delete-vs-edit resolves to the edit.

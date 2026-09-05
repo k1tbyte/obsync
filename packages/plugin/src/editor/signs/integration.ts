@@ -82,7 +82,17 @@ function onRename(
 	const ref = plugin.app.vault.on(
 		"rename",
 		(file: TAbstractFile, oldPath: string) => {
-			if (file instanceof TFile) handler(oldPath, file.path);
+			if (file instanceof TFile) {
+				handler(oldPath, file.path);
+				return;
+			}
+			// A folder rename moves every open file under it; without this their
+			// views keep pointing at paths that no longer exist.
+			for (const open of plugin.app.vault.getFiles()) {
+				if (!open.path.startsWith(`${file.path}/`)) continue;
+				const tail = open.path.slice(file.path.length);
+				handler(`${oldPath}${tail}`, open.path);
+			}
 		},
 	);
 	return () => plugin.app.vault.offref(ref);

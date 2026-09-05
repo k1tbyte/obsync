@@ -8,8 +8,9 @@ import {
 import { createStorageAdapter, type StorageAdapter } from "@/storage";
 import type { EngineDependencies } from "@/sync/engine";
 import { PassphraseRotatedError } from "@/sync/keyfile";
+import { projectSession } from "@/sync/session-state";
 import { loadState } from "@/sync/state";
-import type { LocalState, SessionState } from "@/types";
+import type { SessionState } from "@/types";
 import { notifyInfo } from "@/ui";
 import {
 	loadLocalIgnoreMatcher,
@@ -27,6 +28,8 @@ export interface SessionFactoryDeps {
 	passphrase: PassphraseManager;
 	state: StatePersister;
 	logs: LogService;
+	/** Persists settings an adapter rewrote itself, such as a refreshed token. */
+	persistSettings?: () => Promise<void>;
 }
 
 export function createSessionOpener(
@@ -42,7 +45,12 @@ export function createSessionOpener(
 		const config = activeStorage(deps.settings);
 		const key = JSON.stringify(config);
 		if (cached && cached.key === key) return cached.adapter;
-		const adapter = createStorageAdapter(config);
+		const adapter = createStorageAdapter(config, () => {
+			// The adapter mutated its own config (refreshed token): drop the
+			// memo so the next call rebuilds against the saved values.
+			cached = null;
+			void deps.persistSettings?.();
+		});
 		cached = { key, adapter };
 		return adapter;
 	};
@@ -59,7 +67,7 @@ async function openSession(
 			ESyncLogOperation.Session,
 			"Session blocked because storage is not configured.",
 		);
-		notifyInfo("configure storage backend first.");
+		notifyInfo("Configure a storage backend first.");
 		return null;
 	}
 	if (!(await passphrase.prompt(false))) {
@@ -67,7 +75,7 @@ async function openSession(
 			ESyncLogOperation.Session,
 			"Session blocked because the passphrase is missing.",
 		);
-		notifyInfo("passphrase is required.");
+		notifyInfo("A passphrase is required.");
 		return null;
 	}
 	const adapter = app.vault.adapter;
@@ -93,23 +101,12 @@ async function openSession(
 			symlinks: createSymlinkDetector(adapter, settings.ignoreSymlinks),
 		}),
 		key,
-		state: buildSessionView(currentState, storage.identity()),
+		state: projectSession(currentState, storage.identity()) as SessionState,
 		maxFileBytes: settings.maxFileBytes,
 		concurrency: activeStorage(settings).concurrency,
 		history: settings.fileHistoryEnabled
 			? { maxSnapshots: settings.fileHistoryMaxSnapshots }
 			: undefined,
-	};
-}
-
-function buildSessionView(local: LocalState, identity: string): SessionState {
-	const slot = local.storages[identity];
-	return {
-		deviceId: local.deviceId,
-		deviceName: local.deviceName,
-		vaultId: slot?.vaultId ?? null,
-		baseline: slot?.baseline ?? null,
-		hashCache: local.hashCache,
 	};
 }
 

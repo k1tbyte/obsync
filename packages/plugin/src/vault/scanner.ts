@@ -19,11 +19,6 @@ export interface ScannerOptions {
 	concurrency?: number;
 }
 
-export interface ScanContext {
-	hashCache: Record<string, HashCacheEntry>;
-	updatedCache: Record<string, HashCacheEntry>;
-}
-
 export async function scanVault(
 	adapter: DataAdapter,
 	scope: ScopePolicy,
@@ -38,52 +33,66 @@ export async function scanVault(
 	const ignoredPaths: string[] = [];
 	const updatedCache: Record<string, HashCacheEntry> = {};
 
-	const { files: paths, emptyFolders: rawEmptyFolders } = await listAllFiles(
-		adapter,
-		scope,
-		ROOT,
-	);
+	const {
+		files: paths,
+		emptyFolders: rawEmptyFolders,
+		ignored,
+		unreadable,
+	} = await listAllFiles(adapter, scope, ROOT);
+	ignoredPaths.push(...ignored);
+	for (const dir of unreadable) {
+		skipped.push({
+			path: dir === "" ? "/" : dir,
+			reason: "Directory could not be listed",
+		});
+	}
 	let scanned = 0;
 	await runWithConcurrency(
 		paths,
 		options.concurrency ?? DEFAULT_CONCURRENCY,
 		async (path) => {
-			if (!scope.includes(path)) {
-				if (scope.isIgnoredByPattern(path)) ignoredPaths.push(path);
-				return;
-			}
-			const stat = await adapter.stat(path);
-			if (stat?.type !== "file") return;
-			if (stat.size > options.maxFileBytes) {
-				skipped.push({
+			// One unreadable file (locked, deleted mid-scan) must not fail the whole
+			// scan and with it every operation that starts from one.
+			try {
+				const stat = await adapter.stat(path);
+				if (stat?.type !== "file") return;
+				if (stat.size > options.maxFileBytes) {
+					skipped.push({
+						path,
+						reason: `File exceeds max size (${stat.size} bytes)`,
+					});
+					return;
+				}
+				const entry = await buildEntry(
+					adapter,
 					path,
-					reason: `File exceeds max size (${stat.size} bytes)`,
-				});
+					stat.size,
+					stat.mtime,
+					scope.classify(path),
+					hashCache[path],
+				);
+				files[path] = entry;
+				updatedCache[path] = {
+					mtime: stat.mtime,
+					size: stat.size,
+					hash: entry.hash,
+				};
+			} catch (err) {
+				skipped.push({ path, reason: `Could not read: ${String(err)}` });
 				return;
 			}
-			const cached = hashCache[path];
-			const entry = await buildEntry(
-				adapter,
-				path,
-				stat.size,
-				stat.mtime,
-				scope.classify(path),
-				cached,
-			);
-			files[path] = entry;
-			updatedCache[path] = {
-				mtime: stat.mtime,
-				size: stat.size,
-				hash: entry.hash,
-			};
 			const count = ++scanned;
 			if (options.onProgress && count % 500 === 0) options.onProgress(count);
 		},
 	);
 
-	if (Platform.isWin) {
+	// Both Windows and macOS default to case-insensitive filesystems, and two
+	// spellings of one file would otherwise flap against each other forever.
+	if (Platform.isWin || Platform.isMacOS) {
 		const lower = new Map<string, string>();
-		for (const path of Object.keys(files)) {
+		// Sorted, so the surviving spelling of a case collision is the same on
+		// every scan instead of whichever worker happened to finish first.
+		for (const path of Object.keys(files).sort()) {
 			const lc = path.toLowerCase();
 			const existing = lower.get(lc);
 			if (existing) {
@@ -99,11 +108,25 @@ export async function scanVault(
 		}
 	}
 
-	const emptyFolders = rawEmptyFolders.filter((dir) =>
-		scope.includes(`${dir}/x`),
-	);
+	// Cached entries under an unreadable directory are carried forward: dropping
+	// them would re-hash the whole subtree once it becomes readable again.
+	for (const [path, entry] of Object.entries(hashCache)) {
+		if (!updatedCache[path] && isUnderUnreadable(path, unreadable)) {
+			updatedCache[path] = entry;
+		}
+	}
+
+	// The folders were reached through canDescend already; re-testing them with
+	// a made-up file name would bypass extension-based ignore rules.
+	const emptyFolders = rawEmptyFolders.filter((dir) => scope.canDescend(dir));
 	return {
-		snapshot: { files, skipped, emptyFolders, ignoredPaths },
+		snapshot: {
+			files,
+			skipped,
+			emptyFolders,
+			ignoredPaths,
+			unreadableDirs: unreadable,
+		},
 		updatedCache,
 	};
 }
@@ -129,46 +152,94 @@ async function buildEntry(
 	return { hash, size, mtime, kind };
 }
 
+/**
+ * A file written moments ago may still change within the same mtime tick, so
+ * its cached hash is not trusted. An mtime in the future is a clock artefact,
+ * not a recent write: treating it as racy would re-read that file forever.
+ */
 function isRacy(mtime: number): boolean {
-	return Date.now() - mtime < RACY_INDEX_WINDOW_MS;
+	const age = Date.now() - mtime;
+	return age >= 0 && age < RACY_INDEX_WINDOW_MS;
 }
 
 async function listAllFiles(
 	adapter: DataAdapter,
 	scope: ScopePolicy,
 	dir: string,
-): Promise<{ files: string[]; emptyFolders: string[] }> {
+): Promise<{
+	files: string[];
+	emptyFolders: string[];
+	ignored: string[];
+	unreadable: string[];
+}> {
 	const files: string[] = [];
 	const emptyFolders: string[] = [];
+	// Collected during the walk: the filtering happens here, so a caller looking
+	// at the returned paths alone could never tell what an ignore rule dropped.
+	const ignored: string[] = [];
+	/** Directories the adapter refused to list, whose contents stay unknown. */
+	const unreadable: string[] = [];
 	const stack: string[] = [dir];
+	// A symlinked directory can point back at an ancestor; without this the walk
+	// would follow the cycle forever.
+	const visited = new Set<string>();
 	while (stack.length > 0) {
 		const current = stack.pop() as string;
+		if (visited.has(current)) continue;
+		visited.add(current);
 		const listing = await safeList(adapter, current);
-		const includedFiles = listing.files.filter((file) => scope.includes(file));
-		const includedFolders = listing.folders.filter((folder) =>
-			scope.canDescend(folder),
-		);
+		if (!listing.read) {
+			unreadable.push(current);
+			continue;
+		}
+		const includedFiles: string[] = [];
+		for (const file of listing.files) {
+			if (scope.includes(file)) {
+				includedFiles.push(file);
+			} else if (scope.isIgnoredByPattern(file)) {
+				ignored.push(file);
+			}
+		}
+		const includedFolders: string[] = [];
+		for (const folder of listing.folders) {
+			if (scope.canDescend(folder)) {
+				includedFolders.push(folder);
+			} else if (scope.isIgnoredByPattern(folder)) {
+				ignored.push(folder);
+			}
+		}
+		// Only a directory that is genuinely empty needs an entry: one that holds
+		// ignored or excluded content is not empty, and publishing it would
+		// recreate it as a ghost on every other device.
 		if (
 			current !== dir &&
-			includedFiles.length === 0 &&
-			includedFolders.length === 0
+			listing.files.length === 0 &&
+			listing.folders.length === 0
 		) {
 			emptyFolders.push(current);
 		}
 		for (const file of includedFiles) files.push(file);
 		for (const folder of includedFolders) stack.push(folder);
 	}
-	return { files, emptyFolders };
+	return { files, emptyFolders, ignored, unreadable };
 }
 
 async function safeList(
 	adapter: DataAdapter,
 	dir: string,
-): Promise<{ files: string[]; folders: string[] }> {
+): Promise<{ read: boolean; files: string[]; folders: string[] }> {
 	try {
 		const listing = await adapter.list(dir);
-		return { files: listing.files, folders: listing.folders };
+		return { read: true, files: listing.files, folders: listing.folders };
 	} catch {
-		return { files: [], folders: [] };
+		// Not "the directory is empty": the caller has to know it saw nothing.
+		return { read: false, files: [], folders: [] };
 	}
+}
+
+function isUnderUnreadable(path: string, dirs: ReadonlyArray<string>): boolean {
+	for (const dir of dirs) {
+		if (dir === "" || path.startsWith(`${dir}/`)) return true;
+	}
+	return false;
 }

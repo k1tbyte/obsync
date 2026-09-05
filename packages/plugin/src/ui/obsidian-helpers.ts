@@ -1,4 +1,4 @@
-import type { App, View } from "obsidian";
+import { type App, TFile, type View } from "obsidian";
 import { notifyInfo } from "./notices";
 
 interface FileExplorerReveal extends View {
@@ -11,12 +11,14 @@ interface LeafWithOpenFile {
 
 export async function openInEditor(app: App, path: string): Promise<void> {
 	const file = app.vault.getAbstractFileByPath(path);
-	if (!file) {
-		notifyInfo(`cannot open ${path} (not in vault)`);
+	// Only a file can be opened, and only in a main editor pane: getLeaf(false)
+	// hands back whatever is focused, which for the source control view is the
+	// sidebar the user is clicking in.
+	if (!(file instanceof TFile)) {
+		notifyInfo(`Cannot open ${path}: it is not a file in this vault.`);
 		return;
 	}
-	const leaf = app.workspace.getLeaf(false);
-	if (!leaf) return;
+	const leaf = app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf(true);
 	const opener = leaf as unknown as Partial<LeafWithOpenFile>;
 	if (typeof opener.openFile === "function") {
 		await opener.openFile(file);
@@ -29,7 +31,7 @@ export async function revealInFileExplorer(
 ): Promise<void> {
 	const file = app.vault.getAbstractFileByPath(path);
 	if (!file) {
-		notifyInfo(`cannot reveal ${path}`);
+		notifyInfo(`Cannot reveal ${path}: it is not in this vault.`);
 		return;
 	}
 	const leaves = app.workspace.getLeavesOfType("file-explorer");

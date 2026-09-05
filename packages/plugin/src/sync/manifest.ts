@@ -87,8 +87,13 @@ export async function publishManifestWithGuard(
 	key: EncryptionKey,
 	manifest: Manifest,
 	expectedParentSnapshotId: string | null,
+	baseline: Manifest | null = null,
 ): Promise<void> {
-	const precheck = await fetchRemoteManifest(storage, key);
+	// Both reads go through the same stale-read reconciliation as compare, so a
+	// backend that has not caught up with our own last write does not look like
+	// a competing writer.
+	const fetched = await fetchRemoteManifest(storage, key);
+	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
 	const precheckId = precheck?.snapshotId ?? null;
 	if (precheckId !== expectedParentSnapshotId) {
 		throw new ConcurrentPushError(
@@ -98,12 +103,32 @@ export async function publishManifestWithGuard(
 	}
 	await publishManifest(storage, key, manifest);
 	const verify = await fetchRemoteManifest(storage, key);
-	if (!verify || verify.snapshotId !== manifest.snapshotId) {
-		throw new ConcurrentPushError(
-			"Another device overwrote the manifest immediately after our push.",
-			verify,
-		);
+	if (verify?.snapshotId === manifest.snapshotId) return;
+	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {
+		return;
 	}
+	throw new ConcurrentPushError(
+		"Another device overwrote the manifest immediately after our push.",
+		verify,
+	);
+}
+
+/**
+ * Snapshot ids this device published on the way to `published`. A lagging
+ * backend can still serve any of them; a competing writer always mints a fresh
+ * id, so reading one of ours back is a stale read and not a lost push.
+ */
+function ownSnapshotIds(
+	published: Manifest,
+	baseline: Manifest | null,
+): Set<string> {
+	const ids = new Set<string>();
+	if (published.parentSnapshotId) ids.add(published.parentSnapshotId);
+	if (baseline) {
+		ids.add(baseline.snapshotId);
+		if (baseline.parentSnapshotId) ids.add(baseline.parentSnapshotId);
+	}
+	return ids;
 }
 
 export function buildManifest(

@@ -8,7 +8,11 @@ import {
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
-import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
+import {
+	DIFF_VIEW_TYPE,
+	HUNK_TEXT_MAX_BYTES,
+	SOURCE_CONTROL_VIEW_TYPE,
+} from "../constants";
 import type ObsyncPlugin from "../main";
 import { errorMessage } from "../shared/errors";
 import { formatBytes } from "../shared/format";
@@ -30,15 +34,16 @@ interface DiffViewState {
 	historySize?: number;
 }
 
-enum EDiffMode {
-	Split = "split",
-	Unified = "unified",
-}
+const EDiffMode = {
+	Split: "split",
+	Unified: "unified",
+} as const;
+type EDiffMode = (typeof EDiffMode)[keyof typeof EDiffMode];
 
 const HUNK_OPS = {
-	push: { ok: "pushed hunk", fail: "Push hunk failed" },
-	pull: { ok: "pulled hunk", fail: "Pull hunk failed" },
-	revert: { ok: "reverted hunk", fail: "Revert hunk failed" },
+	push: { ok: "Pushed the hunk.", fail: "Push hunk failed" },
+	pull: { ok: "Pulled the hunk.", fail: "Pull hunk failed" },
+	revert: { ok: "Reverted the hunk.", fail: "Revert hunk failed" },
 } as const;
 
 type HunkOpKind = keyof typeof HUNK_OPS;
@@ -59,6 +64,8 @@ export class DiffView extends ItemView {
 	private hunkCards: HTMLElement[] = [];
 	private currentHunkIndex = -1;
 	private rendering = false;
+	private refreshPending = false;
+	private hunkOpInFlight = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
 		super(leaf);
@@ -79,7 +86,14 @@ export class DiffView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { path: this.path };
+		// The history fields belong here too, or a restored workspace reopens a
+		// version diff as an ordinary one against the current head.
+		return {
+			path: this.path,
+			historyHash: this.historyHash ?? undefined,
+			historyLabel: this.historyHash ? this.historyLabel : undefined,
+			historySize: this.historySize,
+		};
 	}
 
 	async setState(state: DiffViewState, result: ViewStateResult): Promise<void> {
@@ -100,6 +114,7 @@ export class DiffView extends ItemView {
 	}
 
 	private unsubStatus: (() => void) | null = null;
+	private cancelStatusDebounce: (() => void) | null = null;
 
 	async onOpen(): Promise<void> {
 		this.contentEl.empty();
@@ -117,6 +132,7 @@ export class DiffView extends ItemView {
 		);
 
 		this.unsubStatus = this.plugin.controller.subscribe(handleStatus);
+		this.cancelStatusDebounce = () => handleStatus.cancel();
 
 		this.renderShell();
 	}
@@ -126,13 +142,21 @@ export class DiffView extends ItemView {
 			this.unsubStatus();
 			this.unsubStatus = null;
 		}
+		// The debounce holds a timer that would refresh a closed view.
+		this.cancelStatusDebounce?.();
+		this.cancelStatusDebounce = null;
 		this.destroyViews();
 		this.contentEl.empty();
 	}
 
 	private async refreshModel(): Promise<void> {
 		if (!this.path) return;
-		if (this.rendering) return;
+		if (this.rendering) {
+			// Remember the request instead of dropping it: the state that triggered
+			// it is newer than the render already in flight.
+			this.refreshPending = true;
+			return;
+		}
 		this.rendering = true;
 		try {
 			this.renderLoading();
@@ -167,6 +191,10 @@ export class DiffView extends ItemView {
 			this.renderError(errorMessage(err));
 		} finally {
 			this.rendering = false;
+			if (this.refreshPending) {
+				this.refreshPending = false;
+				void this.refreshModel();
+			}
 		}
 	}
 
@@ -338,10 +366,22 @@ export class DiffView extends ItemView {
 			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
 			onSelectHunk: (i) => this.setCurrentHunk(i),
 		};
+		// A forced diff goes up to FORCE_DIFF_MAX_BYTES, but a hunk operation
+		// refuses anything past HUNK_TEXT_MAX_BYTES: offering the arrows here
+		// would hand the user a button that always fails.
+		const actionable =
+			model.leftSize <= HUNK_TEXT_MAX_BYTES &&
+			model.rightSize <= HUNK_TEXT_MAX_BYTES;
 		for (const hunk of hunks) {
 			this.hunkCards.push(
-				renderHunkCard(list, hunk, model.direction, callbacks),
+				renderHunkCard(list, hunk, model.direction, callbacks, actionable),
 			);
+		}
+		if (!actionable) {
+			list.createDiv({
+				cls: "obsync-diff-hint",
+				text: "This file is too large for per-hunk actions; use the whole-file buttons above.",
+			});
 		}
 		if (
 			this.currentHunkIndex >= 0 &&
@@ -421,16 +461,26 @@ export class DiffView extends ItemView {
 
 	private async runHunkOp(kind: HunkOpKind, index: number): Promise<void> {
 		const path = this.path;
-		if (!path) return;
+		const model = this.model;
+		if (!path || !model) return;
+		// One hunk at a time: a second click would address indices computed
+		// against the state the first click is still changing.
+		if (this.hunkOpInFlight) return;
+		this.hunkOpInFlight = true;
 		const selected = new Set([index]);
+		const expected = { left: model.leftHash, right: model.rightHash };
 		const controller = this.plugin.controller;
 		const run = {
-			push: () => controller.pushHunks(path, selected),
-			pull: () => controller.pullHunks(path, selected),
-			revert: () => controller.revertHunks(path, selected),
+			push: () => controller.pushHunks(path, selected, expected),
+			pull: () => controller.pullHunks(path, selected, expected),
+			revert: () => controller.revertHunks(path, selected, expected),
 		}[kind];
 		const op = HUNK_OPS[kind];
-		await this.runOnFile(run, op.ok, op.fail);
+		try {
+			await this.runOnFile(run, op.ok, op.fail);
+		} finally {
+			this.hunkOpInFlight = false;
+		}
 	}
 
 	private async resolveKeepLocal(): Promise<void> {
@@ -438,7 +488,7 @@ export class DiffView extends ItemView {
 		if (!path) return;
 		await this.runOnFile(
 			() => this.plugin.controller.resolveConflictKeepLocal(path),
-			"kept local version",
+			"Kept the local version.",
 			"Resolve keep local failed",
 			() => this.advanceAfterResolve(path),
 		);
@@ -449,7 +499,7 @@ export class DiffView extends ItemView {
 		if (!path) return;
 		await this.runOnFile(
 			() => this.plugin.controller.resolveConflictAcceptRemote(path),
-			"accepted remote version",
+			"Accepted the remote version.",
 			"Resolve accept remote failed",
 			() => this.advanceAfterResolve(path),
 		);
@@ -477,8 +527,7 @@ export class DiffView extends ItemView {
 	private async advanceAfterResolve(resolvedPath: string): Promise<void> {
 		const next = this.getNextConflictPath(resolvedPath);
 		if (next) {
-			this.path = next;
-			this.currentHunkIndex = -1;
+			this.showFile(next);
 			await this.refreshModel();
 			return;
 		}
@@ -515,9 +564,22 @@ export class DiffView extends ItemView {
 	private async navigateFile(delta: number): Promise<void> {
 		const target = this.getAdjacentPath(delta);
 		if (!target) return;
-		this.path = target;
-		this.currentHunkIndex = -1;
+		this.showFile(target);
 		await this.refreshModel();
+	}
+
+	/** Moves the view to another file, resetting everything that belonged to the
+	 * previous one — `forceText` in particular, or the next file would be loaded
+	 * as text in defiance of the never-load-binary rule. */
+	private showFile(path: string): void {
+		this.path = path;
+		this.currentHunkIndex = -1;
+		this.forceText = false;
+		this.mergePanel.reset();
+		// updateHeader is not in the public typings, but without it the tab keeps
+		// the previous file's name.
+		const leaf = this.leaf as Partial<{ updateHeader: () => void }>;
+		leaf.updateHeader?.();
 	}
 
 	private destroyViews(): void {

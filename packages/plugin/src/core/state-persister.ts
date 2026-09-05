@@ -8,6 +8,9 @@ export class StatePersister {
 	private current: LocalState | null = null;
 	private pendingHashCacheState: LocalState | null = null;
 	private flushTimer: number | null = null;
+	/** Serialises every write: a debounced flush and a direct persist otherwise
+	 * interleave and the older state can land last. */
+	private writes: Promise<void> = Promise.resolve();
 
 	constructor(
 		private readonly adapter: DataAdapter,
@@ -30,7 +33,22 @@ export class StatePersister {
 			return;
 		}
 		this.cancelTimer();
-		await saveState(this.adapter, this.configDir, state);
+		await this.write(state);
+	}
+
+	private write(state: LocalState): Promise<void> {
+		return this.enqueue(() => saveState(this.adapter, this.configDir, state));
+	}
+
+	/** Every write to the state file goes through here, in order. */
+	private enqueue<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.writes.then(task, task);
+		// The chain must survive a failed write, or every later one is skipped.
+		this.writes = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	/**
@@ -41,21 +59,31 @@ export class StatePersister {
 	 */
 	async flush(): Promise<void> {
 		const pending = this.takePending();
-		if (pending) await saveState(this.adapter, this.configDir, pending);
+		if (pending) await this.write(pending);
+		else await this.writes;
 	}
 
 	async reset(): Promise<LocalState> {
 		this.cancelTimer();
-		const next = await resetState(this.adapter, this.configDir, this.current);
+		// resetState writes the same file the chain does, so it has to take its
+		// turn rather than race a persist that is already in flight.
+		const next = await this.enqueue(() =>
+			resetState(this.adapter, this.configDir, this.current),
+		);
 		this.current = next;
 		return next;
 	}
 
+	/**
+	 * Last-ditch write. `onunload` is synchronous so it may not complete, and
+	 * the promise is deliberately detached - but never unhandled: a rejection
+	 * here would surface long after the plugin is gone.
+	 */
 	dispose(): void {
-		// Last-ditch: onunload is synchronous so this write may not complete.
-		// flush() on earlier lifecycle hooks is the real safety net.
 		const pending = this.takePending();
-		if (pending) void saveState(this.adapter, this.configDir, pending);
+		if (pending) {
+			this.write(pending).catch(() => undefined);
+		}
 	}
 
 	private takePending(): LocalState | null {
@@ -76,7 +104,7 @@ export class StatePersister {
 			const pending = this.pendingHashCacheState;
 			this.pendingHashCacheState = null;
 			if (!pending) return;
-			void saveState(this.adapter, this.configDir, pending);
+			this.write(pending).catch(() => undefined);
 		}, PERSIST_STATE_DEBOUNCE_MS);
 	}
 

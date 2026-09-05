@@ -1,11 +1,14 @@
-import { Text } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
+import { sha256Hex } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import { textToBytes } from "@/sync/content";
 import type { SyncController } from "@/sync/controller";
 import { notifyError, notifyInfo } from "@/ui";
 
-import { pathFromState } from "./compute";
-import { setCompareTextEffect } from "./state";
+import { toCmText } from "./helpers";
+import { pathFromState, setCompareTextEffect } from "./state";
 
 const BASELINE_CACHE_MAX = 64;
 
@@ -18,7 +21,12 @@ export class SignsProvider {
 	private readonly viewToPath = new Map<EditorView, string>();
 	private readonly pathToViews = new Map<string, Set<EditorView>>();
 	private readonly cache = new Map<string, CachedBaseline>();
-	private readonly inFlight = new Map<string, Promise<void>>();
+	private readonly inFlight = new Map<
+		string,
+		{ generation: number; promise: Promise<void> }
+	>();
+	/** Bumped on every invalidation so stale loads can be discarded. */
+	private generation = 0;
 
 	constructor(private readonly controller: SyncController) {}
 
@@ -73,10 +81,27 @@ export class SignsProvider {
 		return this.cache.has(path);
 	}
 
-	async pushHunk(path: string, index: number): Promise<void> {
+	/**
+	 * `currentText` is the editor buffer the hunk index was computed against.
+	 * The operation reads the file from disk, so the two are compared before
+	 * anything is published: an unsaved buffer must not push a different hunk.
+	 */
+	async pushHunk(
+		path: string,
+		index: number,
+		currentText: string,
+	): Promise<void> {
+		const baseline = this.cache.get(path);
+		if (!baseline) {
+			notifyError("Push hunk failed", new Error("Baseline is not loaded yet"));
+			return;
+		}
 		try {
-			await this.controller.pushHunks(path, new Set([index]));
-			notifyInfo("pushed hunk");
+			await this.controller.pushHunks(path, new Set([index]), {
+				left: baseline.hash,
+				right: await sha256Hex(textToBytes(currentText)),
+			});
+			notifyInfo("Pushed the hunk.");
 		} catch (err) {
 			notifyError("Push hunk failed", err);
 		}
@@ -100,12 +125,8 @@ export class SignsProvider {
 		void this.reload(newPath);
 	}
 
-	invalidatePath(path: string): void {
-		this.cache.delete(path);
-		void this.reload(path);
-	}
-
 	invalidateAll(): void {
+		this.generation++;
 		this.cache.clear();
 		for (const path of this.pathToViews.keys()) {
 			void this.reload(path);
@@ -125,6 +146,7 @@ export class SignsProvider {
 	}
 
 	clearAll(): void {
+		this.generation++;
 		for (const view of this.viewToPath.keys()) safeDispatch(view, null);
 		this.viewToPath.clear();
 		this.pathToViews.clear();
@@ -159,11 +181,23 @@ export class SignsProvider {
 	}
 
 	private async reload(path: string): Promise<void> {
+		// A request started before the last invalidation would deliver the very
+		// baseline that was just thrown away, so only requests from the current
+		// generation are reused or applied.
+		const generation = this.generation;
 		const existing = this.inFlight.get(path);
-		if (existing) return existing;
+		if (existing && existing.generation === generation) return existing.promise;
 		const promise = (async () => {
 			try {
-				const snapshot = await this.controller.loadBaselineForPath(path);
+				const snapshot = await this.controller
+					.loadBaselineForPath(path)
+					.catch((err: unknown) => {
+						// Callers fire this with `void`; letting it reject would surface
+						// as an unhandled rejection instead of "no signs for this file".
+						reportWarning(`Could not load the baseline for "${path}".`, err);
+						return null;
+					});
+				if (this.generation !== generation) return;
 				const text = snapshot ? toCmText(snapshot.text) : null;
 				if (snapshot && text) {
 					this.touchCache(path, { hash: snapshot.hash, text });
@@ -172,10 +206,12 @@ export class SignsProvider {
 				}
 				this.broadcast(path, text);
 			} finally {
-				this.inFlight.delete(path);
+				if (this.inFlight.get(path)?.generation === generation) {
+					this.inFlight.delete(path);
+				}
 			}
 		})();
-		this.inFlight.set(path, promise);
+		this.inFlight.set(path, { generation, promise });
 		return promise;
 	}
 
@@ -220,10 +256,4 @@ function safeDispatch(
 			}
 		});
 	}
-}
-
-function toCmText(raw: string): Text {
-	let normalized = raw.replace(/\r\n?/g, "\n");
-	if (normalized.endsWith("\n")) normalized = normalized.slice(0, -1);
-	return Text.of(normalized.split("\n"));
 }

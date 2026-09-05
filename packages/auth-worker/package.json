@@ -5,10 +5,12 @@
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"typecheck": "tsc -noEmit"
+		"typecheck": "tsc -noEmit",
+		"test": "vitest run --passWithNoTests"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
+		"vitest": "^4.1.11",
 		"wrangler": "^3.114.17"
 	}
 }

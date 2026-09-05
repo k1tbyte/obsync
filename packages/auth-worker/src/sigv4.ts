@@ -39,8 +39,12 @@ export async function presignS3(
 		? endpoint.host
 		: `${target.bucket}.${endpoint.host}`;
 	const basePath = endpoint.pathname.replace(/\/+$/, "");
+	// A bucket-level call (list) has no key: its canonical URI is the bucket
+	// itself, and a trailing slash would sign a path S3 does not resolve to it.
 	const objectPath = target.forcePathStyle
-		? `/${target.bucket}/${key}`
+		? key
+			? `/${target.bucket}/${key}`
+			: `/${target.bucket}`
 		: `/${key}`;
 	const canonicalUri = encodePath(`${basePath}${objectPath}`);
 

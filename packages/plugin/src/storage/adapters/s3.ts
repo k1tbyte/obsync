@@ -16,9 +16,7 @@ import {
 	type SettingsFieldSpec,
 } from "../field-spec";
 import type { StorageAdapter } from "../types";
-import { delay, RETRY_DELAYS_MS, withTimeout } from "./util";
-
-const S3_TIMEOUT_MS = 30_000;
+import { STORAGE_TIMEOUT_MS, withRetry, withTimeout } from "./util";
 
 export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -83,6 +81,9 @@ export function describeS3Target(config: S3StorageConfig): string {
 export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	assertConfig(config);
 	const client = new S3Client({
+		// One retry policy for every backend lives in withRetry; leaving the SDK
+		// default on top of it would multiply out to a dozen attempts per call.
+		maxAttempts: 1,
 		region: config.region || "auto",
 		endpoint: config.endpoint || undefined,
 		forcePathStyle: config.forcePathStyle,
@@ -95,7 +96,6 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	const fullKey = (key: string): string => `${prefix}${key}`;
 
 	return {
-		capabilities: { canList: true },
 		identity() {
 			return s3Identity(config);
 		},
@@ -130,8 +130,12 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 						),
 					);
 					const body = out.Body;
-					if (!body) return null;
-					return await readBodyToBytes(body);
+					// A present object always has a body, empty or not. Missing means
+					// the response was not what it claimed, which is an error.
+					if (!body) throw new Error(`S3 returned no body for "${key}"`);
+					// The command resolves once the headers arrive; a connection that
+					// dies mid-stream would otherwise hang past every deadline.
+					return await s3Timeout(readBodyToBytes(body));
 				} catch (err) {
 					if (isNotFound(err)) return null;
 					throw err;
@@ -153,6 +157,28 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 				),
 			);
 		},
+		async putIfAbsent(key, body, contentType) {
+			try {
+				await withRetry(() =>
+					s3Timeout(
+						client.send(
+							new PutObjectCommand({
+								Bucket: config.bucket,
+								Key: fullKey(key),
+								Body: body,
+								ContentType: contentType ?? "application/octet-stream",
+								CacheControl: "no-cache, no-store, must-revalidate",
+								IfNoneMatch: "*",
+							}),
+						),
+					),
+				);
+				return true;
+			} catch (err) {
+				if (isPreconditionFailed(err)) return false;
+				throw err;
+			}
+		},
 		async delete(key) {
 			await withRetry(() =>
 				s3Timeout(
@@ -169,17 +195,23 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			const keys: string[] = [];
 			let token: string | undefined;
 			do {
-				const out = await s3Timeout(
-					client.send(
-						new ListObjectsV2Command({
-							Bucket: config.bucket,
-							Prefix: fullKey(keyPrefix),
-							ContinuationToken: token,
-						}),
+				const out = await withRetry(() =>
+					s3Timeout(
+						client.send(
+							new ListObjectsV2Command({
+								Bucket: config.bucket,
+								Prefix: fullKey(keyPrefix),
+								ContinuationToken: token,
+							}),
+						),
 					),
 				);
 				for (const item of out.Contents ?? []) {
-					if (item.Key) keys.push(relativeKey(item.Key, prefix));
+					if (!item.Key) continue;
+					const relative = relativeKey(item.Key, prefix);
+					// A folder marker under the prefix relativises to "", which is not
+					// an object any caller can ask for.
+					if (relative) keys.push(relative);
 				}
 				token = out.NextContinuationToken;
 			} while (token);
@@ -190,7 +222,14 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 
 /** Every S3 call gets the same deadline. */
 function s3Timeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(promise, S3_TIMEOUT_MS);
+	return withTimeout(promise, STORAGE_TIMEOUT_MS);
+}
+
+/** The conditional write lost the race: another device wrote the key first. */
+function isPreconditionFailed(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+	return e.name === "PreconditionFailed" || e.$metadata?.httpStatusCode === 412;
 }
 
 function assertConfig(config: S3StorageConfig): void {
@@ -208,6 +247,10 @@ function relativeKey(key: string, prefix: string): string {
 function isNotFound(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+	// NoSuchBucket is also a 404, but it means the configuration is wrong, not
+	// that the vault is empty — reporting it as absence would re-upload
+	// everything into nowhere.
+	if (e.name === "NoSuchBucket") return false;
 	return (
 		e.name === "NoSuchKey" ||
 		e.name === "NotFound" ||
@@ -217,70 +260,11 @@ function isNotFound(err: unknown): boolean {
 
 async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
 	if (body instanceof Uint8Array) return body;
-	if (body instanceof ArrayBuffer) return new Uint8Array(body);
-	if (
-		typeof (body as { transformToByteArray?: () => Promise<Uint8Array> })
-			.transformToByteArray === "function"
-	) {
-		return (
-			body as { transformToByteArray: () => Promise<Uint8Array> }
-		).transformToByteArray();
-	}
-	if (body instanceof Blob) {
-		return new Uint8Array(await body.arrayBuffer());
-	}
-	const stream = body as ReadableStream<Uint8Array> | undefined;
-	if (stream && typeof stream.getReader === "function") {
-		return readStream(stream);
+	const stream = body as {
+		transformToByteArray?: () => Promise<Uint8Array>;
+	};
+	if (typeof stream.transformToByteArray === "function") {
+		return stream.transformToByteArray();
 	}
 	throw new Error("Unsupported S3 response body type");
-}
-
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-	let lastErr: unknown;
-	for (let i = 0; i <= RETRY_DELAYS_MS.length; i++) {
-		try {
-			return await fn();
-		} catch (err) {
-			lastErr = err;
-			if (!isRetryable(err) || i === RETRY_DELAYS_MS.length) break;
-			await delay(RETRY_DELAYS_MS[i] as number);
-		}
-	}
-	throw lastErr;
-}
-
-function isRetryable(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-	if (
-		e.name === "TimeoutError" ||
-		e.name === "NetworkingError" ||
-		e.name === "RequestTimeout"
-	)
-		return true;
-	const status = e.$metadata?.httpStatusCode;
-	return status !== undefined && status >= 500;
-}
-
-async function readStream(
-	stream: ReadableStream<Uint8Array>,
-): Promise<Uint8Array> {
-	const reader = stream.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	while (true) {
-		const { value, done } = await reader.read();
-		if (done) break;
-		if (!value) continue;
-		chunks.push(value);
-		total += value.length;
-	}
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		out.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return out;
 }

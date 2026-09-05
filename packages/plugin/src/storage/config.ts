@@ -1,12 +1,14 @@
-export enum EStorageBackend {
-	S3 = "s3",
-	WebDAV = "webdav",
-	GoogleDrive = "google-drive",
-	ShareBroker = "share-broker",
-}
+export const EStorageBackend = {
+	S3: "s3",
+	WebDAV: "webdav",
+	GoogleDrive: "google-drive",
+	ShareBroker: "share-broker",
+} as const;
+export type EStorageBackend =
+	(typeof EStorageBackend)[keyof typeof EStorageBackend];
 
 export interface S3StorageConfig {
-	kind: EStorageBackend.S3;
+	kind: typeof EStorageBackend.S3;
 	endpoint: string;
 	region: string;
 	bucket: string;
@@ -18,7 +20,7 @@ export interface S3StorageConfig {
 }
 
 export interface WebDAVStorageConfig {
-	kind: EStorageBackend.WebDAV;
+	kind: typeof EStorageBackend.WebDAV;
 	baseUrl: string;
 	basePath: string;
 	username: string;
@@ -27,7 +29,7 @@ export interface WebDAVStorageConfig {
 }
 
 export interface GoogleDriveStorageConfig {
-	kind: EStorageBackend.GoogleDrive;
+	kind: typeof EStorageBackend.GoogleDrive;
 	folderName: string;
 	clientId: string;
 	authServerUrl: string;
@@ -43,7 +45,7 @@ export interface GoogleDriveStorageConfig {
  * scoped to this share's prefix.
  */
 export interface ShareBrokerStorageConfig {
-	kind: EStorageBackend.ShareBroker;
+	kind: typeof EStorageBackend.ShareBroker;
 	brokerUrl: string;
 	shareToken: string;
 	concurrency: number;

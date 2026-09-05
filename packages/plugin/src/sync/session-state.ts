@@ -1,7 +1,6 @@
 import type {
 	LocalSnapshot,
 	LocalState,
-	Manifest,
 	ManifestEntry,
 	SessionState,
 } from "../types";
@@ -11,20 +10,25 @@ import {
 	type EngineDependencies,
 	filterManifestForDiff,
 } from "./engine";
+import type { OperationOutcome } from "./operations/types";
 
 export function recomputeAfterWrite(
 	prevResult: CompareResult,
 	freshState: SessionState,
-	newRemote: Manifest | null,
-	touchedPaths: ReadonlySet<string>,
+	outcome: OperationOutcome,
 	scope: EngineDependencies["scope"],
 ): CompareResult {
 	const baseline = freshState.baseline;
 	const baselineFiles = baseline?.files ?? {};
-	const remoteFiles = newRemote?.files ?? {};
+	const remoteFiles = outcome.newRemote?.files ?? {};
 	const files: Record<string, ManifestEntry> = { ...prevResult.snapshot.files };
-	for (const path of touchedPaths) {
-		const next = baselineFiles[path] ?? remoteFiles[path];
+	for (const path of outcome.touchedPaths) {
+		// An operation that rewrote the file says so explicitly (null = it is now
+		// absent); only paths it did not touch locally may be assumed equal to
+		// baseline/remote.
+		const next = outcome.localEntries?.has(path)
+			? outcome.localEntries.get(path)
+			: (baselineFiles[path] ?? remoteFiles[path]);
 		if (next) {
 			files[path] = next;
 		} else {
@@ -37,12 +41,12 @@ export function recomputeAfterWrite(
 	};
 	const result = diff({
 		local: snapshot,
-		remote: filterManifestForDiff(newRemote, scope),
+		remote: filterManifestForDiff(outcome.newRemote, scope),
 		baseline: filterManifestForDiff(baseline, scope),
 	});
 	return {
 		snapshot,
-		remote: newRemote,
+		remote: outcome.newRemote,
 		diff: result,
 		updatedCache: freshState.hashCache,
 	};

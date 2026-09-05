@@ -2,25 +2,30 @@ import type { DataAdapter } from "obsidian";
 
 import { PLUGIN_ID } from "../constants";
 import { randomId } from "../crypto";
+import { writeAtomic } from "../vault/atomic-write";
+import { ensureParent } from "../vault/io";
 
 const LOG_FILE_NAME = "logs.json";
 const MAX_LOG_ENTRIES = 200;
 const MAX_LOG_DETAILS = 50;
 
-export enum ESyncLogLevel {
-	Info = "info",
-	Warn = "warn",
-	Error = "error",
-}
+export const ESyncLogLevel = {
+	Info: "info",
+	Warn: "warn",
+	Error: "error",
+} as const;
+export type ESyncLogLevel = (typeof ESyncLogLevel)[keyof typeof ESyncLogLevel];
 
-export enum ESyncLogOperation {
-	Compare = "compare",
-	Push = "push",
-	Pull = "pull",
-	Reset = "reset",
-	Session = "session",
-	Share = "share",
-}
+export const ESyncLogOperation = {
+	Compare: "compare",
+	Push: "push",
+	Pull: "pull",
+	Reset: "reset",
+	Session: "session",
+	Share: "share",
+} as const;
+export type ESyncLogOperation =
+	(typeof ESyncLogOperation)[keyof typeof ESyncLogOperation];
 
 export interface SyncLogEntry {
 	id: string;
@@ -52,13 +57,9 @@ export async function loadSyncLogs(
 		if (!Array.isArray(parsed)) {
 			return [];
 		}
-		return parsed
-			.filter(isSyncLogEntry)
-			.map((entry) => ({
-				...entry,
-				details: trimDetails(entry.details),
-			}))
-			.slice(0, MAX_LOG_ENTRIES);
+		// Entries were already trimmed when they were written; trimming again
+		// would drop the "... N more" line and cut a real detail in its place.
+		return parsed.filter(isSyncLogEntry).slice(0, MAX_LOG_ENTRIES);
 	} catch {
 		return [];
 	}
@@ -120,24 +121,4 @@ function isSyncLogEntry(value: unknown): value is SyncLogEntry {
 		Array.isArray(entry.details) &&
 		entry.details.every((detail) => typeof detail === "string")
 	);
-}
-
-async function ensureParent(adapter: DataAdapter, path: string): Promise<void> {
-	const slash = path.lastIndexOf("/");
-	if (slash <= 0) return;
-	const dir = path.slice(0, slash);
-	if (!(await adapter.exists(dir))) {
-		await adapter.mkdir(dir);
-	}
-}
-
-async function writeAtomic(
-	adapter: DataAdapter,
-	path: string,
-	data: string,
-): Promise<void> {
-	const tmp = `${path}.tmp`;
-	await adapter.write(tmp, data);
-	if (await adapter.exists(path)) await adapter.remove(path);
-	await adapter.rename(tmp, path);
 }

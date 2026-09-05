@@ -17,13 +17,14 @@ import {
 	setCompareTextEffect,
 } from "./state";
 
-enum ESignKind {
-	Add = "add",
-	Change = "change",
-	Delete = "delete",
-	TopDelete = "topdelete",
-	ChangeDelete = "changedelete",
-}
+const ESignKind = {
+	Add: "add",
+	Change: "change",
+	Delete: "delete",
+	TopDelete: "topdelete",
+	ChangeDelete: "changedelete",
+} as const;
+type ESignKind = (typeof ESignKind)[keyof typeof ESignKind];
 
 const KIND_CLASS: Record<ESignKind, string> = {
 	[ESignKind.Add]: "obsync-sign-add",
@@ -79,7 +80,9 @@ export const signsField = StateField.define<RangeSet<GutterMarker>>({
 			prevChunks === nextChunks &&
 			prevBase === nextBase
 		) {
-			return prev;
+			// The chunk set has not been recomputed yet, but the document moved:
+			// unmapped ranges would point past the end and the gutter would throw.
+			return tr.docChanged ? prev.map(tr.changes) : prev;
 		}
 		return buildMarkers(tr.state);
 	},

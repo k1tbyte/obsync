@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 
 import { FORCE_DIFF_MAX_BYTES, HUNK_TEXT_MAX_BYTES } from "../constants";
-import type { EncryptionKey } from "../crypto";
+import { type EncryptionKey, sha256Hex } from "../crypto";
 import type { ObjectStorage } from "../storage/types";
 import type { Conflict, EChangeType, FileChange, Manifest } from "../types";
 import {
@@ -11,15 +11,18 @@ import {
 	loadBaselineText,
 	loadLocalBytes,
 	loadRemoteBytes,
+	textToBytes,
 } from "./content";
 import { type ComputedHunks, computeHunks } from "./hunks";
 
-export enum EDiffDirection {
-	Local = "local",
-	Remote = "remote",
-	Conflict = "conflict",
-	History = "history",
-}
+export const EDiffDirection = {
+	Local: "local",
+	Remote: "remote",
+	Conflict: "conflict",
+	History: "history",
+} as const;
+export type EDiffDirection =
+	(typeof EDiffDirection)[keyof typeof EDiffDirection];
 
 export interface FileDiffModel {
 	path: string;
@@ -32,6 +35,10 @@ export interface FileDiffModel {
 	leftLabel: string;
 	rightLabel: string;
 	isBinary: boolean;
+	/** sha256 of each side. An operation that applies a hunk index from this
+	 * model checks them, so a file edited meanwhile cannot be misaddressed. */
+	leftHash: string;
+	rightHash: string;
 	/** True when binary purely because a side exceeds the diff size cap and an
 	 * on-demand ("show anyway") diff would succeed. */
 	forceTextAvailable: boolean;
@@ -205,6 +212,8 @@ async function assemble(
 			: computeHunks(left.text, right.text),
 		isBinary,
 		forceTextAvailable,
+		leftHash: await sha256Hex(textToBytes(left.text)),
+		rightHash: await sha256Hex(textToBytes(right.text)),
 		leftSize: left.size,
 		rightSize: right.size,
 	};

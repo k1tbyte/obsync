@@ -2,7 +2,9 @@ import type { Chunk } from "@codemirror/merge";
 import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
-import { findSyncHunkIndexForLine, presentChunk } from "./helpers";
+import type { SyncHunk } from "@/sync/hunks";
+
+import { findSyncHunkForLine, presentChunk } from "./helpers";
 import type { SignsProvider } from "./provider";
 import { chunksField, compareTextField } from "./state";
 
@@ -30,20 +32,13 @@ export function showHunkPopupAt(
 	);
 	if (!chunk) return false;
 	const path = provider.getViewPath(view);
-	const syncHunkIndex =
+	const syncHunk =
 		path === null
 			? null
-			: findSyncHunkIndexForLine(lineNumber, baseline, view.state.doc);
+			: findSyncHunkForLine(lineNumber, baseline, view.state.doc);
 
 	dismissPopup();
-	const popup = buildPopup(
-		view,
-		chunk,
-		baseline,
-		provider,
-		path,
-		syncHunkIndex,
-	);
+	const popup = buildPopup(view, chunk, baseline, provider, path, syncHunk);
 	document.body.appendChild(popup);
 	positionPopup(popup, event);
 	activePopup = popup;
@@ -84,9 +79,13 @@ function buildPopup(
 	baseline: Text,
 	provider: SignsProvider,
 	path: string | null,
-	syncHunkIndex: number | null,
+	syncHunk: SyncHunk | null,
 ): HTMLElement {
-	const presentation = presentChunk(chunk, baseline, view.state.doc);
+	// Show exactly what "Push hunk" would send: the sync hunk when one exists,
+	// the finer CodeMirror chunk only when there is nothing to push.
+	const presentation = syncHunk
+		? presentSyncHunk(syncHunk)
+		: presentChunk(chunk, baseline, view.state.doc);
 	const popup = document.createElement("div");
 	popup.className = POPUP_CLASS;
 	popup.setAttribute("role", "dialog");
@@ -125,14 +124,14 @@ function buildPopup(
 	}
 
 	const footer = popup.createDiv({ cls: "obsync-hunk-popup-footer" });
-	if (path !== null && syncHunkIndex !== null) {
+	if (path !== null && syncHunk !== null) {
 		const pushBtn = footer.createEl("button", {
 			cls: "obsync-hunk-popup-push mod-cta",
 			text: "Push hunk",
 		});
 		pushBtn.type = "button";
 		pushBtn.addEventListener("click", () => {
-			void provider.pushHunk(path, syncHunkIndex);
+			void provider.pushHunk(path, syncHunk.index, view.state.doc.toString());
 			dismissPopup();
 		});
 	}
@@ -142,10 +141,30 @@ function buildPopup(
 	});
 	revertBtn.type = "button";
 	revertBtn.addEventListener("click", () => {
-		revertHunk(view, chunk, baseline);
+		// The popup presents the sync hunk when there is one, so reverting the
+		// finer CodeMirror chunk would undo less than the user was shown.
+		if (syncHunk) {
+			revertSyncHunk(view, syncHunk, baseline);
+		} else {
+			revertHunk(view, chunk, baseline);
+		}
 		dismissPopup();
 	});
 	return popup;
+}
+
+/** Splits a sync hunk's unified lines into the popup's removed/added lists. */
+function presentSyncHunk(hunk: SyncHunk): {
+	removedLines: string[];
+	addedLines: string[];
+} {
+	const removedLines: string[] = [];
+	const addedLines: string[] = [];
+	for (const line of hunk.lines) {
+		if (line.startsWith("-")) removedLines.push(line.slice(1));
+		else if (line.startsWith("+")) addedLines.push(line.slice(1));
+	}
+	return { removedLines, addedLines };
 }
 
 function renderLines(
@@ -166,6 +185,34 @@ function renderLines(
 			text: `… ${lines.length - POPUP_MAX_LINES} more line(s)`,
 		});
 	}
+}
+
+/** Replaces the hunk's new-side lines with its old-side lines, addressed by
+ * line number the way `computeHunks` reports them. */
+function revertSyncHunk(
+	view: EditorView,
+	hunk: SyncHunk,
+	baseline: Text,
+): void {
+	const from = lineStart(view.state.doc, hunk.newStart);
+	const to = lineStart(view.state.doc, hunk.newStart + hunk.newLines);
+	const insertFrom = lineStart(baseline, hunk.oldStart);
+	const insertTo = lineStart(baseline, hunk.oldStart + hunk.oldLines);
+	let insert = baseline.sliceString(insertFrom, insertTo);
+	// Slicing to the start of the following line carries its newline, but the
+	// last line of a document has none: without this the replaced range would
+	// swallow the separator and merge two lines into one.
+	if (to > from && insertTo === baseline.length && !insert.endsWith("\n")) {
+		insert += "\n";
+	}
+	view.dispatch({ changes: { from, to, insert } });
+}
+
+/** Offset of `line`'s first character, or the end of the text past the last. */
+function lineStart(text: Text, line: number): number {
+	if (line < 1) return 0;
+	if (line > text.lines) return text.length;
+	return text.line(line).from;
 }
 
 function revertHunk(view: EditorView, chunk: Chunk, baseline: Text): void {

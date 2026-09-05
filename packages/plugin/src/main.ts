@@ -27,6 +27,7 @@ import {
 	type SharedFolderConfig,
 	ShareSyncService,
 } from "@/share";
+import { reportWarning } from "@/shared/diagnostics";
 import { createStorageAdapter, handleStorageProtocol } from "@/storage";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { defaultDeviceName } from "@/sync/device";
@@ -58,6 +59,15 @@ const VAULT_MISMATCH_ERROR = "Remote vault id does not match local";
 
 const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 
+/** Runs a teardown step without letting its failure abort the rest. */
+function safely(step: () => void): void {
+	try {
+		step();
+	} catch (err) {
+		reportWarning("A teardown step failed during unload.", err);
+	}
+}
+
 export default class ObsyncPlugin extends Plugin {
 	settings: ObsyncSettings = DEFAULT_SETTINGS;
 	controller!: SyncController;
@@ -81,6 +91,7 @@ export default class ObsyncPlugin extends Plugin {
 				this.realtime?.notifySync();
 				refreshOpenHistoryViewsAfterPush(this);
 			},
+			persistSettings: () => this.saveSettings(),
 		});
 		this.logs = runtime.logs;
 		this.statePersister = runtime.statePersister;
@@ -114,7 +125,7 @@ export default class ObsyncPlugin extends Plugin {
 		this.registerObsidianProtocolHandler("obsync-auth", (params) => {
 			void handleStorageProtocol(
 				params,
-				activeStorage(this.settings),
+				(kind) => this.settings.storageConfigs[kind],
 				async () => {
 					await this.saveSettings();
 					// Re-render the open Settings tab so auth status updates without
@@ -130,16 +141,19 @@ export default class ObsyncPlugin extends Plugin {
 			window.clearTimeout(this.scopeRefreshTimer);
 			this.scopeRefreshTimer = null;
 		}
-		this.editorSigns?.dispose();
+		// Each teardown is isolated: one that throws must not leave the rest of
+		// the plugin's timers, sockets and listeners running after unload.
+		safely(() => this.editorSigns?.dispose());
 		this.editorSigns = null;
 		this.fileIndicators = null;
-		this.statePersister?.dispose();
-		this.controller?.dispose();
-		this.passphraseManager?.dispose();
-		this.realtime?.dispose();
+		safely(() => this.statePersister?.dispose());
+		safely(() => this.controller?.dispose());
+		safely(() => this.passphraseManager?.dispose());
+		safely(() => this.realtime?.dispose());
 		this.realtime = null;
-		this.shares?.dispose();
+		safely(() => this.shares?.dispose());
 		this.shares = null;
+		safely(() => this.logs?.dispose());
 	}
 
 	private initShares(): void {
@@ -222,13 +236,16 @@ export default class ObsyncPlugin extends Plugin {
 		}
 		if (this.adoptPromptActive) return;
 		this.adoptPromptActive = true;
-		const confirmed = await confirmAdoptNewVault(this.app);
-		if (!confirmed) return;
 		try {
+			const confirmed = await confirmAdoptNewVault(this.app);
+			if (!confirmed) return;
 			await this.controller.adoptNewVault();
 			notifyInfo("Adopted new remote vault.");
 		} catch (err) {
 			notifyError("Operation failed", err);
+		} finally {
+			// Declining must not silence the prompt until the next reload.
+			this.adoptPromptActive = false;
 		}
 	}
 
@@ -286,6 +303,9 @@ export default class ObsyncPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		// Every settings write funnels through here, and any of them can change
+		// the room or the credentials the relay client is using.
+		this.realtime?.restartIfChanged();
 	}
 
 	getLogs(): readonly SyncLogEntry[] {
@@ -307,6 +327,10 @@ export default class ObsyncPlugin extends Plugin {
 
 	async forgetPassphrase(): Promise<void> {
 		await this.passphraseManager.forget();
+	}
+
+	async persistCachedPassphrase(): Promise<void> {
+		await this.passphraseManager.persistIfEnabled();
 	}
 
 	async promptPassphrase(replace: boolean): Promise<boolean> {
@@ -342,6 +366,14 @@ export default class ObsyncPlugin extends Plugin {
 		this.passphraseManager.invalidateKey();
 		await this.saveSettings();
 		await this.passphraseManager.persistIfEnabled();
+		// Imported settings change the backend, the relay and the shares; without
+		// this the services keep running against the previous configuration until
+		// Obsidian is restarted.
+		this.realtime?.restart();
+		this.shares?.refresh();
+		this.refreshEditorSigns(this.settings.showEditorChangeSigns);
+		this.refreshFileIndicators(this.settings.showFileExplorerIndicators);
+		this.settingsTab?.display();
 		this.scheduleScopeRefresh("Settings imported.");
 	}
 
@@ -350,14 +382,14 @@ export default class ObsyncPlugin extends Plugin {
 	): Promise<void> {
 		const data = params.d ?? params.data;
 		if (typeof data !== "string") {
-			notifyError("settings transfer data is missing.");
+			notifyError("Settings transfer data is missing.");
 			return;
 		}
 		try {
 			const imported = await this.importSettingsTransfer(data);
-			if (imported) notifyInfo("settings imported.");
+			if (imported) notifyInfo("Settings imported.");
 		} catch (err) {
-			notifyError("settings transfer failed", err);
+			notifyError("Settings transfer failed", err);
 		}
 	}
 

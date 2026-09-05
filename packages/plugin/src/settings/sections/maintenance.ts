@@ -57,9 +57,16 @@ export function renderMaintenanceSection(
 			.setName(action.name)
 			.setDesc(action.desc)
 			.addButton((button) => {
-				button
-					.setButtonText(action.buttonText)
-					.onClick(() => void action.run(plugin));
+				let running = false;
+				button.setButtonText(action.buttonText).onClick(() => {
+					if (running) return;
+					running = true;
+					button.setDisabled(true);
+					void action.run(plugin).finally(() => {
+						running = false;
+						button.setDisabled(false);
+					});
+				});
 				if (action.warning) button.setWarning();
 			});
 	}

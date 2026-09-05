@@ -57,7 +57,13 @@ export async function readKeyfile(
 	const bytes = await storage.get(REMOTE_KEYFILE_KEY);
 	if (!bytes) return null;
 	try {
-		return JSON.parse(decoder.decode(bytes)) as Keyfile;
+		const parsed = JSON.parse(decoder.decode(bytes)) as unknown;
+		if (!isKeyfile(parsed)) {
+			// A malformed keyfile reported as "wrong passphrase" sends the user
+			// hunting for a rotation that never happened.
+			throw new Error("unexpected shape");
+		}
+		return parsed;
 	} catch (err) {
 		// Present but unparseable. Returning null would make the caller mint a
 		// fresh data key and orphan every encrypted object — fail loudly.
@@ -67,11 +73,34 @@ export async function readKeyfile(
 	}
 }
 
+function isKeyfile(value: unknown): value is Keyfile {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<Keyfile>;
+	return (
+		typeof candidate.version === "number" &&
+		typeof candidate.epoch === "number" &&
+		typeof candidate.wrapped === "string" &&
+		candidate.wrapped.length > 0
+	);
+}
+
 export async function writeKeyfile(
 	storage: ObjectStorage,
 	keyfile: Keyfile,
 ): Promise<void> {
 	await storage.put(
+		REMOTE_KEYFILE_KEY,
+		encoder.encode(JSON.stringify(keyfile)),
+		"application/json",
+	);
+}
+
+/** First writer wins; returns false when the keyfile already existed. */
+async function createKeyfile(
+	storage: ObjectStorage,
+	keyfile: Keyfile,
+): Promise<boolean> {
+	return storage.putIfAbsent(
 		REMOTE_KEYFILE_KEY,
 		encoder.encode(JSON.stringify(keyfile)),
 		"application/json",
@@ -98,14 +127,24 @@ export async function resolveContentKey(
 
 	const raw = randomBytes(DATA_KEY_BYTES);
 	const now = Date.now();
-	await writeKeyfile(storage, {
+	const wrapped = await wrapRawKey(kek, raw);
+	await createKeyfile(storage, {
 		version: KEYFILE_VERSION,
 		epoch: INITIAL_EPOCH,
-		wrapped: await wrapRawKey(kek, raw),
+		wrapped,
 		createdAt: now,
 		rotatedAt: now,
 	});
-	return { contentKey: await importAesKey(raw), epoch: INITIAL_EPOCH };
+	// Never trust the conditional write's own verdict: a backend that ignores
+	// the condition reports success after overwriting. Whatever is on the remote
+	// now is the vault's data key, and ours is discarded if it lost - minting a
+	// second key would orphan everything the winner already wrote.
+	const winner = await readKeyfile(storage);
+	if (!winner) {
+		throw new Error("Keyfile vanished while it was being created.");
+	}
+	const winnerRaw = await unwrapRawKey(kek, winner.wrapped);
+	return { contentKey: await importAesKey(winnerRaw), epoch: winner.epoch };
 }
 
 /**
@@ -126,13 +165,23 @@ export async function rotatePassphrase(
 	const raw = await unwrapRawKey(oldKek, keyfile.wrapped);
 	const newKek = await deriveKey(newPassphrase, salt);
 	const nextEpoch = keyfile.epoch + 1;
+	const wrapped = await wrapRawKey(newKek, raw);
 	await writeKeyfile(storage, {
 		version: KEYFILE_VERSION,
 		epoch: nextEpoch,
-		wrapped: await wrapRawKey(newKek, raw),
+		wrapped,
 		createdAt: keyfile.createdAt,
 		rotatedAt: Date.now(),
 	});
+	// Two devices rotating at once would each overwrite the other; the one whose
+	// wrapping did not survive has to say so rather than report a new passphrase
+	// that does not open the vault.
+	const landed = await readKeyfile(storage);
+	if (landed?.wrapped !== wrapped) {
+		throw new Error(
+			"Another device changed the passphrase at the same time. Re-open the vault and try again.",
+		);
+	}
 	return nextEpoch;
 }
 
@@ -147,9 +196,15 @@ async function unwrapRawKey(
 	kek: EncryptionKey,
 	wrapped: string,
 ): Promise<Uint8Array> {
+	let raw: Uint8Array;
 	try {
-		return await decryptBytes(kek, base64ToBytes(wrapped));
+		raw = await decryptBytes(kek, base64ToBytes(wrapped));
 	} catch {
 		throw new PassphraseRotatedError();
 	}
+	// A truncated key would import as a weaker AES variant instead of failing.
+	if (raw.length !== DATA_KEY_BYTES) {
+		throw new Error("Keyfile holds a data key of the wrong size.");
+	}
+	return raw;
 }

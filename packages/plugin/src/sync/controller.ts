@@ -14,6 +14,7 @@ import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
 	batchKeepLocalOp,
+	type HunkSidesHash,
 	type Operation,
 	pullHunksOp,
 	pullPathsOp,
@@ -39,10 +40,12 @@ import { HistoryService } from "./runtime/history-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
 import { OperationRunner } from "./runtime/operation-runner";
 
-export enum EConflictStrategy {
-	KeepLocal = "keep-local",
-	AcceptRemote = "accept-remote",
-}
+export const EConflictStrategy = {
+	KeepLocal: "keep-local",
+	AcceptRemote: "accept-remote",
+} as const;
+export type EConflictStrategy =
+	(typeof EConflictStrategy)[keyof typeof EConflictStrategy];
 
 export interface SyncControllerHost {
 	app: App;
@@ -255,17 +258,29 @@ export class SyncController {
 		);
 	}
 
-	async pushHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
+	async pushHunks(
+		path: string,
+		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
+	): Promise<void> {
+		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Push,
-			(deps, result, ctx) => pushHunksOp(deps, result, { path, selected }, ctx),
+			(deps, result, ctx) =>
+				pushHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
-	async pullHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
+	async pullHunks(
+		path: string,
+		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
+	): Promise<void> {
+		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Pull,
-			(deps, result, ctx) => pullHunksOp(deps, result, { path, selected }, ctx),
+			(deps, result, ctx) =>
+				pullHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
@@ -280,12 +295,13 @@ export class SyncController {
 	async revertHunks(
 		path: string,
 		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
 	): Promise<void> {
 		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Compare,
 			(deps, result, ctx) =>
-				revertHunksOp(deps, result, { path, selected }, ctx),
+				revertHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
@@ -321,9 +337,9 @@ export class SyncController {
 	}
 
 	/**
-	 * Resolves a conflict with user-merged content: writes it locally and then
-	 * keeps the local side (uploads it, advancing the baseline to remote), the
-	 * same outcome as auto-merge.
+	 * Resolves a conflict with user-merged content: writes it locally, then keeps
+	 * the local side — which uploads the merged file and publishes a manifest.
+	 * Unlike auto-merge, which leaves the merge as an unpushed local change.
 	 */
 	async resolveConflictMerged(path: string, content: string): Promise<void> {
 		await this.operations.runOperation(

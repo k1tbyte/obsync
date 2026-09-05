@@ -29,41 +29,37 @@ const TRANSFER_SYNC_KEYS: ReadonlyArray<keyof SettingsSyncCategories> = [
 	"themes",
 ];
 const DEFAULT_SYNC_MASK = encodeSyncMask(DEFAULT_SETTINGS_SYNC);
-const STORAGE_BACKENDS = new Set<string>(Object.values(EStorageBackend));
+/** The share broker only ever backs a shared folder, never the main vault, so
+ * it must not be transferable as the active backend. */
+const STORAGE_BACKENDS = new Set<string>(
+	Object.values(EStorageBackend).filter(
+		(kind) => kind !== EStorageBackend.ShareBroker,
+	),
+);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/** Every settings key TRANSFER_FIELDS carries, derived so the two cannot drift. */
+type TransferFieldKey = (typeof TRANSFER_FIELDS)[number]["settingsKey"];
 
 export interface ObsyncTransferSettings
 	extends Partial<
 		Pick<
 			ObsyncSettings,
-			| "activeStorageKind"
-			| "settingsSync"
-			| "ignorePatterns"
-			| "ignoreSymlinks"
-			| "maxFileBytes"
-			| "autoPullOnStartup"
-			| "autoPullIntervalMinutes"
-			| "autoRefreshOnFileChange"
-			| "autoPushOnSave"
-			| "autoPushOnSaveCurrentFileOnly"
-			| "fileHistoryEnabled"
-			| "fileHistoryMaxSnapshots"
-			| "historyAutoRefresh"
-			| "realtimeSync"
-			| "realtimeServerUrl"
-			| "realtimeToken"
+			TransferFieldKey | "activeStorageKind" | "settingsSync"
 		>
 	> {
 	storageConfigs?: Record<string, StorageAdapterConfig>;
 }
 
-export enum ESettingsTransferStorageMode {
-	None = "none",
-	Active = "active",
-	All = "all",
-}
+export const ESettingsTransferStorageMode = {
+	None: "none",
+	Active: "active",
+	All: "all",
+} as const;
+export type ESettingsTransferStorageMode =
+	(typeof ESettingsTransferStorageMode)[keyof typeof ESettingsTransferStorageMode];
 
 export interface SettingsTransferExportOptions {
 	storageMode: ESettingsTransferStorageMode;
@@ -86,18 +82,22 @@ export const DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS: SettingsTransferExportOpt
 		includeRealtime: true,
 	};
 
-enum ETransferSection {
-	Storage = "s",
-	Scope = "q",
-	Automation = "a",
-	Realtime = "l",
-}
+const ETransferSection = {
+	Storage: "s",
+	Scope: "q",
+	Automation: "a",
+	Realtime: "l",
+} as const;
+type ETransferSection =
+	(typeof ETransferSection)[keyof typeof ETransferSection];
 
-enum ETransferFieldKind {
-	Bool = "bool",
-	Num = "num",
-	Str = "str",
-}
+const ETransferFieldKind = {
+	Bool: "bool",
+	Num: "num",
+	Str: "str",
+} as const;
+type ETransferFieldKind =
+	(typeof ETransferFieldKind)[keyof typeof ETransferFieldKind];
 
 interface FieldSpec {
 	section: ETransferSection;
@@ -106,7 +106,7 @@ interface FieldSpec {
 	kind: ETransferFieldKind;
 }
 
-const TRANSFER_FIELDS: ReadonlyArray<FieldSpec> = [
+const TRANSFER_FIELDS = [
 	{
 		section: ETransferSection.Scope,
 		settingsKey: "ignorePatterns",
@@ -191,7 +191,7 @@ const TRANSFER_FIELDS: ReadonlyArray<FieldSpec> = [
 		transferKey: "t",
 		kind: ETransferFieldKind.Str,
 	},
-];
+] as const satisfies ReadonlyArray<FieldSpec>;
 
 type TransferStorageConfig = { kind: EStorageBackend } & Record<
 	string,
@@ -223,10 +223,12 @@ interface ParsedTransferToken {
 	ciphertext: Uint8Array;
 }
 
-enum ETransferEncoding {
-	Plain = "p",
-	Deflate = "z",
-}
+const ETransferEncoding = {
+	Plain: "p",
+	Deflate: "z",
+} as const;
+type ETransferEncoding =
+	(typeof ETransferEncoding)[keyof typeof ETransferEncoding];
 
 const TRANSFER_ENCODINGS: Readonly<Record<string, ETransferEncoding>> = {
 	[ETransferEncoding.Plain]: ETransferEncoding.Plain,
@@ -381,7 +383,9 @@ function createSectionPayload(
 		if (field.section !== section) continue;
 		const value = settings[field.settingsKey];
 		if (value === DEFAULT_SETTINGS[field.settingsKey]) continue;
-		out[field.transferKey] = encodePrimitive(value, field.kind);
+		// A bool that differs from its default is fully described by being here.
+		out[field.transferKey] =
+			field.kind === ETransferFieldKind.Bool ? Number(value) : value;
 	}
 	return out;
 }
@@ -394,27 +398,15 @@ function applySectionDefaults(
 	const sink = result as Record<string, unknown>;
 	for (const field of TRANSFER_FIELDS) {
 		if (field.section !== sectionKind) continue;
-		sink[field.settingsKey] = decodePrimitive(
-			section[field.transferKey],
-			DEFAULT_SETTINGS[field.settingsKey],
-			field.kind,
-		);
+		const fallback = DEFAULT_SETTINGS[field.settingsKey];
+		const transferred = section[field.transferKey];
+		if (transferred === undefined) {
+			sink[field.settingsKey] = fallback;
+			continue;
+		}
+		sink[field.settingsKey] =
+			field.kind === ETransferFieldKind.Bool ? !fallback : transferred;
 	}
-}
-
-function encodePrimitive(value: unknown, kind: ETransferFieldKind): unknown {
-	if (kind === ETransferFieldKind.Bool) return value ? 1 : 0;
-	return value;
-}
-
-function decodePrimitive(
-	transferred: unknown,
-	defaultValue: unknown,
-	kind: ETransferFieldKind,
-): unknown {
-	if (transferred === undefined) return defaultValue;
-	if (kind === ETransferFieldKind.Bool) return !defaultValue;
-	return transferred;
 }
 
 function isValidFieldValue(
@@ -464,11 +456,11 @@ function parseTransferToken(token: string): ParsedTransferToken {
 	if (!encoding) {
 		throw new Error("Unsupported Obsync settings transfer encoding");
 	}
-	return {
-		encoding,
-		salt: base64UrlToBytes(saltText),
-		ciphertext: base64UrlToBytes(ciphertextText),
-	};
+	const salt = base64UrlToBytes(saltText);
+	if (salt.length !== TRANSFER_SALT_BYTES) {
+		throw new Error("Invalid Obsync settings transfer token");
+	}
+	return { encoding, salt, ciphertext: base64UrlToBytes(ciphertextText) };
 }
 
 function extractTransferToken(input: string): string {
@@ -523,16 +515,19 @@ function isTransferPayload(value: unknown): value is SettingsTransferPayload {
 
 function isOptionalStoragePayload(value: unknown): boolean {
 	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
+	if (!isPlainObject(value)) return false;
 	const payload = value as Partial<TransferStoragePayload>;
 	if (!isStorageBackend(payload.a)) return false;
-	if (!payload.c || typeof payload.c !== "object") return false;
+	if (!isPlainObject(payload.c)) return false;
+	// The active backend has to be one of the configs that travelled with it,
+	// or the import points at a backend the receiving device cannot build.
+	if (!(payload.a in payload.c)) return false;
 	return Object.values(payload.c).every(isTransferStorageConfig);
 }
 
 function isOptionalScopePayload(value: unknown): boolean {
 	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
+	if (!isPlainObject(value)) return false;
 	const payload = value as SectionPayload;
 	if (!isValidSyncMask(payload[SYNC_MASK_KEY])) return false;
 	return isSectionShape(payload, ETransferSection.Scope);
@@ -543,8 +538,12 @@ function isOptionalSectionPayload(
 	section: ETransferSection,
 ): boolean {
 	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
+	if (!isPlainObject(value)) return false;
 	return isSectionShape(value as SectionPayload, section);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isSectionShape(
@@ -580,6 +579,9 @@ function createStoragePayload(
 	settings: ObsyncSettings,
 	mode: ESettingsTransferStorageMode,
 ): TransferStoragePayload {
+	// activeStorage() falls back to a default config when activeStorageKind
+	// names a slot that is not there, so the payload follows the config it
+	// actually exported rather than the possibly dangling key.
 	const active = activeStorage(settings);
 	const storageConfigs =
 		mode === ESettingsTransferStorageMode.All
@@ -587,9 +589,13 @@ function createStoragePayload(
 			: { [active.kind]: active };
 	const compactConfigs: Record<string, TransferStorageConfig> = {};
 	for (const [kind, config] of Object.entries(storageConfigs)) {
+		if (!STORAGE_BACKENDS.has(kind)) continue;
 		compactConfigs[kind] = compactStorageConfig(config);
 	}
-	return { a: settings.activeStorageKind, c: compactConfigs };
+	if (!compactConfigs[active.kind]) {
+		compactConfigs[active.kind] = compactStorageConfig(active);
+	}
+	return { a: active.kind, c: compactConfigs };
 }
 
 function compactStorageConfig(
@@ -621,7 +627,7 @@ function expandStorageConfigs(
 function isTransferStorageConfig(
 	value: unknown,
 ): value is TransferStorageConfig {
-	if (!value || typeof value !== "object") return false;
+	if (!isPlainObject(value)) return false;
 	const config = value as Record<string, unknown>;
 	if (!isStorageBackend(config.kind)) return false;
 	const defaults = getStorageDefaults(config.kind);
