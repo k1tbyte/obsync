@@ -16,10 +16,10 @@ const INVITE_SALT_BYTES = 16;
 const INVITE_PARTS = 4;
 const INVITE_PARAM = "d";
 
-enum EInviteEncoding {
-	Plain = "p",
-	Deflate = "z",
-}
+const EInviteEncoding = {
+	Plain: "p",
+	Deflate: "z",
+} as const;
 
 const STORAGE_BACKENDS = new Set<string>(Object.values(EStorageBackend));
 const encoder = new TextEncoder();

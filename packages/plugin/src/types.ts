@@ -1,8 +1,9 @@
-export enum EFileKind {
-	Vault = "vault",
-	Config = "config",
-	Plugin = "plugin",
-}
+export const EFileKind = {
+	Vault: "vault",
+	Config: "config",
+	Plugin: "plugin",
+} as const;
+export type EFileKind = (typeof EFileKind)[keyof typeof EFileKind];
 
 export interface ManifestEntry {
 	hash: string;
@@ -82,14 +83,15 @@ export interface SkippedFile {
 	reason: string;
 }
 
-export enum EChangeType {
-	LocalAdd = "local-add",
-	LocalModify = "local-modify",
-	LocalDelete = "local-delete",
-	RemoteAdd = "remote-add",
-	RemoteModify = "remote-modify",
-	RemoteDelete = "remote-delete",
-}
+export const EChangeType = {
+	LocalAdd: "local-add",
+	LocalModify: "local-modify",
+	LocalDelete: "local-delete",
+	RemoteAdd: "remote-add",
+	RemoteModify: "remote-modify",
+	RemoteDelete: "remote-delete",
+} as const;
+export type EChangeType = (typeof EChangeType)[keyof typeof EChangeType];
 
 export interface FileChange {
 	path: string;

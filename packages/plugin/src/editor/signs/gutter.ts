@@ -17,13 +17,14 @@ import {
 	setCompareTextEffect,
 } from "./state";
 
-enum ESignKind {
-	Add = "add",
-	Change = "change",
-	Delete = "delete",
-	TopDelete = "topdelete",
-	ChangeDelete = "changedelete",
-}
+const ESignKind = {
+	Add: "add",
+	Change: "change",
+	Delete: "delete",
+	TopDelete: "topdelete",
+	ChangeDelete: "changedelete",
+} as const;
+type ESignKind = (typeof ESignKind)[keyof typeof ESignKind];
 
 const KIND_CLASS: Record<ESignKind, string> = {
 	[ESignKind.Add]: "obsync-sign-add",

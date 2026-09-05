@@ -40,10 +40,12 @@ import { HistoryService } from "./runtime/history-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
 import { OperationRunner } from "./runtime/operation-runner";
 
-export enum EConflictStrategy {
-	KeepLocal = "keep-local",
-	AcceptRemote = "accept-remote",
-}
+export const EConflictStrategy = {
+	KeepLocal: "keep-local",
+	AcceptRemote: "accept-remote",
+} as const;
+export type EConflictStrategy =
+	(typeof EConflictStrategy)[keyof typeof EConflictStrategy];
 
 export interface SyncControllerHost {
 	app: App;

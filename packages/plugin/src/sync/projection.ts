@@ -15,12 +15,14 @@ import {
 } from "./content";
 import { type ComputedHunks, computeHunks } from "./hunks";
 
-export enum EDiffDirection {
-	Local = "local",
-	Remote = "remote",
-	Conflict = "conflict",
-	History = "history",
-}
+export const EDiffDirection = {
+	Local: "local",
+	Remote: "remote",
+	Conflict: "conflict",
+	History: "history",
+} as const;
+export type EDiffDirection =
+	(typeof EDiffDirection)[keyof typeof EDiffDirection];
 
 export interface FileDiffModel {
 	path: string;

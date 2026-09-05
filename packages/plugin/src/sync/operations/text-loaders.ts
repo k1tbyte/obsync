@@ -13,12 +13,13 @@ import type { CompareResult, EngineDependencies } from "../engine";
 const NOT_TEXT = "Hunk-level actions are only supported for text files";
 
 /** Which two texts a hunk list was computed from. */
-export enum EHunkPair {
+export const EHunkPair = {
 	/** baseline vs local — mirrors `buildLocalChangeDiff`. */
-	Local = "local",
+	Local: "local",
 	/** local vs remote — mirrors `buildRemoteChangeDiff` and `buildConflictDiff`. */
-	Remote = "remote",
-}
+	Remote: "remote",
+} as const;
+export type EHunkPair = (typeof EHunkPair)[keyof typeof EHunkPair];
 
 export interface HunkSides {
 	left: string;

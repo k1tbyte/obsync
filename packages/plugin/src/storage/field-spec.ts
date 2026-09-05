@@ -1,11 +1,12 @@
 import { DEFAULT_CONCURRENCY } from "../constants";
 
-export enum EFieldKind {
-	Text = "text",
-	Password = "password",
-	Toggle = "toggle",
-	Number = "number",
-}
+export const EFieldKind = {
+	Text: "text",
+	Password: "password",
+	Toggle: "toggle",
+	Number: "number",
+} as const;
+export type EFieldKind = (typeof EFieldKind)[keyof typeof EFieldKind];
 
 export interface BaseFieldSpec {
 	key: string;
@@ -15,19 +16,19 @@ export interface BaseFieldSpec {
 }
 
 export interface TextFieldSpec extends BaseFieldSpec {
-	kind: EFieldKind.Text;
+	kind: typeof EFieldKind.Text;
 }
 
 export interface PasswordFieldSpec extends BaseFieldSpec {
-	kind: EFieldKind.Password;
+	kind: typeof EFieldKind.Password;
 }
 
 export interface ToggleFieldSpec extends BaseFieldSpec {
-	kind: EFieldKind.Toggle;
+	kind: typeof EFieldKind.Toggle;
 }
 
 export interface NumberFieldSpec extends BaseFieldSpec {
-	kind: EFieldKind.Number;
+	kind: typeof EFieldKind.Number;
 	min: number;
 	fallback: number;
 }

@@ -53,11 +53,13 @@ export interface ObsyncTransferSettings
 	storageConfigs?: Record<string, StorageAdapterConfig>;
 }
 
-export enum ESettingsTransferStorageMode {
-	None = "none",
-	Active = "active",
-	All = "all",
-}
+export const ESettingsTransferStorageMode = {
+	None: "none",
+	Active: "active",
+	All: "all",
+} as const;
+export type ESettingsTransferStorageMode =
+	(typeof ESettingsTransferStorageMode)[keyof typeof ESettingsTransferStorageMode];
 
 export interface SettingsTransferExportOptions {
 	storageMode: ESettingsTransferStorageMode;
@@ -80,18 +82,22 @@ export const DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS: SettingsTransferExportOpt
 		includeRealtime: true,
 	};
 
-enum ETransferSection {
-	Storage = "s",
-	Scope = "q",
-	Automation = "a",
-	Realtime = "l",
-}
+const ETransferSection = {
+	Storage: "s",
+	Scope: "q",
+	Automation: "a",
+	Realtime: "l",
+} as const;
+type ETransferSection =
+	(typeof ETransferSection)[keyof typeof ETransferSection];
 
-enum ETransferFieldKind {
-	Bool = "bool",
-	Num = "num",
-	Str = "str",
-}
+const ETransferFieldKind = {
+	Bool: "bool",
+	Num: "num",
+	Str: "str",
+} as const;
+type ETransferFieldKind =
+	(typeof ETransferFieldKind)[keyof typeof ETransferFieldKind];
 
 interface FieldSpec {
 	section: ETransferSection;
@@ -217,10 +223,12 @@ interface ParsedTransferToken {
 	ciphertext: Uint8Array;
 }
 
-enum ETransferEncoding {
-	Plain = "p",
-	Deflate = "z",
-}
+const ETransferEncoding = {
+	Plain: "p",
+	Deflate: "z",
+} as const;
+type ETransferEncoding =
+	(typeof ETransferEncoding)[keyof typeof ETransferEncoding];
 
 const TRANSFER_ENCODINGS: Readonly<Record<string, ETransferEncoding>> = {
 	[ETransferEncoding.Plain]: ETransferEncoding.Plain,
