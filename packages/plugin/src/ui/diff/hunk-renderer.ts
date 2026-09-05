@@ -4,6 +4,7 @@ import { EDiffDirection } from "../../sync/projection";
 export interface HunkCardCallbacks {
 	onPushHunk: (index: number) => void;
 	onPullHunk: (index: number) => void;
+	/** Local-change direction only: reverts the hunk back to the baseline. */
 	onRevertHunk: (index: number) => void;
 	onRestoreHistoryHunk: (index: number) => void;
 	onSelectHunk: (index: number) => void;
@@ -76,10 +77,10 @@ function renderHunkActions(
 			callbacks.onPullHunk(index),
 		);
 	} else {
-		makeChunkArrow(parent, "←", "Keep local", "is-pull", () =>
-			callbacks.onRevertHunk(index),
-		);
-		makeChunkArrow(parent, "→", "Accept remote", "is-push", () =>
+		// Conflict cards diff local against remote. Keeping the local side of one
+		// hunk is what the file already contains, so the only action here is to
+		// take the remote side; use the file-level buttons to keep local wholesale.
+		makeChunkArrow(parent, "→", "Accept this hunk from remote", "is-push", () =>
 			callbacks.onPullHunk(index),
 		);
 	}

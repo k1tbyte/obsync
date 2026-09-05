@@ -59,6 +59,7 @@ export class DiffView extends ItemView {
 	private hunkCards: HTMLElement[] = [];
 	private currentHunkIndex = -1;
 	private rendering = false;
+	private hunkOpInFlight = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
 		super(leaf);
@@ -421,16 +422,26 @@ export class DiffView extends ItemView {
 
 	private async runHunkOp(kind: HunkOpKind, index: number): Promise<void> {
 		const path = this.path;
-		if (!path) return;
+		const model = this.model;
+		if (!path || !model) return;
+		// One hunk at a time: a second click would address indices computed
+		// against the state the first click is still changing.
+		if (this.hunkOpInFlight) return;
+		this.hunkOpInFlight = true;
 		const selected = new Set([index]);
+		const expected = { left: model.leftHash, right: model.rightHash };
 		const controller = this.plugin.controller;
 		const run = {
-			push: () => controller.pushHunks(path, selected),
-			pull: () => controller.pullHunks(path, selected),
-			revert: () => controller.revertHunks(path, selected),
+			push: () => controller.pushHunks(path, selected, expected),
+			pull: () => controller.pullHunks(path, selected, expected),
+			revert: () => controller.revertHunks(path, selected, expected),
 		}[kind];
 		const op = HUNK_OPS[kind];
-		await this.runOnFile(run, op.ok, op.fail);
+		try {
+			await this.runOnFile(run, op.ok, op.fail);
+		} finally {
+			this.hunkOpInFlight = false;
+		}
 	}
 
 	private async resolveKeepLocal(): Promise<void> {

@@ -8,16 +8,16 @@ import {
 	buildSessionState,
 	updateBaselineEntry,
 } from "../baseline";
-import {
-	bytesToText,
-	isLikelyText,
-	loadLocalBytes,
-	textToBytes,
-} from "../content";
+import { loadLocalBytes, textToBytes } from "../content";
 import { publishFileMap, pushPaths, pushSingleFile } from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
 import { objectKey } from "../manifest";
-import { loadBaselineOrRemoteText } from "./text-loaders";
+import {
+	assertSidesUnchanged,
+	EHunkPair,
+	type HunkSidesHash,
+	loadHunkSides,
+} from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
 
 export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
@@ -56,6 +56,8 @@ export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 export interface PushHunksArgs {
 	path: string;
 	selected: ReadonlySet<number>;
+	/** sha256 of the two sides the view computed its hunk indices from. */
+	expected?: HunkSidesHash;
 }
 
 export const pushHunksOp: Operation<PushHunksArgs> = async (
@@ -65,33 +67,43 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 	ctx,
 ) => {
 	const { path, selected } = args;
-	const left = await loadBaselineOrRemoteText(deps, result, path);
-	const localBytes = await loadLocalBytes(deps.adapter, path);
-	if (!localBytes) throw new Error(`Local file missing: ${path}`);
-	if (!isLikelyText(localBytes)) {
-		throw new Error("Hunk-level push is only supported for text files");
+	if (selected.size === 0) throw new Error("No hunks selected");
+	// Same preflight as pushPathsOp: a hunk push publishes a manifest too, and
+	// must not silently overwrite a concurrent remote edit.
+	if (result.diff.conflicts.some((c) => c.path === path)) {
+		throw new Error("Cannot push: resolve the conflict on this file first");
 	}
-	const right = bytesToText(localBytes);
-	const { hunks } = computeHunks(left, right);
-	const merged = applyHunks(left, hunks, selected);
-	const bytes = textToBytes(merged);
+	if (result.diff.remoteChanges.some((c) => c.path === path)) {
+		throw new Error("Cannot push: this file changed on the remote; pull first");
+	}
+
+	const sides = await loadHunkSides(deps, result, path, EHunkPair.Local);
+	await assertSidesUnchanged(sides, args.expected);
+	const { hunks } = computeHunks(sides.left, sides.right);
+	const merged = applyHunks(sides.left, hunks, selected);
 	const { manifest, entry } = await pushSingleFile(deps, result, {
 		path,
-		bytes,
+		bytes: textToBytes(merged),
 	});
 	const baseline = updateBaselineEntry(
 		deps.state.baseline ?? manifest,
 		path,
 		entry,
 	);
-	const hashCache = { ...result.updatedCache };
-	hashCache[path] = { mtime: entry.mtime, size: entry.size, hash: entry.hash };
-	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
+	// The local file is untouched by a hunk push, so neither the hash cache nor
+	// the snapshot may adopt the merged entry.
+	await ctx.persistState(
+		buildSessionState(deps.state, baseline, result.updatedCache),
+	);
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
 		`Pushed ${selected.size} hunk(s) of ${path}.`,
 	);
-	return { newRemote: manifest, touchedPaths: new Set([path]) };
+	return {
+		newRemote: manifest,
+		touchedPaths: new Set([path]),
+		localEntries: new Map([[path, result.snapshot.files[path] ?? null]]),
+	};
 };
 
 export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (

@@ -14,6 +14,7 @@ import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
 	batchKeepLocalOp,
+	type HunkSidesHash,
 	type Operation,
 	pullHunksOp,
 	pullPathsOp,
@@ -255,17 +256,29 @@ export class SyncController {
 		);
 	}
 
-	async pushHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
+	async pushHunks(
+		path: string,
+		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
+	): Promise<void> {
+		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Push,
-			(deps, result, ctx) => pushHunksOp(deps, result, { path, selected }, ctx),
+			(deps, result, ctx) =>
+				pushHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
-	async pullHunks(path: string, selected: ReadonlySet<number>): Promise<void> {
+	async pullHunks(
+		path: string,
+		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
+	): Promise<void> {
+		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Pull,
-			(deps, result, ctx) => pullHunksOp(deps, result, { path, selected }, ctx),
+			(deps, result, ctx) =>
+				pullHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
@@ -280,12 +293,13 @@ export class SyncController {
 	async revertHunks(
 		path: string,
 		selected: ReadonlySet<number>,
+		expected?: HunkSidesHash,
 	): Promise<void> {
 		if (selected.size === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Compare,
 			(deps, result, ctx) =>
-				revertHunksOp(deps, result, { path, selected }, ctx),
+				revertHunksOp(deps, result, { path, selected, expected }, ctx),
 		);
 	}
 
