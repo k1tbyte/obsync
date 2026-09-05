@@ -190,8 +190,15 @@ export async function pullPaths(
 		onProgress?.(++done, total);
 	}
 
-	const remoteFolders = remote.folders ?? [];
-	const baselineFolders = deps.state.baseline?.folders ?? [];
+	// pullPaths acts on these with mkdir and rmdir, and `remote` here is the
+	// raw manifest: a share participant could otherwise name a folder outside
+	// the share root and have every other client create or delete it.
+	const remoteFolders = (remote.folders ?? []).filter((dir) =>
+		deps.scope.canDescend(dir),
+	);
+	const baselineFolders = (deps.state.baseline?.folders ?? []).filter((dir) =>
+		deps.scope.canDescend(dir),
+	);
 	const remoteFolderSet = new Set(remoteFolders);
 
 	for (const dir of remoteFolders) {

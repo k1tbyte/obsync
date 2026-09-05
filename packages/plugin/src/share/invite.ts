@@ -5,9 +5,10 @@ import {
 	type ShareBrokerStorageConfig,
 	type StorageAdapterConfig,
 } from "../storage/config";
+import { deriveRoomToken } from "../sync/realtime";
 import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
 import { deflateBytes, inflateBytes } from "../utils/compress";
-import type { SharedFolderConfig } from "./types";
+import { type SharedFolderConfig, shareChannelId } from "./types";
 
 export const SHARE_INVITE_ACTION = "obsync-share";
 const INVITE_VERSION = 1;
@@ -31,7 +32,9 @@ export interface ShareInvite {
 	keyB64: string;
 	storage: StorageAdapterConfig;
 	relayUrl?: string;
-	relayToken?: string;
+	/** Scoped to this share's room: an invite never carries the deployment
+	 * secret, which would open every other share's room too. */
+	relayRoomToken?: string;
 }
 
 interface InvitePayload {
@@ -68,7 +71,10 @@ export async function createShareInviteUrl(
 	};
 	if (share.relayUrl) {
 		payload.r = { u: share.relayUrl };
-		if (share.relayToken) payload.r.t = share.relayToken;
+		const secret = share.relayToken;
+		if (secret) {
+			payload.r.t = await deriveRoomToken(secret, shareChannelId(share.id));
+		}
 	}
 	const salt = randomBytes(INVITE_SALT_BYTES);
 	const key = await deriveKey(passphrase, salt);
@@ -140,7 +146,7 @@ export async function readShareInvite(
 		keyB64: payload.k,
 		storage: expandStorageConfig(payload.s),
 		relayUrl: payload.r?.u,
-		relayToken: payload.r?.t,
+		relayRoomToken: payload.r?.t,
 	};
 }
 

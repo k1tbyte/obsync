@@ -133,7 +133,9 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 					// A present object always has a body, empty or not. Missing means
 					// the response was not what it claimed, which is an error.
 					if (!body) throw new Error(`S3 returned no body for "${key}"`);
-					return await readBodyToBytes(body);
+					// The command resolves once the headers arrive; a connection that
+					// dies mid-stream would otherwise hang past every deadline.
+					return await s3Timeout(readBodyToBytes(body));
 				} catch (err) {
 					if (isNotFound(err)) return null;
 					throw err;

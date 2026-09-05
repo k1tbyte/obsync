@@ -63,7 +63,11 @@ export class PassphraseManager {
 	 */
 	async prompt(replace: boolean): Promise<boolean> {
 		if (this.passphrase && !replace) return true;
-		if (this.pendingPrompt) return this.pendingPrompt;
+		// A forced prompt is a recovery path (the stored passphrase no longer
+		// opens the vault); joining an in-flight one would answer it with the
+		// very passphrase that failed.
+		if (this.pendingPrompt && !replace) return this.pendingPrompt;
+		if (this.pendingPrompt) await this.pendingPrompt.catch(() => undefined);
 		this.pendingPrompt = this.runPrompt(replace).finally(() => {
 			this.pendingPrompt = null;
 		});

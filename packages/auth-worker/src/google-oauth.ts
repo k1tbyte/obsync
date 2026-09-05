@@ -10,6 +10,7 @@ const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const CONSENT_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const CALLBACK_PROTOCOL = "obsidian://obsync-auth";
+const STATE_COOKIE = "obsync_oauth_state";
 /** How long a consent round trip may take before its state is refused. */
 const STATE_TTL_MS = 10 * 60 * 1000;
 /** A Google refresh token; anything wildly outside this is not worth proxying. */
@@ -61,6 +62,7 @@ export async function handleTokenRefresh(
 export async function handleAuthCallback(
 	url: URL,
 	env: GoogleOAuthEnv,
+	request: Request,
 ): Promise<Response> {
 	const error = url.searchParams.get("error");
 	if (error) {
@@ -72,17 +74,30 @@ export async function handleAuthCallback(
 	const redirectUri = `${url.origin}/auth`;
 	const code = url.searchParams.get("code");
 	if (!code) {
-		return Response.redirect(
-			consentUrl(env, redirectUri, await issueState(env)),
-		);
+		const state = await issueState(env);
+		// The state also goes into a cookie: a signature alone only proves this
+		// worker minted it, and an attacker can mint one by loading /auth. What
+		// makes it a CSRF token is that it must come back from the same browser.
+		return new Response(null, {
+			status: 302,
+			headers: {
+				Location: consentUrl(env, redirectUri, state),
+				"Set-Cookie": stateCookie(state),
+			},
+		});
 	}
 
 	// Without this check any link of the form /auth?code=… would hand the
 	// victim's Obsidian an attacker's Drive tokens, and their vault would sync
 	// into the attacker's account.
-	if (!(await verifyState(env, url.searchParams.get("state")))) {
+	const state = url.searchParams.get("state");
+	if (
+		!(await verifyState(env, state)) ||
+		!matchesCookie(request, state as string)
+	) {
 		return new Response("This sign-in link is invalid or expired.", {
 			status: 400,
+			headers: { "Set-Cookie": clearedStateCookie() },
 		});
 	}
 
@@ -94,15 +109,50 @@ export async function handleAuthCallback(
 	if (!token?.access_token) {
 		return new Response("Authentication failed. Please try again.", {
 			status: 400,
+			headers: { "Set-Cookie": clearedStateCookie() },
 		});
 	}
-	return Response.redirect(callbackUrl(token));
+	return new Response(null, {
+		status: 302,
+		headers: {
+			Location: callbackUrl(token),
+			"Set-Cookie": clearedStateCookie(),
+		},
+	});
+}
+
+function stateCookie(state: string): string {
+	const maxAge = Math.floor(STATE_TTL_MS / 1000);
+	return `${STATE_COOKIE}=${state}; Path=/auth; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
+}
+
+function clearedStateCookie(): string {
+	return `${STATE_COOKIE}=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+}
+
+/** The consent round trip has to come back in the browser that started it. */
+function matchesCookie(request: Request, state: string): boolean {
+	const header = request.headers.get("Cookie");
+	if (!header) return false;
+	for (const part of header.split(";")) {
+		const [name, ...rest] = part.trim().split("=");
+		if (name !== STATE_COOKIE) continue;
+		const value = rest.join("=");
+		if (value.length !== state.length) return false;
+		let diff = 0;
+		for (let i = 0; i < value.length; i++) {
+			diff |= value.charCodeAt(i) ^ state.charCodeAt(i);
+		}
+		return diff === 0;
+	}
+	return false;
 }
 
 /**
- * Stateless CSRF token for the consent round trip: a timestamp plus an HMAC of
- * it under a secret the worker already holds. No storage, and no way to mint
- * one without the secret.
+ * CSRF token for the consent round trip: a timestamp plus an HMAC of it under a
+ * secret the worker already holds, so no storage is needed. The signature only
+ * proves this worker issued it - the cookie it is paired with is what ties it
+ * to one browser.
  */
 async function issueState(env: GoogleOAuthEnv): Promise<string> {
 	const issued = String(Date.now());

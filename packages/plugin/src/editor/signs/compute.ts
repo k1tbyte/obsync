@@ -1,11 +1,12 @@
-import type { ChangeDesc, EditorState, Text } from "@codemirror/state";
+import type { ChangeDesc, Text } from "@codemirror/state";
 import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import { debounce, editorInfoField } from "obsidian";
+import { debounce } from "obsidian";
 
 import { buildChunks } from "./diff";
 import {
 	chunksField,
 	compareTextField,
+	pathFromState,
 	setChunksEffect,
 	setCompareTextEffect,
 } from "./state";
@@ -117,14 +118,6 @@ function changeSize(changes: ChangeDesc): number {
 		total += Math.max(toA - fromA, toB - fromB);
 	});
 	return total;
-}
-
-export function pathFromState(state: EditorState): string | null {
-	try {
-		return state.field(editorInfoField, false)?.file?.path ?? null;
-	} catch {
-		return null;
-	}
 }
 
 export type CompareText = Text;

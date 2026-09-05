@@ -3,7 +3,6 @@ export {
 	askPassphrase,
 	PassphraseModal,
 } from "./passphrase-modal";
-export { type ReportActions, SyncReportModal } from "./report-modal";
 export {
 	confirmRemoteReset,
 	RemoteResetModal,

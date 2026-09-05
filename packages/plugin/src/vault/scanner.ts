@@ -37,8 +37,14 @@ export async function scanVault(
 		files: paths,
 		emptyFolders: rawEmptyFolders,
 		ignored,
+		unreadable,
 	} = await listAllFiles(adapter, scope, ROOT);
 	ignoredPaths.push(...ignored);
+	// Everything under a directory that would not list is unknown, not gone: the
+	// baseline entries below it must not read as local deletions.
+	for (const dir of unreadable) {
+		skipped.push({ path: dir, reason: "Directory could not be listed" });
+	}
 	let scanned = 0;
 	await runWithConcurrency(
 		paths,
@@ -79,7 +85,9 @@ export async function scanVault(
 		},
 	);
 
-	if (Platform.isWin) {
+	// Both Windows and macOS default to case-insensitive filesystems, and two
+	// spellings of one file would otherwise flap against each other forever.
+	if (Platform.isWin || Platform.isMacOS) {
 		const lower = new Map<string, string>();
 		// Sorted, so the surviving spelling of a case collision is the same on
 		// every scan instead of whichever worker happened to finish first.
@@ -95,6 +103,15 @@ export async function scanVault(
 				delete updatedCache[path];
 			} else {
 				lower.set(lc, path);
+			}
+		}
+	}
+
+	// Baseline paths under an unreadable directory are unknown, not deleted.
+	for (const dir of unreadable) {
+		for (const path of Object.keys(hashCache)) {
+			if (path.startsWith(`${dir}/`)) {
+				skipped.push({ path, reason: "Directory could not be listed" });
 			}
 		}
 	}
@@ -143,16 +160,32 @@ async function listAllFiles(
 	adapter: DataAdapter,
 	scope: ScopePolicy,
 	dir: string,
-): Promise<{ files: string[]; emptyFolders: string[]; ignored: string[] }> {
+): Promise<{
+	files: string[];
+	emptyFolders: string[];
+	ignored: string[];
+	unreadable: string[];
+}> {
 	const files: string[] = [];
 	const emptyFolders: string[] = [];
 	// Collected during the walk: the filtering happens here, so a caller looking
 	// at the returned paths alone could never tell what an ignore rule dropped.
 	const ignored: string[] = [];
+	/** Directories the adapter refused to list, whose contents stay unknown. */
+	const unreadable: string[] = [];
 	const stack: string[] = [dir];
+	// A symlinked directory can point back at an ancestor; without this the walk
+	// would follow the cycle forever.
+	const visited = new Set<string>();
 	while (stack.length > 0) {
 		const current = stack.pop() as string;
+		if (visited.has(current)) continue;
+		visited.add(current);
 		const listing = await safeList(adapter, current);
+		if (!listing.read) {
+			unreadable.push(current);
+			continue;
+		}
 		const includedFiles: string[] = [];
 		for (const file of listing.files) {
 			if (scope.includes(file)) {
@@ -182,17 +215,18 @@ async function listAllFiles(
 		for (const file of includedFiles) files.push(file);
 		for (const folder of includedFolders) stack.push(folder);
 	}
-	return { files, emptyFolders, ignored };
+	return { files, emptyFolders, ignored, unreadable };
 }
 
 async function safeList(
 	adapter: DataAdapter,
 	dir: string,
-): Promise<{ files: string[]; folders: string[] }> {
+): Promise<{ read: boolean; files: string[]; folders: string[] }> {
 	try {
 		const listing = await adapter.list(dir);
-		return { files: listing.files, folders: listing.folders };
+		return { read: true, files: listing.files, folders: listing.folders };
 	} catch {
-		return { files: [], folders: [] };
+		// Not "the directory is empty": the caller has to know it saw nothing.
+		return { read: false, files: [], folders: [] };
 	}
 }

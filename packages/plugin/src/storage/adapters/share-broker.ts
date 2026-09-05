@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 
 import { DEFAULT_CONCURRENCY } from "../../constants";
+import { toArrayBuffer } from "../../utils/bytes";
 import { EStorageBackend, type ShareBrokerStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -13,7 +14,6 @@ import {
 	isRetryableStatus,
 	STORAGE_TIMEOUT_MS,
 	StorageHttpError,
-	toArrayBuffer,
 	withRetry,
 	withTimeout,
 } from "./util";
@@ -158,7 +158,9 @@ export function createShareBrokerAdapter(
 				const page = parseListObjectsV2(res.text);
 				const base = signed.base ?? "";
 				for (const key of page.keys) {
-					keys.push(key.startsWith(base) ? key.slice(base.length) : key);
+					const relative = key.startsWith(base) ? key.slice(base.length) : key;
+					// The prefix itself comes back as a folder marker on some backends.
+					if (relative) keys.push(relative);
 				}
 				cursor = page.cursor;
 			} while (cursor);
@@ -226,8 +228,38 @@ function assertSignedUrl(url: string): void {
 	if (parsed.protocol !== "https:") {
 		throw new Error("Share broker returned a non-HTTPS URL");
 	}
+	if (isPrivateHost(parsed.hostname)) {
+		throw new Error(
+			`Share broker returned a URL pointing at a private address: ${parsed.hostname}`,
+		);
+	}
 }
 
+/**
+ * A broker is meant to hand back a public object-store URL. One pointing at
+ * loopback, a link-local address or an RFC1918 range would turn every object
+ * transfer into a request against something inside the user's own network.
+ */
+function isPrivateHost(hostname: string): boolean {
+	const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	if (host === "localhost" || host.endsWith(".localhost")) return true;
+	if (host === "::1" || host === "0.0.0.0") return true;
+	if (
+		host.startsWith("fe80:") ||
+		host.startsWith("fc") ||
+		host.startsWith("fd")
+	) {
+		return true;
+	}
+	const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+	if (!v4) return false;
+	const [a, b] = [Number(v4[1]), Number(v4[2])];
+	if (a === 10 || a === 127) return true;
+	if (a === 172 && b >= 16 && b <= 31) return true;
+	if (a === 192 && b === 168) return true;
+	if (a === 169 && b === 254) return true;
+	return false;
+}
 async function sign(
 	config: ShareBrokerStorageConfig,
 	body: { op: EOp; key?: string; prefix?: string; cursor?: string },
@@ -296,9 +328,17 @@ const XML_ENTITIES: Record<string, string> = {
 
 function decodeXml(value: string): string {
 	return value.replace(
-		/&(?:amp|lt|gt|quot|apos);/g,
-		(entity) => XML_ENTITIES[entity] ?? entity,
+		/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g,
+		(entity) => XML_ENTITIES[entity] ?? decodeCharRef(entity),
 	);
+}
+
+function decodeCharRef(entity: string): string {
+	const digits = entity.slice(2, -1);
+	const code = entity.startsWith("&#x")
+		? Number.parseInt(digits.slice(1), 16)
+		: Number.parseInt(digits, 10);
+	return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
 }
 
 function normalizeUrl(url: string): string {

@@ -198,6 +198,52 @@ describe("settings transfer", () => {
 		expect(imported.realtimeToken).toBe(settings.realtimeToken);
 	});
 
+	it("clamps a crafted token that carries an out-of-range number", async () => {
+		const settings = buildSettings({ autoPullIntervalMinutes: 15 });
+		const url = await createSettingsTransferUrl(settings, PASSPHRASE);
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+		const tampered = {
+			...imported,
+			autoPullIntervalMinutes: -5,
+			maxFileBytes: 0,
+		};
+
+		const merged = mergeTransferredSettings(buildSettings({}), tampered);
+
+		expect(merged.autoPullIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		);
+		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
+	});
+
+	it("names an active backend the payload actually carries", async () => {
+		const settings = buildSettings({
+			// The active kind points at a slot that is not in the map.
+			activeStorageKind: EStorageBackend.WebDAV,
+			storageConfigs: { [EStorageBackend.S3]: defaultS3Config() },
+		});
+
+		const url = await createSettingsTransferUrl(settings, PASSPHRASE);
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+
+		expect(imported.activeStorageKind).toBeDefined();
+		expect(
+			imported.storageConfigs?.[imported.activeStorageKind as string],
+		).toBeDefined();
+	});
+
+	it("rejects a token whose salt is the wrong length", async () => {
+		const settings = buildSettings({});
+		const url = await createSettingsTransferUrl(settings, PASSPHRASE);
+		const token = new URL(url).searchParams.get("d") as string;
+		const [version, encoding, , ciphertext] = token.split(".");
+		const short = [version, encoding, "AAAA", ciphertext].join(".");
+
+		await expect(readSettingsTransfer(short, PASSPHRASE)).rejects.toThrow(
+			/Invalid Obsync settings transfer token/,
+		);
+	});
+
 	it("rejects legacy v3 transfer tokens", async () => {
 		const v3Token = "obsidian://obsync?d=3.p.AAAA.BBBB";
 		await expect(readSettingsTransfer(v3Token, PASSPHRASE)).rejects.toThrow(

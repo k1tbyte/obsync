@@ -47,11 +47,12 @@ export interface StorageDescriptor<
 	describeTarget: (config: T) => string;
 	identity: (config: T) => string;
 	fields: ReadonlyArray<SettingsFieldSpec>;
+	/** Returns false when the callback was not this backend's to handle. */
 	handleProtocol?: (
 		params: ObsidianProtocolData,
 		config: T,
 		saveCallback: () => Promise<void>,
-	) => Promise<void>;
+	) => Promise<boolean>;
 }
 
 const STORAGE_REGISTRY: {
@@ -171,7 +172,12 @@ export async function handleStorageProtocol(
 		if (!descriptor.handleProtocol) continue;
 		const config = getConfig(kind as EStorageBackend);
 		if (!config) continue;
-		await descriptor.handleProtocol(params, config, saveCallback);
-		return;
+		// A descriptor that does not recognise the callback returns false, so the
+		// next backend still gets a chance at it.
+		if (
+			(await descriptor.handleProtocol(params, config, saveCallback)) !== false
+		) {
+			return;
+		}
 	}
 }

@@ -141,7 +141,13 @@ function buildPopup(
 	});
 	revertBtn.type = "button";
 	revertBtn.addEventListener("click", () => {
-		revertHunk(view, chunk, baseline);
+		// The popup presents the sync hunk when there is one, so reverting the
+		// finer CodeMirror chunk would undo less than the user was shown.
+		if (syncHunk) {
+			revertSyncHunk(view, syncHunk, baseline);
+		} else {
+			revertHunk(view, chunk, baseline);
+		}
 		dismissPopup();
 	});
 	return popup;
@@ -179,6 +185,38 @@ function renderLines(
 			text: `… ${lines.length - POPUP_MAX_LINES} more line(s)`,
 		});
 	}
+}
+
+/** Replaces the hunk's new-side lines with its old-side lines, addressed by
+ * line number the way `computeHunks` reports them. */
+function revertSyncHunk(
+	view: EditorView,
+	hunk: SyncHunk,
+	baseline: Text,
+): void {
+	const from = lineStart(view.state.doc, hunk.newStart);
+	const to = lineEnd(view.state.doc, hunk.newStart + hunk.newLines - 1);
+	const insertFrom = lineStart(baseline, hunk.oldStart);
+	const insertTo = lineEnd(baseline, hunk.oldStart + hunk.oldLines - 1);
+	view.dispatch({
+		changes: {
+			from,
+			to,
+			insert: baseline.sliceString(insertFrom, insertTo),
+		},
+	});
+}
+
+function lineStart(text: Text, line: number): number {
+	if (line < 1) return 0;
+	if (line > text.lines) return text.length;
+	return text.line(line).from;
+}
+
+function lineEnd(text: Text, line: number): number {
+	if (line < 1) return 0;
+	if (line >= text.lines) return text.length;
+	return text.line(line).to + 1;
 }
 
 function revertHunk(view: EditorView, chunk: Chunk, baseline: Text): void {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SettingsSyncCategories } from "../src/settings/model";
 import { DEFAULT_SETTINGS_SYNC } from "../src/settings/model";
-import { EFileKind } from "../src/types";
+import { diff } from "../src/sync/diff";
+import { EFileKind, type Manifest, type ManifestEntry } from "../src/types";
 import { loadLocalIgnoreMatcher } from "../src/vault/ignore";
 import { scanVault } from "../src/vault/scanner";
 import { createScopePolicy, type ScopeOptions } from "../src/vault/scope";
@@ -259,6 +260,71 @@ describe("scanVault", () => {
 		expect(snapshot.skipped[0]?.path).toBe("gone.md");
 	});
 
+	it("treats a file it could not read as unknown, not deleted", async () => {
+		const adapter = vault({ "a.md": "one", "locked.md": "two" });
+		const clean = await scanVault(
+			adapter.asDataAdapter(),
+			policy(),
+			options,
+			{},
+		);
+		const synced = manifestOf(clean.snapshot.files);
+
+		const data = adapter.asDataAdapter();
+		const stat = data.stat.bind(data);
+		data.stat = async (path: string) => {
+			if (path === "locked.md") throw new Error("EBUSY");
+			return stat(path);
+		};
+		const { snapshot } = await scanVault(data, policy(), options, {});
+		const result = diff({ local: snapshot, remote: synced, baseline: synced });
+
+		// Reporting it as a local delete is what pushes the file off the remote.
+		expect(snapshot.skipped.map((s) => s.path)).toContain("locked.md");
+		expect(result.localChanges).toHaveLength(0);
+		expect(result.conflicts).toHaveLength(0);
+	});
+
+	it("treats a directory it could not list as unknown, not emptied", async () => {
+		const adapter = vault({ "notes/a.md": "one", "b.md": "two" });
+		const clean = await scanVault(
+			adapter.asDataAdapter(),
+			policy(),
+			options,
+			{},
+		);
+		const synced = manifestOf(clean.snapshot.files);
+
+		const data = adapter.asDataAdapter();
+		const list = data.list.bind(data);
+		data.list = async (path: string) => {
+			if (path === "notes") throw new Error("EPERM");
+			return list(path);
+		};
+		const { snapshot } = await scanVault(
+			data,
+			policy(),
+			options,
+			clean.updatedCache,
+		);
+		const result = diff({ local: snapshot, remote: synced, baseline: synced });
+
+		expect(snapshot.skipped.map((s) => s.path)).toContain("notes/a.md");
+		expect(result.localChanges).toHaveLength(0);
+	});
+
+	it("does not walk a directory cycle forever", async () => {
+		const adapter = vault({ "a.md": "one" });
+		const data = adapter.asDataAdapter();
+		data.list = async (path: string) => {
+			if (path === "") return { files: ["a.md"], folders: ["loop"] };
+			return { files: [], folders: ["loop"] };
+		};
+
+		const { snapshot } = await scanVault(data, policy(), options, {});
+		expect(Object.keys(snapshot.files)).toEqual(["a.md"]);
+	});
+
 	it("records an empty folder but not one that only holds excluded files", async () => {
 		const adapter = vault({ "junk/a.tmp": "x" });
 		await adapter.mkdir("empty");
@@ -279,3 +345,15 @@ describe("scanVault", () => {
 		expect(snapshot.ignoredPaths).toContain("junk/a.tmp");
 	});
 });
+
+function manifestOf(files: Record<string, ManifestEntry>): Manifest {
+	return {
+		version: 1,
+		vaultId: "v",
+		snapshotId: "s",
+		parentSnapshotId: null,
+		createdAt: 0,
+		deviceId: "d",
+		files,
+	};
+}

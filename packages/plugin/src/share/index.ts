@@ -11,7 +11,6 @@ export {
 	assertShareableStorage,
 	createSharedFolderConfig,
 	deriveShareStorageConfig,
-	isShareableStorage,
 	joinedSharedFolderConfig,
 	participantIdFromName,
 	shareNameToFolder,

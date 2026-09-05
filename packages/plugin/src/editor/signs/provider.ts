@@ -2,13 +2,13 @@ import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
 import { sha256Hex } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
 import { textToBytes } from "@/sync/content";
 import type { SyncController } from "@/sync/controller";
 import { notifyError, notifyInfo } from "@/ui";
 
-import { pathFromState } from "./compute";
 import { toCmText } from "./helpers";
-import { setCompareTextEffect } from "./state";
+import { pathFromState, setCompareTextEffect } from "./state";
 
 const BASELINE_CACHE_MAX = 64;
 
@@ -189,7 +189,14 @@ export class SignsProvider {
 		if (existing && existing.generation === generation) return existing.promise;
 		const promise = (async () => {
 			try {
-				const snapshot = await this.controller.loadBaselineForPath(path);
+				const snapshot = await this.controller
+					.loadBaselineForPath(path)
+					.catch((err: unknown) => {
+						// Callers fire this with `void`; letting it reject would surface
+						// as an unhandled rejection instead of "no signs for this file".
+						reportWarning(`Could not load the baseline for "${path}".`, err);
+						return null;
+					});
 				if (this.generation !== generation) return;
 				const text = snapshot ? toCmText(snapshot.text) : null;
 				if (snapshot && text) {

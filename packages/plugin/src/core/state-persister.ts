@@ -37,11 +37,18 @@ export class StatePersister {
 	}
 
 	private write(state: LocalState): Promise<void> {
-		this.writes = this.writes.then(
-			() => saveState(this.adapter, this.configDir, state),
-			() => saveState(this.adapter, this.configDir, state),
+		return this.enqueue(() => saveState(this.adapter, this.configDir, state));
+	}
+
+	/** Every write to the state file goes through here, in order. */
+	private enqueue<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.writes.then(task, task);
+		// The chain must survive a failed write, or every later one is skipped.
+		this.writes = run.then(
+			() => undefined,
+			() => undefined,
 		);
-		return this.writes;
+		return run;
 	}
 
 	/**
@@ -58,16 +65,25 @@ export class StatePersister {
 
 	async reset(): Promise<LocalState> {
 		this.cancelTimer();
-		const next = await resetState(this.adapter, this.configDir, this.current);
+		// resetState writes the same file the chain does, so it has to take its
+		// turn rather than race a persist that is already in flight.
+		const next = await this.enqueue(() =>
+			resetState(this.adapter, this.configDir, this.current),
+		);
 		this.current = next;
 		return next;
 	}
 
+	/**
+	 * Last-ditch write. `onunload` is synchronous so it may not complete, and
+	 * the promise is deliberately detached - but never unhandled: a rejection
+	 * here would surface long after the plugin is gone.
+	 */
 	dispose(): void {
-		// Last-ditch: onunload is synchronous so this write may not complete.
-		// flush() on earlier lifecycle hooks is the real safety net.
 		const pending = this.takePending();
-		if (pending) void this.write(pending);
+		if (pending) {
+			this.write(pending).catch(() => undefined);
+		}
 	}
 
 	private takePending(): LocalState | null {
@@ -88,7 +104,7 @@ export class StatePersister {
 			const pending = this.pendingHashCacheState;
 			this.pendingHashCacheState = null;
 			if (!pending) return;
-			void this.write(pending);
+			this.write(pending).catch(() => undefined);
 		}, PERSIST_STATE_DEBOUNCE_MS);
 	}
 

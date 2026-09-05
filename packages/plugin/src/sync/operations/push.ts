@@ -2,15 +2,16 @@ import { LOG_PATH_LIMIT } from "../../constants";
 import { encryptBytes, sha256Hex } from "../../crypto";
 import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
-import type { ManifestEntry } from "../../types";
+import type { Manifest, ManifestEntry } from "../../types";
 import {
 	advanceBaselineForPaths,
 	advanceSessionAfterPush,
+	baselineForPath,
 	buildSessionState,
-	updateBaselineEntry,
 } from "../baseline";
 import { loadLocalBytes, textToBytes } from "../content";
 import {
+	type CompareResult,
 	type EngineDependencies,
 	publishFileMap,
 	pushPaths,
@@ -87,15 +88,16 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 	await assertSidesUnchanged(sides, args.expected);
 	const { hunks } = computeHunks(sides.left, sides.right);
 	const merged = applyHunks(sides.left, hunks, selected);
-	const { manifest, entry } = await pushSingleFile(deps, result, {
-		path,
-		bytes: textToBytes(merged),
-	});
-	const baseline = updateBaselineEntry(
-		deps.state.baseline ?? manifest,
-		path,
-		entry,
-	);
+	// An empty result means the file is gone locally, not that it became a
+	// zero-byte file: publishing one would leave the deletion pending forever.
+	const deleted = merged === "" && !(await deps.adapter.exists(path));
+	const { manifest, entry } = deleted
+		? { manifest: await publishWithoutPath(deps, result, path), entry: null }
+		: await pushSingleFile(deps, result, {
+				path,
+				bytes: textToBytes(merged),
+			});
+	const baseline = baselineForPath(deps.state.baseline, manifest, path, entry);
 	// The local file is untouched by a hunk push, so neither the hash cache nor
 	// the snapshot may adopt the merged entry.
 	await ctx.persistState(
@@ -111,6 +113,17 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 		localEntries: new Map([[path, result.snapshot.files[path] ?? null]]),
 	};
 };
+
+/** Republishes the remote file map with one path removed. */
+async function publishWithoutPath(
+	deps: EngineDependencies,
+	result: CompareResult,
+	path: string,
+): Promise<Manifest> {
+	const files = { ...(result.remote?.files ?? {}) };
+	delete files[path];
+	return publishFileMap(deps, result, files);
+}
 
 export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	deps,

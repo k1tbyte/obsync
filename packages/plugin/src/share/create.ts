@@ -54,7 +54,7 @@ export function joinedSharedFolderConfig(
 		keyB64: invite.keyB64,
 		storage: invite.storage,
 		relayUrl: invite.relayUrl,
-		relayToken: invite.relayToken,
+		relayRoomToken: invite.relayRoomToken,
 		createdAt: Date.now(),
 	};
 }
@@ -83,10 +83,6 @@ export function assertShareableStorage(
 		);
 	}
 	return config;
-}
-
-export function isShareableStorage(config: StorageAdapterConfig): boolean {
-	return config.kind === EStorageBackend.S3;
 }
 
 function joinPrefix(prefix: string, suffix: string): string {

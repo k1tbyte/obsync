@@ -4,10 +4,10 @@ import {
 	isRetryableStatus,
 	StorageHttpError,
 	StorageTimeoutError,
-	toArrayBuffer,
 	withRetry,
 	withTimeout,
 } from "../src/storage/adapters/util";
+import { toArrayBuffer } from "../src/utils/bytes";
 
 describe("storage error semantics", () => {
 	it("treats only 'come back later' statuses as retryable", () => {

@@ -126,6 +126,13 @@ export async function deepCleanOrphans(
 			"Some snapshots could not be read, so orphans cannot be identified safely. Try again later.",
 		);
 	}
+	// With no head there is nothing to be reachable from, and every object a
+	// device is midway through uploading would read as an orphan.
+	if (!reachable.head) {
+		throw new Error(
+			"No manifest is published on this remote, so nothing can be identified as an orphan.",
+		);
+	}
 	const liveHashes = new Set<string>();
 	for (const m of reachable.manifests) collectHashes(m, liveHashes);
 

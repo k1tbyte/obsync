@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { computeHunks } from "../src/sync/hunks";
 import { EHunkPair, loadHunkSides } from "../src/sync/operations";
-import { pullHunksOp } from "../src/sync/operations/pull";
+import { batchAcceptRemoteOp, pullHunksOp } from "../src/sync/operations/pull";
 import { pushHunksOp, pushPathsOp } from "../src/sync/operations/push";
 import { revertHunksOp } from "../src/sync/operations/revert";
 import { recomputeAfterWrite } from "../src/sync/session-state";
@@ -167,6 +168,25 @@ describe("hunk operations", () => {
 		expect(await session.adapter.exists("blob.bin")).toBe(true);
 	});
 
+	it("publishes a deletion, not a zero-byte file, for a removed file", async () => {
+		const session = new TestSession();
+		await sync(session, "note.md", BASE_TEXT);
+		await session.adapter.remove("note.md");
+		const result = await session.compare();
+
+		const outcome = await pushHunksOp(
+			session.deps(),
+			result,
+			{ path: "note.md", selected: new Set([0]) },
+			session.context(),
+		);
+
+		expect(outcome.newRemote?.files["note.md"]).toBeUndefined();
+		const after = await session.compare();
+		expect(after.diff.localChanges).toHaveLength(0);
+		expect(after.diff.remoteChanges).toHaveLength(0);
+	});
+
 	it("pulling one hunk records what was actually written", async () => {
 		const [a, b] = pairedSessions();
 		await sync(a, "note.md", BASE_TEXT);
@@ -210,5 +230,129 @@ describe("hunk operations", () => {
 		expect(await session.adapter.exists("added.md")).toBe(false);
 		expect(outcome.localEntries?.get("added.md")).toBeNull();
 		expect(session.state.hashCache["added.md"]).toBeUndefined();
+	});
+});
+
+describe("hunk operations on a slot that has never synced", () => {
+	/** Device B knows the remote exists but has downloaded none of it. */
+	async function unsyncedAgainstRemote(): Promise<[TestSession, TestSession]> {
+		const [a, b] = pairedSessions();
+		await sync(a, "theirs.md", BASE_TEXT);
+		a.adapter.putText("other.md", "only on the remote\n");
+		const second = await a.compare();
+		await pushPathsOp(a.deps(), second, ["other.md"], a.context());
+
+		// B has the same file under a different edit and nothing else.
+		b.adapter.putText("theirs.md", TWO_EDITS);
+		expect(b.state.baseline).toBeNull();
+		return [a, b];
+	}
+
+	it("does not adopt undownloaded remote files when pushing a hunk", async () => {
+		const [, b] = await unsyncedAgainstRemote();
+		const result = await b.compare();
+
+		await pushHunksOp(
+			b.deps(),
+			result,
+			{ path: "theirs.md", selected: new Set([0]) },
+			b.context(),
+		).catch(() => undefined);
+
+		// other.md was never downloaded: recording it would make the next push
+		// publish it as a deletion.
+		expect(b.state.baseline?.files["other.md"]).toBeUndefined();
+	});
+
+	it("does not adopt undownloaded remote files when pulling a hunk", async () => {
+		const [, b] = await unsyncedAgainstRemote();
+		const result = await b.compare();
+
+		await pullHunksOp(
+			b.deps(),
+			result,
+			{ path: "theirs.md", selected: new Set([0]) },
+			b.context(),
+		);
+
+		expect(b.state.baseline?.files["other.md"]).toBeUndefined();
+		expect(await b.adapter.exists("other.md")).toBe(false);
+	});
+
+	it("does not adopt undownloaded remote files when accepting a conflict", async () => {
+		const [, b] = await unsyncedAgainstRemote();
+		const result = await b.compare();
+		expect(result.diff.conflicts.map((c) => c.path)).toEqual(["theirs.md"]);
+
+		await batchAcceptRemoteOp(
+			b.deps(),
+			result,
+			new Set(["theirs.md"]),
+			b.context(),
+		);
+
+		expect(b.state.baseline?.files["other.md"]).toBeUndefined();
+		expect(b.state.baseline?.files["theirs.md"]).toBeDefined();
+	});
+
+	it("keeps the remaining remote hunks visible after a partial pull", async () => {
+		const [a, b] = pairedSessions();
+		await sync(a, "note.md", BASE_TEXT);
+		b.adapter.putText("note.md", BASE_TEXT);
+		await b.adoptRemote();
+
+		// A publishes two separate edits; B pulls only the first.
+		a.adapter.putText("note.md", TWO_EDITS);
+		const aResult = await a.compare();
+		await pushPathsOp(a.deps(), aResult, ["note.md"], a.context());
+
+		const before = await b.compare();
+		const sides = await loadHunkSides(
+			b.deps(),
+			before,
+			"note.md",
+			EHunkPair.Remote,
+		);
+		expect(computeHunks(sides.left, sides.right).hunks).toHaveLength(2);
+
+		await pullHunksOp(
+			b.deps(),
+			before,
+			{ path: "note.md", selected: new Set([0]) },
+			b.context(),
+		);
+
+		// The second hunk is still only on the remote, so the file must not read
+		// as a plain local change that the next push would flatten.
+		const after = await b.compare();
+		expect(after.diff.localChanges).toHaveLength(0);
+		expect(
+			after.diff.conflicts.length + after.diff.remoteChanges.length,
+		).toBeGreaterThan(0);
+	});
+
+	it("acknowledges the remote version once every hunk is pulled", async () => {
+		const [a, b] = pairedSessions();
+		await sync(a, "note.md", BASE_TEXT);
+		b.adapter.putText("note.md", BASE_TEXT);
+		await b.adoptRemote();
+
+		a.adapter.putText("note.md", TWO_EDITS);
+		const aResult = await a.compare();
+		await pushPathsOp(a.deps(), aResult, ["note.md"], a.context());
+
+		const before = await b.compare();
+		await pullHunksOp(
+			b.deps(),
+			before,
+			{ path: "note.md", selected: new Set([0, 1]) },
+			b.context(),
+		);
+
+		const after = await b.compare();
+		expect(b.text("note.md")).toBe(TWO_EDITS);
+		expect(after.diff.localChanges).toHaveLength(0);
+		expect(after.diff.remoteChanges).toHaveLength(0);
+		expect(after.diff.conflicts).toHaveLength(0);
 	});
 });
