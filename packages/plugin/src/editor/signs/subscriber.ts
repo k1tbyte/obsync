@@ -38,8 +38,10 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 				}
 				if (this.path && next) {
 					this.path = next;
-					this.pendingPath = next;
-					provider.changeViewPath(this.view, next, false);
+					// Deliver straight away: waiting for the next document change left
+					// the gutter blank until the user typed something.
+					this.pendingPath = null;
+					provider.changeViewPath(this.view, next, true);
 					return;
 				}
 				if (this.path && !next) {

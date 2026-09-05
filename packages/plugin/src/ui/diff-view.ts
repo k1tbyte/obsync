@@ -59,6 +59,7 @@ export class DiffView extends ItemView {
 	private hunkCards: HTMLElement[] = [];
 	private currentHunkIndex = -1;
 	private rendering = false;
+	private refreshPending = false;
 	private hunkOpInFlight = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
@@ -80,7 +81,14 @@ export class DiffView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { path: this.path };
+		// The history fields belong here too, or a restored workspace reopens a
+		// version diff as an ordinary one against the current head.
+		return {
+			path: this.path,
+			historyHash: this.historyHash ?? undefined,
+			historyLabel: this.historyHash ? this.historyLabel : undefined,
+			historySize: this.historySize,
+		};
 	}
 
 	async setState(state: DiffViewState, result: ViewStateResult): Promise<void> {
@@ -101,6 +109,7 @@ export class DiffView extends ItemView {
 	}
 
 	private unsubStatus: (() => void) | null = null;
+	private cancelStatusDebounce: (() => void) | null = null;
 
 	async onOpen(): Promise<void> {
 		this.contentEl.empty();
@@ -118,6 +127,7 @@ export class DiffView extends ItemView {
 		);
 
 		this.unsubStatus = this.plugin.controller.subscribe(handleStatus);
+		this.cancelStatusDebounce = () => handleStatus.cancel();
 
 		this.renderShell();
 	}
@@ -127,13 +137,21 @@ export class DiffView extends ItemView {
 			this.unsubStatus();
 			this.unsubStatus = null;
 		}
+		// The debounce holds a timer that would refresh a closed view.
+		this.cancelStatusDebounce?.();
+		this.cancelStatusDebounce = null;
 		this.destroyViews();
 		this.contentEl.empty();
 	}
 
 	private async refreshModel(): Promise<void> {
 		if (!this.path) return;
-		if (this.rendering) return;
+		if (this.rendering) {
+			// Remember the request instead of dropping it: the state that triggered
+			// it is newer than the render already in flight.
+			this.refreshPending = true;
+			return;
+		}
 		this.rendering = true;
 		try {
 			this.renderLoading();
@@ -168,6 +186,10 @@ export class DiffView extends ItemView {
 			this.renderError(errorMessage(err));
 		} finally {
 			this.rendering = false;
+			if (this.refreshPending) {
+				this.refreshPending = false;
+				void this.refreshModel();
+			}
 		}
 	}
 
@@ -488,8 +510,7 @@ export class DiffView extends ItemView {
 	private async advanceAfterResolve(resolvedPath: string): Promise<void> {
 		const next = this.getNextConflictPath(resolvedPath);
 		if (next) {
-			this.path = next;
-			this.currentHunkIndex = -1;
+			this.showFile(next);
 			await this.refreshModel();
 			return;
 		}
@@ -526,9 +547,22 @@ export class DiffView extends ItemView {
 	private async navigateFile(delta: number): Promise<void> {
 		const target = this.getAdjacentPath(delta);
 		if (!target) return;
-		this.path = target;
-		this.currentHunkIndex = -1;
+		this.showFile(target);
 		await this.refreshModel();
+	}
+
+	/** Moves the view to another file, resetting everything that belonged to the
+	 * previous one — `forceText` in particular, or the next file would be loaded
+	 * as text in defiance of the never-load-binary rule. */
+	private showFile(path: string): void {
+		this.path = path;
+		this.currentHunkIndex = -1;
+		this.forceText = false;
+		this.mergePanel.reset();
+		// updateHeader is not in the public typings, but without it the tab keeps
+		// the previous file's name.
+		const leaf = this.leaf as Partial<{ updateHeader: () => void }>;
+		leaf.updateHeader?.();
 	}
 
 	private destroyViews(): void {

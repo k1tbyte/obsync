@@ -6,6 +6,7 @@ import {
 	SCHEDULER_BACKOFF_BASE_MS,
 	SCHEDULER_BACKOFF_MAX_MS,
 	SCHEDULER_BACKOFF_THRESHOLD,
+	SCHEDULER_HEARTBEAT_MS,
 	VAULT_EVENT_DEBOUNCE_MS,
 } from "../constants";
 import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
@@ -13,6 +14,7 @@ import type { SyncController } from "./controller";
 
 export interface SchedulerHost extends Plugin {
 	settings: ObsyncSettings;
+	/** Auto-pull is skipped while realtime is actually delivering signals. */
 	isRealtimeConnected?(): boolean;
 }
 
@@ -31,21 +33,22 @@ export function registerScheduler(
 		if (now - lastRun < AUTO_PULL_BUSY_COOLDOWN_MS) return;
 		if (now < backoffUntil) return;
 		lastRun = now;
-		try {
-			await controller.refreshAndAutoPull();
+		// refreshAndAutoPull reports failures through the controller's error state
+		// rather than by throwing, so the backoff reads that instead of catching.
+		await controller.refreshAndAutoPull();
+		if (!controller.getSnapshot().error) {
 			consecutiveFailures = 0;
 			backoffUntil = 0;
-		} catch (err) {
-			consecutiveFailures++;
-			console.warn("[obsync] auto-pull tick failed", err);
-			if (consecutiveFailures >= SCHEDULER_BACKOFF_THRESHOLD) {
-				const exp = consecutiveFailures - SCHEDULER_BACKOFF_THRESHOLD;
-				const delay = Math.min(
-					SCHEDULER_BACKOFF_BASE_MS * 2 ** exp,
-					SCHEDULER_BACKOFF_MAX_MS,
-				);
-				backoffUntil = Date.now() + delay;
-			}
+			return;
+		}
+		consecutiveFailures++;
+		if (consecutiveFailures >= SCHEDULER_BACKOFF_THRESHOLD) {
+			const exp = consecutiveFailures - SCHEDULER_BACKOFF_THRESHOLD;
+			const delay = Math.min(
+				SCHEDULER_BACKOFF_BASE_MS * 2 ** exp,
+				SCHEDULER_BACKOFF_MAX_MS,
+			);
+			backoffUntil = Date.now() + delay;
 		}
 	};
 
@@ -57,15 +60,24 @@ export function registerScheduler(
 		host.register(() => window.clearTimeout(timer));
 	}
 
-	if (host.settings.autoPullIntervalMinutes > 0) {
-		const intervalMs = host.settings.autoPullIntervalMinutes * 60_000;
-		host.registerInterval(
-			window.setInterval(() => {
-				if (host.settings.realtimeSync) return;
-				void tick();
-			}, intervalMs),
-		);
-	}
+	// The interval is read on every wake-up, not captured at startup: changing
+	// it in settings used to do nothing until Obsidian was restarted.
+	let nextDue = dueAfter(host.settings.autoPullIntervalMinutes);
+	host.registerInterval(
+		window.setInterval(() => {
+			const minutes = host.settings.autoPullIntervalMinutes;
+			if (minutes <= 0) {
+				nextDue = 0;
+				return;
+			}
+			if (nextDue === 0) nextDue = dueAfter(minutes);
+			if (Date.now() < nextDue) return;
+			nextDue = dueAfter(minutes);
+			// Realtime replaces polling only while it is actually connected.
+			if (host.settings.realtimeSync && host.isRealtimeConnected?.()) return;
+			void tick();
+		}, SCHEDULER_HEARTBEAT_MS),
+	);
 
 	const pendingPaths = new Set<string>();
 	const triggerVaultSync = debounce(
@@ -82,10 +94,15 @@ export function registerScheduler(
 		if (oldPath) pendingPaths.add(oldPath);
 		triggerVaultSync();
 	};
+	host.register(() => triggerVaultSync.cancel());
 	host.registerEvent(host.app.vault.on("modify", onVaultEvent));
 	host.registerEvent(host.app.vault.on("create", onVaultEvent));
 	host.registerEvent(host.app.vault.on("delete", onVaultEvent));
 	host.registerEvent(host.app.vault.on("rename", onVaultEvent));
+}
+
+function dueAfter(minutes: number): number {
+	return minutes > 0 ? Date.now() + minutes * 60_000 : 0;
 }
 
 async function runVaultSync(

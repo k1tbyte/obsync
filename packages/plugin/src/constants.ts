@@ -205,6 +205,9 @@ export const SHARE_STARTUP_DELAY_MS = 5_000;
 export const SHARE_PUSH_RETRIES = 3;
 export const SHARE_KEY_BYTES = 32;
 
+/** How often the auto-pull timer wakes up to check whether it is due. */
+export const SCHEDULER_HEARTBEAT_MS = 30_000;
+
 export const SCHEDULER_BACKOFF_THRESHOLD = 3;
 export const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;
 export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
