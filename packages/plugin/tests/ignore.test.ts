@@ -1,3 +1,4 @@
+import type { DataAdapter } from "obsidian";
 import { describe, expect, it } from "vitest";
 import {
 	loadLocalIgnoreMatcher,
@@ -23,7 +24,7 @@ describe("ignore matcher loading", () => {
 		const mockAdapter = {
 			exists: async () => true,
 			read: async () => "# ignore this\n\n\nsecret.key",
-		} as any;
+		} as unknown as DataAdapter;
 
 		const matcher = await loadSharedIgnoreMatcher(mockAdapter);
 		expect(matcher.ignores("secret.key")).toBe(true);
@@ -40,7 +41,9 @@ describe("ignore matcher loading", () => {
 			syncignore: "*.pdf\nassets/",
 		});
 
-		const matcher = await loadSharedIgnoreMatcher(mockAdapter as any);
+		const matcher = await loadSharedIgnoreMatcher(
+			mockAdapter as unknown as DataAdapter,
+		);
 		expect(matcher.ignores("paper.pdf")).toBe(true);
 		expect(matcher.ignores("assets/icon.svg")).toBe(true);
 		expect(matcher.ignores("note.md")).toBe(false);

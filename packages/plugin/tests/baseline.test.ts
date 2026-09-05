@@ -3,7 +3,7 @@ import {
 	mergeBaselineIntoCache,
 	mergeFolderArrays,
 } from "../src/sync/baseline";
-import type { HashCacheEntry, Manifest } from "../src/types";
+import { EFileKind, type HashCacheEntry, type Manifest } from "../src/types";
 
 describe("baseline utilities", () => {
 	describe("mergeFolderArrays", () => {
@@ -40,13 +40,13 @@ describe("baseline utilities", () => {
 						mtime: 3,
 						size: 300,
 						hash: "hash2_new",
-						kind: "file" as any,
+						kind: EFileKind.Vault,
 					},
 					"file3.md": {
 						mtime: 4,
 						size: 400,
 						hash: "hash3",
-						kind: "file" as any,
+						kind: EFileKind.Vault,
 					},
 				},
 				folders: [],

@@ -7,5 +7,5 @@
 		"esModuleInterop": true,
 		"types": ["partykit/server"]
 	},
-	"include": ["src"]
+	"include": ["src", "tests", "vitest.config.ts"]
 }

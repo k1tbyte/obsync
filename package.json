@@ -8,10 +8,10 @@
 	"scripts": {
 		"build": "pnpm --filter obsync run build",
 		"dev": "pnpm --filter obsync run dev",
-		"test": "pnpm --filter obsync run test",
+		"test": "pnpm -r --if-present run test",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"typecheck": "pnpm --filter obsync run typecheck",
+		"typecheck": "pnpm -r --if-present run typecheck",
 		"version": "node version-bump.mjs",
 		"prepare": "husky"
 	},

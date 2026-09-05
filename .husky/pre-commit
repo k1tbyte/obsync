@@ -1,1 +1,2 @@
 pnpm run lint
+pnpm -r --if-present run typecheck
