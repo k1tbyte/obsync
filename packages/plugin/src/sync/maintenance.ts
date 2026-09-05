@@ -96,11 +96,6 @@ export async function deepCleanOrphans(
 	key: EncryptionKey,
 	options: MaintenanceOptions = {},
 ): Promise<CleanResult> {
-	if (!storage.capabilities.canList) {
-		throw new Error(
-			"This storage backend does not support listing; deep-clean is unavailable.",
-		);
-	}
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
 	const manifests = await reachableManifests(storage, key, concurrency);
 	const liveHashes = new Set<string>();

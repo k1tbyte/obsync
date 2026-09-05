@@ -21,12 +21,13 @@ interface BootstrapPluginRuntimeOptions {
 	app: App;
 	settings: ObsyncSettings;
 	onPushComplete?: () => void;
+	persistSettings?: () => Promise<void>;
 }
 
 export async function bootstrapPluginRuntime(
 	options: BootstrapPluginRuntimeOptions,
 ): Promise<PluginRuntime> {
-	const { app, settings, onPushComplete } = options;
+	const { app, settings, onPushComplete, persistSettings } = options;
 	const logs = new LogService(app.vault.adapter, app.vault.configDir);
 	await logs.load();
 
@@ -48,6 +49,7 @@ export async function bootstrapPluginRuntime(
 		passphrase: passphraseManager,
 		state: statePersister,
 		logs,
+		persistSettings,
 	});
 
 	const controller = new SyncController({

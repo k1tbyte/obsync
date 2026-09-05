@@ -81,6 +81,7 @@ export default class ObsyncPlugin extends Plugin {
 				this.realtime?.notifySync();
 				refreshOpenHistoryViewsAfterPush(this);
 			},
+			persistSettings: () => this.saveSettings(),
 		});
 		this.logs = runtime.logs;
 		this.statePersister = runtime.statePersister;
@@ -114,7 +115,7 @@ export default class ObsyncPlugin extends Plugin {
 		this.registerObsidianProtocolHandler("obsync-auth", (params) => {
 			void handleStorageProtocol(
 				params,
-				activeStorage(this.settings),
+				(kind) => this.settings.storageConfigs[kind],
 				async () => {
 					await this.saveSettings();
 					// Re-render the open Settings tab so auth status updates without

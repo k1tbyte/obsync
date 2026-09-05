@@ -28,8 +28,4 @@ export {
 	type StorageDescriptor,
 	storageIdentity,
 } from "./registry";
-export type {
-	ObjectStorage,
-	StorageAdapter,
-	StorageCapabilities,
-} from "./types";
+export type { ObjectStorage, StorageAdapter } from "./types";

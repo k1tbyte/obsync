@@ -27,6 +27,8 @@ export interface SessionFactoryDeps {
 	passphrase: PassphraseManager;
 	state: StatePersister;
 	logs: LogService;
+	/** Persists settings an adapter rewrote itself, such as a refreshed token. */
+	persistSettings?: () => Promise<void>;
 }
 
 export function createSessionOpener(
@@ -42,7 +44,12 @@ export function createSessionOpener(
 		const config = activeStorage(deps.settings);
 		const key = JSON.stringify(config);
 		if (cached && cached.key === key) return cached.adapter;
-		const adapter = createStorageAdapter(config);
+		const adapter = createStorageAdapter(config, () => {
+			// The adapter mutated its own config (refreshed token): drop the
+			// memo so the next call rebuilds against the saved values.
+			cached = null;
+			void deps.persistSettings?.();
+		});
 		cached = { key, adapter };
 		return adapter;
 	};

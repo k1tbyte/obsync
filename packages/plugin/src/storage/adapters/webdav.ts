@@ -9,7 +9,15 @@ import {
 	type SettingsFieldSpec,
 } from "../field-spec";
 import type { StorageAdapter } from "../types";
-import { delay, RETRY_DELAYS_MS } from "./util";
+import {
+	assertOk,
+	isRetryableStatus,
+	STORAGE_TIMEOUT_MS,
+	StorageHttpError,
+	toArrayBuffer,
+	withRetry,
+	withTimeout,
+} from "./util";
 
 const PROPFIND_BODY =
 	'<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>';
@@ -17,8 +25,9 @@ const HTTP_OK_MIN = 200;
 const HTTP_OK_MAX = 299;
 const HTTP_NOT_FOUND = 404;
 const HTTP_METHOD_NOT_ALLOWED = 405;
-const HTTP_CONFLICT = 409;
+const _HTTP_CONFLICT = 409;
 const HTTP_MULTI_STATUS = 207;
+const HTTP_PRECONDITION_FAILED = 412;
 
 export const WEBDAV_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -71,8 +80,10 @@ export function createWebDAVAdapter(
 	assertConfig(config);
 	const baseUrl = ensureTrailingSlash(config.baseUrl);
 	const basePath = normalizeKeyPrefix(config.basePath);
-	const rootUrl = baseUrl + basePath;
-	const auth = `Basic ${btoa(`${config.username}:${config.password}`)}`;
+	// The path is part of a URL, so it has to be encoded like every other
+	// segment: a folder with a space would otherwise produce an invalid request.
+	const rootUrl = baseUrl + encodeKey(basePath);
+	const auth = `Basic ${basicCredentials(config.username, config.password)}`;
 	const knownDirs = new Set<string>();
 	knownDirs.add("");
 
@@ -103,20 +114,21 @@ export function createWebDAVAdapter(
 				headers: buildHeaders(),
 				throw: false,
 			});
-			if (
-				isSuccess(res.status) ||
-				res.status === HTTP_METHOD_NOT_ALLOWED ||
-				res.status === HTTP_CONFLICT
-			) {
+			// 405 means the collection is already there. 409 means the parent is
+			// missing, and this loop creates parents first, so accepting it would
+			// cache a directory that does not exist and fail every later PUT.
+			if (isSuccess(res.status) || res.status === HTTP_METHOD_NOT_ALLOWED) {
 				knownDirs.add(cursor);
 				continue;
 			}
-			throw new Error(`WebDAV MKCOL ${cursor} failed: ${res.status}`);
+			throw new StorageHttpError(
+				res.status,
+				`WebDAV MKCOL "${cursor}" failed (HTTP ${res.status})`,
+			);
 		}
 	}
 
 	return {
-		capabilities: { canList: true },
 		identity() {
 			return webdavIdentity(config);
 		},
@@ -127,9 +139,9 @@ export function createWebDAVAdapter(
 				headers: buildHeaders(),
 				throw: false,
 			});
-			if (isSuccess(res.status)) return true;
 			if (res.status === HTTP_NOT_FOUND) return false;
-			throw new Error(`WebDAV HEAD ${key} failed: ${res.status}`);
+			assertOk(res, "check", key);
+			return true;
 		},
 		async get(key) {
 			const res = await davRequest({
@@ -139,29 +151,20 @@ export function createWebDAVAdapter(
 				throw: false,
 			});
 			if (res.status === HTTP_NOT_FOUND) return null;
-			if (!isSuccess(res.status)) {
-				throw new Error(`WebDAV GET ${key} failed: ${res.status}`);
-			}
+			assertOk(res, "read", key);
 			return new Uint8Array(res.arrayBuffer);
 		},
 		async put(key, body, contentType) {
-			await ensureParentDir(key);
-			const buffer = body.buffer.slice(
-				body.byteOffset,
-				body.byteOffset + body.byteLength,
-			) as ArrayBuffer;
-			const res = await davRequest({
-				url: urlForKey(key),
-				method: "PUT",
-				headers: buildHeaders({
-					"Content-Type": contentType ?? "application/octet-stream",
-				}),
-				body: buffer,
-				throw: false,
+			const res = await sendPut(key, body, contentType);
+			assertOk(res, "write", key);
+		},
+		async putIfAbsent(key, body, contentType) {
+			const res = await sendPut(key, body, contentType, {
+				"If-None-Match": "*",
 			});
-			if (!isSuccess(res.status)) {
-				throw new Error(`WebDAV PUT ${key} failed: ${res.status}`);
-			}
+			if (res.status === HTTP_PRECONDITION_FAILED) return false;
+			assertOk(res, "write", key);
+			return true;
 		},
 		async delete(key) {
 			const res = await davRequest({
@@ -170,54 +173,93 @@ export function createWebDAVAdapter(
 				headers: buildHeaders(),
 				throw: false,
 			});
-			if (isSuccess(res.status) || res.status === HTTP_NOT_FOUND) return;
-			throw new Error(`WebDAV DELETE ${key} failed: ${res.status}`);
+			if (res.status === HTTP_NOT_FOUND) return;
+			assertOk(res, "delete", key);
 		},
 		async list(keyPrefix) {
-			const dir = keyPrefix.endsWith("/") ? keyPrefix : `${keyPrefix}/`;
-			const res = await davRequest({
-				url: rootUrl + encodeKey(dir),
-				method: "PROPFIND",
-				headers: buildHeaders({
-					Depth: "1",
-					"Content-Type": "application/xml; charset=utf-8",
-				}),
-				body: PROPFIND_BODY,
-				throw: false,
-			});
-			if (res.status === HTTP_NOT_FOUND) return [];
-			if (res.status !== HTTP_MULTI_STATUS) {
-				throw new Error(`WebDAV PROPFIND ${keyPrefix} failed: ${res.status}`);
+			// Depth 1 only reports direct children, so the walk has to recurse:
+			// objects/ sits one level below the root and would be invisible.
+			const seen = new Set<string>();
+			const keys: string[] = [];
+			const queue = [keyPrefix ? ensureTrailingSlash(keyPrefix) : ""];
+			while (queue.length > 0) {
+				const dir = queue.shift() as string;
+				if (seen.has(dir)) continue;
+				seen.add(dir);
+				const res = await davRequest({
+					url: rootUrl + encodeKey(dir),
+					method: "PROPFIND",
+					headers: buildHeaders({
+						Depth: "1",
+						"Content-Type": "application/xml; charset=utf-8",
+					}),
+					body: PROPFIND_BODY,
+					throw: false,
+				});
+				if (res.status === HTTP_NOT_FOUND) continue;
+				if (res.status !== HTTP_MULTI_STATUS) {
+					throw new StorageHttpError(
+						res.status,
+						`WebDAV PROPFIND "${dir}" failed (HTTP ${res.status})`,
+					);
+				}
+				const listed = parsePropfindResponse(res.text, rootUrl);
+				keys.push(...listed.files);
+				for (const child of listed.collections) {
+					if (child !== dir) queue.push(child);
+				}
 			}
-			return parsePropfindResponse(res.text, rootUrl);
+			return keys;
 		},
 	};
+
+	async function sendPut(
+		key: string,
+		body: Uint8Array,
+		contentType: string | undefined,
+		extraHeaders: Record<string, string> = {},
+	): ReturnType<typeof davRequest> {
+		await ensureParentDir(key);
+		return davRequest({
+			url: urlForKey(key),
+			method: "PUT",
+			headers: buildHeaders({
+				"Content-Type": contentType ?? "application/octet-stream",
+				...extraHeaders,
+			}),
+			body: toArrayBuffer(body),
+			throw: false,
+		});
+	}
 }
 
 /**
- * `requestUrl` with bounded retry/backoff. All WebDAV verbs used here are
- * idempotent, so retrying a thrown network error or a 5xx is safe. Non-5xx
- * statuses are returned as-is for the caller to interpret.
+ * `requestUrl` under the shared timeout and retry policy. Every WebDAV verb
+ * used here is idempotent, so retrying a transport failure or a "try later"
+ * status is safe; any other status is returned for the caller to interpret.
  */
 async function davRequest(
 	params: Parameters<typeof requestUrl>[0],
 ): Promise<Awaited<ReturnType<typeof requestUrl>>> {
-	let lastErr: unknown;
-	for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-		try {
-			const res = await requestUrl(params);
-			if (res.status >= 500 && attempt < RETRY_DELAYS_MS.length) {
-				await delay(RETRY_DELAYS_MS[attempt] as number);
-				continue;
-			}
-			return res;
-		} catch (err) {
-			lastErr = err;
-			if (attempt === RETRY_DELAYS_MS.length) break;
-			await delay(RETRY_DELAYS_MS[attempt] as number);
+	return withRetry(async () => {
+		const res = await withTimeout(requestUrl(params), STORAGE_TIMEOUT_MS);
+		if (isRetryableStatus(res.status)) {
+			throw new StorageHttpError(
+				res.status,
+				`WebDAV request failed (HTTP ${res.status})`,
+			);
 		}
-	}
-	throw lastErr;
+		return res;
+	});
+}
+
+/** Basic auth is Latin-1 by definition, so a non-ASCII password has to be
+ * UTF-8 encoded before base64 or `btoa` throws. */
+function basicCredentials(username: string, password: string): string {
+	const bytes = new TextEncoder().encode(`${username}:${password}`);
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary);
 }
 
 function assertConfig(config: WebDAVStorageConfig): void {
@@ -243,11 +285,19 @@ function isSuccess(status: number): boolean {
 	return status >= HTTP_OK_MIN && status <= HTTP_OK_MAX;
 }
 
-function parsePropfindResponse(xmlText: string, rootUrl: string): string[] {
+interface PropfindListing {
+	files: string[];
+	collections: string[];
+}
+
+function parsePropfindResponse(
+	xmlText: string,
+	rootUrl: string,
+): PropfindListing {
 	const parser = new DOMParser();
 	const doc = parser.parseFromString(xmlText, "application/xml");
 	const responses = doc.getElementsByTagNameNS("DAV:", "response");
-	const out: string[] = [];
+	const listing: PropfindListing = { files: [], collections: [] };
 	for (let i = 0; i < responses.length; i++) {
 		const node = responses.item(i);
 		if (!node) continue;
@@ -255,27 +305,38 @@ function parsePropfindResponse(xmlText: string, rootUrl: string): string[] {
 		if (!hrefEl) continue;
 		const href = (hrefEl.textContent ?? "").trim();
 		if (!href) continue;
+		const relative = relativizeHref(href, rootUrl);
+		if (relative === null) continue;
 		const resourceType = node
 			.getElementsByTagNameNS("DAV:", "resourcetype")
 			.item(0);
 		const isCollection = Boolean(
 			resourceType?.getElementsByTagNameNS("DAV:", "collection").length,
 		);
-		if (isCollection) continue;
-		const relative = relativizeHref(href, rootUrl);
-		if (relative !== null) out.push(relative);
+		if (isCollection) {
+			if (relative) listing.collections.push(ensureTrailingSlash(relative));
+		} else {
+			listing.files.push(relative);
+		}
 	}
-	return out;
+	return listing;
 }
 
+/**
+ * Href to a key relative to the configured root. Compared as parsed URLs, not
+ * as strings: `https://host:443/` and `https://host/` are the same origin, and
+ * a textual prefix test drops every entry when the two spellings differ.
+ */
 function relativizeHref(href: string, rootUrl: string): string | null {
-	let absolute: string;
+	let absolute: URL;
+	let root: URL;
 	try {
-		absolute = new URL(href, rootUrl).toString();
+		absolute = new URL(href, rootUrl);
+		root = new URL(rootUrl);
 	} catch {
 		return null;
 	}
-	if (!absolute.startsWith(rootUrl)) return null;
-	const tail = absolute.slice(rootUrl.length);
-	return decodeURIComponent(tail);
+	if (absolute.origin !== root.origin) return null;
+	if (!absolute.pathname.startsWith(root.pathname)) return null;
+	return decodeURIComponent(absolute.pathname.slice(root.pathname.length));
 }
