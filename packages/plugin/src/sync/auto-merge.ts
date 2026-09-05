@@ -1,10 +1,11 @@
 import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "../constants";
 import { ESyncLogOperation } from "../logs/store";
-import type { Manifest, SessionState } from "../types";
+import type { Manifest, ManifestEntry, SessionState } from "../types";
 import { tryAutoMergeConflict } from "./conflict-merge";
-import { hasKnownBinaryExtension } from "./content";
+import { hasKnownBinaryExtension, textToBytes } from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
+import { writeLocalFile } from "./operations/local-write";
 
 export async function autoMergeOp(
 	deps: EngineDependencies,
@@ -12,6 +13,8 @@ export async function autoMergeOp(
 	ctx: OperationContext,
 ): Promise<OperationOutcome> {
 	const mergedPaths: string[] = [];
+	const localEntries = new Map<string, ManifestEntry | null>();
+	const hashCache = { ...result.updatedCache };
 
 	for (const conflict of result.diff.conflicts) {
 		// No common ancestor: nothing to merge against, and no reason to stat.
@@ -25,9 +28,20 @@ export async function autoMergeOp(
 			deps.state.baseline,
 		);
 		if (!mergeable) continue;
-		if (await tryAutoMergeConflict(deps, conflict)) {
-			mergedPaths.push(conflict.path);
-		}
+		const merged = await tryAutoMergeConflict(deps, conflict);
+		if (merged === null) continue;
+		const entry = await writeLocalFile(
+			deps,
+			conflict.path,
+			textToBytes(merged),
+		);
+		hashCache[conflict.path] = {
+			mtime: entry.mtime,
+			size: entry.size,
+			hash: entry.hash,
+		};
+		localEntries.set(conflict.path, entry);
+		mergedPaths.push(conflict.path);
 	}
 
 	if (mergedPaths.length === 0) {
@@ -45,7 +59,11 @@ export async function autoMergeOp(
 			const remoteEntry = result.remote?.files[path];
 			if (remoteEntry) files[path] = remoteEntry;
 		}
-		await ctx.persistState({ ...freshState, baseline: { ...baseline, files } });
+		await ctx.persistState({
+			...freshState,
+			baseline: { ...baseline, files },
+			hashCache,
+		});
 	}
 
 	await ctx.logInfo(
@@ -53,7 +71,13 @@ export async function autoMergeOp(
 		`Auto-merged ${mergedPaths.length} conflict(s).`,
 		mergedPaths.slice(0, LOG_PATH_LIMIT),
 	);
-	return { newRemote: result.remote, touchedPaths: new Set(mergedPaths) };
+	return {
+		newRemote: result.remote,
+		touchedPaths: new Set(mergedPaths),
+		// The merged text is neither the local nor the remote version: without
+		// this the snapshot adopts the remote hash and the merge is never pushed.
+		localEntries,
+	};
 }
 
 /**

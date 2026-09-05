@@ -211,6 +211,9 @@ export const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
 /** Max paths attached to a single log entry, so one big sync cannot flood the log. */
 export const LOG_PATH_LIMIT = 50;
 /** Shares log more often (every cycle), so they attach fewer paths. */
+/** Guard against an endless "(conflict from X) N" chain on one file. */
+export const CONFLICT_COPY_LIMIT = 100;
+
 export const SHARE_LOG_PATH_LIMIT = 25;
 
 export const BATCH_RESOLVE_CONFIRM_THRESHOLD = 5;

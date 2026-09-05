@@ -1,5 +1,6 @@
 import { ESyncLogOperation } from "@/logs/store";
 import { errorMessage } from "@/shared/errors";
+import { advanceBaselineForPaths } from "@/sync/baseline";
 import type { SyncControllerHost } from "@/sync/controller";
 import {
 	type CompareResult,
@@ -52,6 +53,16 @@ export class OperationRunner {
 			const identity = session.storage.identity();
 			const nextSessionState: SessionState = {
 				...session.state,
+				// Both sides reached the same content on their own; adopt it so the
+				// next edit is an ordinary change instead of a phantom conflict.
+				baseline:
+					result.remote && result.diff.converged.length > 0
+						? advanceBaselineForPaths(
+								session.state.baseline,
+								result.remote,
+								new Set(result.diff.converged),
+							)
+						: session.state.baseline,
 				hashCache: result.updatedCache,
 			};
 			await this.deps.host.persistState(

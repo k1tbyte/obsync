@@ -16,7 +16,7 @@ import { runWithConcurrency } from "../utils/concurrency";
 import { deletePath, ensureDir, readBinary, removeEmptyDir } from "../vault/io";
 import { scanVault } from "../vault/scanner";
 import type { ScopePolicy } from "../vault/scope";
-import { mergeFolderArrays } from "./baseline";
+import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
 import { writeRemoteObject } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
@@ -92,40 +92,6 @@ export function filterManifestForDiff(
 	return { ...manifest, files };
 }
 
-export async function push(
-	deps: EngineDependencies,
-	compareResult: CompareResult,
-): Promise<Manifest> {
-	if (compareResult.diff.conflicts.length > 0) {
-		throw new Error("Cannot push: conflicts must be resolved first");
-	}
-	if (compareResult.diff.remoteChanges.length > 0) {
-		throw new Error("Cannot push: remote has changes; pull first");
-	}
-	return pushPaths(
-		deps,
-		compareResult,
-		compareResult.diff.localChanges.map((c) => c.path),
-	);
-}
-
-export async function pull(
-	deps: EngineDependencies,
-	compareResult: CompareResult,
-): Promise<Manifest> {
-	if (compareResult.diff.conflicts.length > 0) {
-		throw new Error("Cannot pull: conflicts must be resolved first");
-	}
-	if (!compareResult.remote) {
-		throw new Error("Cannot pull: remote manifest is missing");
-	}
-	return pullPaths(
-		deps,
-		compareResult,
-		compareResult.diff.remoteChanges.map((c) => c.path),
-	);
-}
-
 export async function pushPaths(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
@@ -160,12 +126,18 @@ export async function pushPaths(
 	return manifest;
 }
 
+export interface PullResult {
+	baseline: Manifest;
+	/** What each pulled path now looks like on disk (null = deleted). */
+	written: Map<string, ManifestEntry | null>;
+}
+
 export async function pullPaths(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
 	paths: ReadonlyArray<string>,
 	onProgress?: (done: number, total: number) => void,
-): Promise<Manifest> {
+): Promise<PullResult> {
 	if (!compareResult.remote) {
 		throw new Error("Cannot pull: remote manifest is missing");
 	}
@@ -181,15 +153,24 @@ export async function pullPaths(
 	const total = downloads.length + deletions.length;
 	let done = 0;
 
+	const written = new Map<string, ManifestEntry | null>();
 	await runWithConcurrency(downloads, concurrency, async (change) => {
 		const entry = remote.files[change.path];
 		if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
-		await writeRemoteObject(deps, change.path, entry.hash);
+		const bytes = await writeRemoteObject(deps, change.path, entry.hash);
+		const stat = await deps.adapter.stat(change.path).catch(() => null);
+		written.set(change.path, {
+			hash: entry.hash,
+			size: bytes.length,
+			mtime: stat?.mtime ?? Date.now(),
+			kind: entry.kind,
+		});
 		onProgress?.(++done, total);
 	});
 
 	for (const change of deletions) {
 		await deletePath(deps.adapter, change.path);
+		written.set(change.path, null);
 		onProgress?.(++done, total);
 	}
 
@@ -206,11 +187,10 @@ export async function pullPaths(
 		}
 	}
 
-	return buildAdvancedBaseline({
-		previousBaseline: deps.state.baseline,
-		remote,
-		pulledPaths: pathSet,
-	});
+	return {
+		baseline: advanceBaselineForPaths(deps.state.baseline, remote, pathSet),
+		written,
+	};
 }
 
 export interface SingleFilePushInput {
@@ -268,6 +248,7 @@ export async function publishFileMap(
 			emptyFolders: mergeFolderArrays(
 				compareResult.remote?.folders,
 				compareResult.snapshot.emptyFolders,
+				deps.state.baseline?.folders,
 			),
 			ignoredPaths: [],
 		},
@@ -278,6 +259,7 @@ export async function publishFileMap(
 		manifest,
 		compareResult.remote?.snapshotId ?? null,
 		deps.history,
+		deps.state.baseline,
 	);
 	return manifest;
 }
@@ -297,35 +279,6 @@ function buildPartialFileMap(input: {
 		if (entry) next[change.path] = entry;
 	}
 	return next;
-}
-
-function buildAdvancedBaseline(input: {
-	previousBaseline: Manifest | null;
-	remote: Manifest;
-	pulledPaths: Set<string>;
-}): Manifest {
-	const baseline = input.previousBaseline;
-	const files: Record<string, ManifestEntry> = baseline
-		? { ...baseline.files }
-		: {};
-	for (const path of input.pulledPaths) {
-		const remoteEntry = input.remote.files[path];
-		if (remoteEntry) {
-			files[path] = remoteEntry;
-		} else {
-			delete files[path];
-		}
-	}
-	return {
-		version: input.remote.version,
-		vaultId: input.remote.vaultId,
-		snapshotId: input.remote.snapshotId,
-		parentSnapshotId: baseline?.snapshotId ?? null,
-		createdAt: input.remote.createdAt,
-		deviceId: input.remote.deviceId,
-		files,
-		folders: input.remote.folders,
-	};
 }
 
 /** Hashes the remote already stores, from the manifests we have in hand. */

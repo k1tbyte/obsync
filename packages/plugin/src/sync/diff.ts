@@ -26,6 +26,7 @@ export function diff(input: DiffInput): DiffResult {
 	const localChanges: FileChange[] = [];
 	const remoteChanges: FileChange[] = [];
 	const conflicts: Conflict[] = [];
+	const converged: string[] = [];
 
 	for (const path of paths) {
 		const local = localFiles[path]?.hash ?? null;
@@ -38,7 +39,10 @@ export function diff(input: DiffInput): DiffResult {
 		if (!localChanged && !remoteChanged) continue;
 
 		if (localChanged && remoteChanged) {
-			if (local === remote) continue;
+			if (local === remote) {
+				converged.push(path);
+				continue;
+			}
 			conflicts.push({
 				path,
 				localHash: local ?? "",
@@ -68,7 +72,7 @@ export function diff(input: DiffInput): DiffResult {
 	const remoteMoved =
 		(input.baseline?.snapshotId ?? null) !== (input.remote?.snapshotId ?? null);
 
-	return { localChanges, remoteChanges, conflicts, remoteMoved };
+	return { localChanges, remoteChanges, conflicts, converged, remoteMoved };
 }
 
 function classify(

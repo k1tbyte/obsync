@@ -4,12 +4,18 @@ import { ESyncLogOperation } from "../../logs/store";
 import { formatBytes, sumBytes } from "../../shared/format";
 import type { ManifestEntry } from "../../types";
 import {
+	advanceBaselineForPaths,
 	advanceSessionAfterPush,
 	buildSessionState,
 	updateBaselineEntry,
 } from "../baseline";
 import { loadLocalBytes, textToBytes } from "../content";
-import { publishFileMap, pushPaths, pushSingleFile } from "../engine";
+import {
+	type EngineDependencies,
+	publishFileMap,
+	pushPaths,
+	pushSingleFile,
+} from "../engine";
 import { applyHunks, computeHunks } from "../hunks";
 import { objectKey } from "../manifest";
 import {
@@ -120,20 +126,36 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	}
 	const baseFiles = { ...(result.remote?.files ?? {}) };
 	const nextHashCache = { ...result.updatedCache };
+	const localEntries = new Map<string, ManifestEntry | null>();
 	let done = 0;
 	for (const path of conflictPaths) {
-		const entry = await uploadLocalAsObject(deps, path);
-		baseFiles[path] = entry;
-		nextHashCache[path] = {
-			mtime: entry.mtime,
-			size: entry.size,
-			hash: entry.hash,
-		};
+		const localBytes = await loadLocalBytes(deps.adapter, path);
+		if (!localBytes) {
+			// Delete vs edit, keeping local: the local side is the deletion, so
+			// publish it instead of failing on the missing file.
+			delete baseFiles[path];
+			delete nextHashCache[path];
+			localEntries.set(path, null);
+		} else {
+			const entry = await uploadLocalAsObject(deps, path, localBytes);
+			baseFiles[path] = entry;
+			nextHashCache[path] = {
+				mtime: entry.mtime,
+				size: entry.size,
+				hash: entry.hash,
+			};
+			localEntries.set(path, entry);
+		}
 		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
 	}
 	const manifest = await publishFileMap(deps, result, baseFiles);
+	const baseline = advanceBaselineForPaths(
+		deps.state.baseline,
+		manifest,
+		new Set(conflictPaths),
+	);
 	await ctx.persistState(
-		buildSessionState(deps.state, manifest, nextHashCache),
+		buildSessionState(deps.state, baseline, nextHashCache),
 	);
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
@@ -141,25 +163,29 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 		conflictPaths.slice(0, LOG_PATH_LIMIT),
 	);
 	ctx.setProgress(null);
-	return { newRemote: manifest, touchedPaths: new Set(conflictPaths) };
+	return {
+		newRemote: manifest,
+		touchedPaths: new Set(conflictPaths),
+		localEntries,
+	};
 };
 
 async function uploadLocalAsObject(
-	deps: Parameters<Operation<ReadonlySet<string>>>[0],
+	deps: EngineDependencies,
 	path: string,
+	localBytes: Uint8Array,
 ): Promise<ManifestEntry> {
-	const localBytes = await loadLocalBytes(deps.adapter, path);
-	if (!localBytes) throw new Error(`Local file missing: ${path}`);
 	const hash = await sha256Hex(localBytes);
 	const exists = await deps.storage.exists(objectKey(hash));
 	if (!exists) {
 		const blob = await encryptBytes(deps.key, localBytes);
 		await deps.storage.put(objectKey(hash), blob);
 	}
+	const stat = await deps.adapter.stat(path).catch(() => null);
 	return {
 		hash,
 		size: localBytes.length,
-		mtime: Date.now(),
+		mtime: stat?.mtime ?? Date.now(),
 		kind: deps.scope.classify(path),
 	};
 }

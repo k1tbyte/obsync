@@ -28,12 +28,14 @@ export async function publishManifestWithHistory(
 	manifest: Manifest,
 	expectedParentSnapshotId: string | null,
 	history: HistoryConfig | undefined,
+	baseline: Manifest | null = null,
 ): Promise<void> {
 	await publishManifestWithGuard(
 		storage,
 		key,
 		manifest,
 		expectedParentSnapshotId,
+		baseline,
 	);
 	if (!history) return;
 	try {
