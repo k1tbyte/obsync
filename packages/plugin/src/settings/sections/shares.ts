@@ -245,10 +245,16 @@ async function removeShare(
 
 	if (owned) {
 		// Revoke first: no token should outlive the data it could still write to.
+		// If that fails, stop — removing the share locally while participants
+		// still hold write tokens is worse than leaving it in place.
 		try {
 			await revokeAllShareTokens(brokerAdmin(plugin), share.id);
 		} catch (err) {
-			notifyError("Could not revoke invites — revoke them on the broker", err);
+			notifyError(
+				"Could not revoke invites, so the share was kept. Revoke them on the broker and try again",
+				err,
+			);
+			return;
 		}
 		try {
 			await plugin.shares?.deleteRemoteShareData(share);

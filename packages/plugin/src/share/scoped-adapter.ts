@@ -90,9 +90,22 @@ export class ScopedVaultAdapter {
 		return this.inner.trashSystem(this.abs(path));
 	}
 
+	/**
+	 * Share-relative path to a vault path. Paths arrive from a share manifest
+	 * written by another participant, so anything that could resolve outside the
+	 * share root is rejected here rather than sanitised — this class is the last
+	 * thing between a remote manifest and the vault.
+	 */
 	private abs(path: string): string {
 		const rel = path.replace(/^\/+/, "");
-		return rel ? `${this.root}/${rel}` : this.root;
+		if (!rel) return this.root;
+		if (rel.includes("\\") || rel.includes("\0")) {
+			throw new Error(`Illegal character in shared path "${path}"`);
+		}
+		if (rel.split("/").some((segment) => segment === "." || segment === "..")) {
+			throw new Error(`Shared path "${path}" escapes the share root`);
+		}
+		return `${this.root}/${rel}`;
 	}
 
 	private rel(vaultPath: string): string {

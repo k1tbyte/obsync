@@ -59,7 +59,7 @@ export class ShareSyncService {
 		{ client: RealtimeClient; cfgKey: string }
 	>();
 	private readonly debounceTimers = new Map<string, number>();
-	private readonly running = new Set<string>();
+	private readonly inFlight = new Map<string, Promise<void>>();
 	private readonly queued = new Set<string>();
 	private readonly storageCache = new Map<string, StorageAdapter>();
 	private disposed = false;
@@ -168,8 +168,11 @@ export class ShareSyncService {
 		return () => this.listeners.delete(listener);
 	}
 
-	/** Syncs one share immediately (used by "Sync now"); throws on failure. */
+	/** Syncs one share immediately (used by "Sync now"); throws on failure.
+	 * Waits for a cycle already in flight instead of reporting success early. */
 	async syncNow(shareId: string): Promise<void> {
+		const running = this.inFlight.get(shareId);
+		if (running) await running.catch(() => undefined);
 		await this.syncShare(shareId, true);
 	}
 
@@ -197,6 +200,14 @@ export class ShareSyncService {
 	/** Forgets a share's local sync state (baseline + hash cache). Called when
 	 * a share is removed from settings. */
 	async forgetShareState(shareId: string): Promise<void> {
+		const timer = this.debounceTimers.get(shareId);
+		if (timer !== undefined) {
+			window.clearTimeout(timer);
+			this.debounceTimers.delete(shareId);
+		}
+		this.queued.delete(shareId);
+		// A running cycle still holds the old slot; let it finish before dropping it.
+		await this.inFlight.get(shareId)?.catch(() => undefined);
 		const state = await this.host.ensureState();
 		const storages = { ...state.storages };
 		delete storages[shareSlotKey(shareId)];
@@ -204,6 +215,9 @@ export class ShareSyncService {
 		delete shareCaches[shareId];
 		await this.host.persistState({ ...state, storages, shareCaches });
 		this.statuses.delete(shareId);
+		for (const key of [...this.storageCache.keys()]) {
+			if (key.startsWith(`${shareId}|`)) this.storageCache.delete(key);
+		}
 		this.refresh();
 	}
 
@@ -224,7 +238,9 @@ export class ShareSyncService {
 		for (const timer of this.debounceTimers.values())
 			window.clearTimeout(timer);
 		this.debounceTimers.clear();
+		this.queued.clear();
 		this.listeners.clear();
+		this.storageCache.clear();
 	}
 
 	private activeShares(): SharedFolderConfig[] {
@@ -239,19 +255,18 @@ export class ShareSyncService {
 
 	private async syncShare(shareId: string, manual: boolean): Promise<void> {
 		if (this.disposed) return;
-		if (this.running.has(shareId)) {
+		if (this.inFlight.has(shareId)) {
 			this.queued.add(shareId);
 			return;
 		}
-		this.running.add(shareId);
-		try {
-			await this.runSync(shareId, manual);
-		} finally {
-			this.running.delete(shareId);
-			if (this.queued.delete(shareId)) {
-				void this.syncShare(shareId, false).catch(() => {});
+		const run = this.runSync(shareId, manual).finally(() => {
+			this.inFlight.delete(shareId);
+			if (this.queued.delete(shareId) && !this.disposed) {
+				void this.syncShare(shareId, false).catch(() => undefined);
 			}
-		}
+		});
+		this.inFlight.set(shareId, run);
+		await run;
 	}
 
 	private async runSync(shareId: string, manual: boolean): Promise<void> {
@@ -309,7 +324,10 @@ export class ShareSyncService {
 		deps: EngineDependencies,
 	): Promise<ShareCycleOutcome> {
 		return runShareSyncCycle(share.name, deps, {
-			persist: (session) => this.persistShareSession(share, session),
+			persist: async (session) => {
+				if (this.disposed) return;
+				await this.persistShareSession(share, session);
+			},
 			log: (level, message, details) => this.host.log(level, message, details),
 			notifyPeers: () => this.realtime.get(share.id)?.client.notifySync(),
 		});
@@ -318,21 +336,33 @@ export class ShareSyncService {
 	private async ensureShareRoot(share: SharedFolderConfig): Promise<void> {
 		const adapter = this.host.app.vault.adapter;
 		const stat = await adapter.stat(share.localRoot).catch(() => null);
-		if (stat?.type === "folder") return;
 		if (stat?.type === "file") {
 			throw new Error(
 				`"${share.localRoot}" is a file — shared folders need a folder.`,
 			);
 		}
-		const state = this.host.getState();
-		const slot = state?.storages[shareSlotKey(share.id)];
-		if (slot?.baseline && Object.keys(slot.baseline.files).length > 0) {
-			// The folder synced before and is now gone (renamed/deleted). Bailing
-			// out beats pushing a mass deletion to everyone else.
-			throw new Error(
-				`Shared folder "${share.localRoot}" is missing. Restore it, or remove and re-join the share.`,
-			);
+		// The state has to be loaded, not merely read: a null here would skip the
+		// check below and let an emptied folder push a mass deletion.
+		const state = await this.host.ensureState();
+		const slot = state.storages[shareSlotKey(share.id)];
+		const syncedBefore =
+			slot?.baseline !== undefined &&
+			slot?.baseline !== null &&
+			Object.keys(slot.baseline.files).length > 0;
+		if (syncedBefore) {
+			const listing = await adapter
+				.list(share.localRoot)
+				.catch(() => ({ files: [], folders: [] }));
+			const empty = listing.files.length === 0 && listing.folders.length === 0;
+			if (!stat || empty) {
+				// The folder synced before and is now gone or emptied. Bailing out
+				// beats pushing a mass deletion to everyone else.
+				throw new Error(
+					`Shared folder "${share.localRoot}" is missing or empty. Restore it, or remove and re-join the share.`,
+				);
+			}
 		}
+		if (stat?.type === "folder") return;
 		await mkdirDeep(adapter, share.localRoot);
 	}
 

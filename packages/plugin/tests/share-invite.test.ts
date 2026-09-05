@@ -91,19 +91,21 @@ describe("share invites", () => {
 		).rejects.toThrow(/newer/);
 	});
 
-	it("rejects a legacy invite that carries storage credentials", async () => {
+	it("refuses to pack anything but a broker token into an invite", async () => {
 		const share = createSharedFolderConfig({
 			localRoot: "Team",
 			name: "Team",
 			baseStorage: baseStorage(),
 		});
-		// A pre-broker invite embedded the S3 config directly.
-		const legacy = await createShareInviteUrl(
-			share,
-			"pw",
-			share.storage as unknown as ShareBrokerStorageConfig,
-		);
-		await expect(readShareInvite(legacy, "pw")).rejects.toThrow(/no longer/);
+		// A pre-broker invite embedded the S3 config directly; building one now
+		// would leak the owner's credentials.
+		await expect(
+			createShareInviteUrl(
+				share,
+				"pw",
+				share.storage as unknown as ShareBrokerStorageConfig,
+			),
+		).rejects.toThrow(/share-broker/);
 	});
 
 	it("joining maps the invite to a local config", async () => {
@@ -147,7 +149,17 @@ describe("deriveShareStorageConfig", () => {
 describe("participantIdFromName", () => {
 	it("slugs a display name", () => {
 		expect(participantIdFromName("  Alice Smith ")).toBe("alice-smith");
-		expect(participantIdFromName("Борис")).toBe("");
+	});
+
+	it("still produces a stable id for a name with no Latin letters", () => {
+		const id = participantIdFromName("Борис");
+		expect(id).toMatch(/^p-[0-9a-f]{8}$/);
+		expect(participantIdFromName("Борис")).toBe(id);
+		expect(participantIdFromName("Мария")).not.toBe(id);
+	});
+
+	it("has no id for a blank name", () => {
+		expect(participantIdFromName("   ")).toBe("");
 	});
 });
 

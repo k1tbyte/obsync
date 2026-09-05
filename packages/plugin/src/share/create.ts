@@ -108,12 +108,26 @@ function assertValidShareRoot(root: string): string {
 /** Slug used as the broker-side participant id; re-inviting the same name
  * replaces that person's token. Empty when the name has no usable characters. */
 export function participantIdFromName(name: string): string {
-	return name
+	const slug = name
 		.trim()
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 64);
+	if (slug) return slug;
+	// A name written entirely in non-Latin script slugs to nothing; fall back to
+	// a stable id so those people can still be invited and revoked.
+	const trimmed = name.trim();
+	return trimmed ? `p-${hashName(trimmed)}` : "";
+}
+
+function hashName(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < value.length; i++) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash.toString(16).padStart(8, "0");
 }
 
 /** Turns a share name into a safe default folder name for joining. */
