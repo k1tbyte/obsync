@@ -195,28 +195,24 @@ function revertSyncHunk(
 	baseline: Text,
 ): void {
 	const from = lineStart(view.state.doc, hunk.newStart);
-	const to = lineEnd(view.state.doc, hunk.newStart + hunk.newLines - 1);
+	const to = lineStart(view.state.doc, hunk.newStart + hunk.newLines);
 	const insertFrom = lineStart(baseline, hunk.oldStart);
-	const insertTo = lineEnd(baseline, hunk.oldStart + hunk.oldLines - 1);
-	view.dispatch({
-		changes: {
-			from,
-			to,
-			insert: baseline.sliceString(insertFrom, insertTo),
-		},
-	});
+	const insertTo = lineStart(baseline, hunk.oldStart + hunk.oldLines);
+	let insert = baseline.sliceString(insertFrom, insertTo);
+	// Slicing to the start of the following line carries its newline, but the
+	// last line of a document has none: without this the replaced range would
+	// swallow the separator and merge two lines into one.
+	if (to > from && insertTo === baseline.length && !insert.endsWith("\n")) {
+		insert += "\n";
+	}
+	view.dispatch({ changes: { from, to, insert } });
 }
 
+/** Offset of `line`'s first character, or the end of the text past the last. */
 function lineStart(text: Text, line: number): number {
 	if (line < 1) return 0;
 	if (line > text.lines) return text.length;
 	return text.line(line).from;
-}
-
-function lineEnd(text: Text, line: number): number {
-	if (line < 1) return 0;
-	if (line >= text.lines) return text.length;
-	return text.line(line).to + 1;
 }
 
 function revertHunk(view: EditorView, chunk: Chunk, baseline: Text): void {

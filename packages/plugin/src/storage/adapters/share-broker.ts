@@ -245,12 +245,9 @@ function isPrivateHost(hostname: string): boolean {
 	const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
 	if (host === "localhost" || host.endsWith(".localhost")) return true;
 	if (host === "::1" || host === "0.0.0.0") return true;
-	if (
-		host.startsWith("fe80:") ||
-		host.startsWith("fc") ||
-		host.startsWith("fd")
-	) {
-		return true;
+	// Only an actual IPv6 literal, or "fc2.com" would read as a private address.
+	if (host.includes(":")) {
+		return /^(?:fe80|f[cd][0-9a-f]{2}):/.test(host);
 	}
 	const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
 	if (!v4) return false;

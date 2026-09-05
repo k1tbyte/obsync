@@ -211,7 +211,14 @@ export async function pullPaths(
 	}
 
 	return {
-		baseline: advanceBaselineForPaths(deps.state.baseline, remote, pathSet),
+		// `written`, not `paths`: a requested path with no remote change was never
+		// downloaded, and advancing its baseline would turn an unresolved conflict
+		// into a local edit that the next push publishes over the remote.
+		baseline: advanceBaselineForPaths(
+			deps.state.baseline,
+			remote,
+			new Set(written.keys()),
+		),
 		written,
 	};
 }
@@ -274,6 +281,7 @@ export async function publishFileMap(
 				deps.state.baseline?.folders,
 			),
 			ignoredPaths: [],
+			unreadableDirs: [],
 		},
 	);
 	await publishManifestWithHistory(

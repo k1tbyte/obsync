@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pullPaths } from "../src/sync/engine";
 import { batchAcceptRemoteOp, pullPathsOp } from "../src/sync/operations/pull";
 import { batchKeepLocalOp, pushPathsOp } from "../src/sync/operations/push";
 import { revertPathsOp } from "../src/sync/operations/revert";
@@ -128,6 +129,31 @@ describe("batch operations", () => {
 		const after = await b.compare();
 		expect(after.diff.localChanges).toHaveLength(0);
 		expect(after.diff.remoteChanges).toHaveLength(0);
+	});
+
+	it("advances the baseline only for the paths it actually wrote", async () => {
+		const [a, b] = await syncedPair({
+			"mine.md": "mine\n",
+			"theirs.md": "t\n",
+		});
+
+		b.adapter.putText("theirs.md", "edited by B\n");
+		const bResult = await b.compare();
+		await pushPathsOp(b.deps(), bResult, ["theirs.md"], b.context());
+
+		a.adapter.putText("mine.md", "edited by A\n");
+		const aResult = await a.compare();
+		const mineBefore = a.state.baseline?.files["mine.md"]?.hash;
+
+		// mine.md is a local change, so it is not among the remote changes this
+		// pull can write; asking for it anyway must not move its baseline.
+		const pulled = await pullPaths(a.deps(), aResult, ["mine.md", "theirs.md"]);
+
+		expect([...pulled.written.keys()]).toEqual(["theirs.md"]);
+		expect(pulled.baseline.files["mine.md"]?.hash).toBe(mineBefore);
+		expect(pulled.baseline.files["theirs.md"]?.hash).toBe(
+			aResult.remote?.files["theirs.md"]?.hash,
+		);
 	});
 
 	it("revert restores the baseline content and reports what it wrote", async () => {

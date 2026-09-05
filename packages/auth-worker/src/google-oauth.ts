@@ -138,12 +138,12 @@ function matchesCookie(request: Request, state: string): boolean {
 		const [name, ...rest] = part.trim().split("=");
 		if (name !== STATE_COOKIE) continue;
 		const value = rest.join("=");
-		if (value.length !== state.length) return false;
+		if (value.length !== state.length) continue;
 		let diff = 0;
 		for (let i = 0; i < value.length; i++) {
 			diff |= value.charCodeAt(i) ^ state.charCodeAt(i);
 		}
-		return diff === 0;
+		if (diff === 0) return true;
 	}
 	return false;
 }

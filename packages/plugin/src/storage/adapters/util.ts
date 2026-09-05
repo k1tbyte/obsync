@@ -53,7 +53,7 @@ export function isRetryableStatus(status: number): boolean {
 
 /** Transport failures the platform reports as a plain Error or TypeError. */
 const NETWORK_FAILURE =
-	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
+	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETRESET|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
 
 export function isRetryableError(err: unknown): boolean {
 	if (err instanceof StorageTimeoutError) return true;

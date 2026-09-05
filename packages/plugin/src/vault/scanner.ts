@@ -40,10 +40,11 @@ export async function scanVault(
 		unreadable,
 	} = await listAllFiles(adapter, scope, ROOT);
 	ignoredPaths.push(...ignored);
-	// Everything under a directory that would not list is unknown, not gone: the
-	// baseline entries below it must not read as local deletions.
 	for (const dir of unreadable) {
-		skipped.push({ path: dir, reason: "Directory could not be listed" });
+		skipped.push({
+			path: dir === "" ? "/" : dir,
+			reason: "Directory could not be listed",
+		});
 	}
 	let scanned = 0;
 	await runWithConcurrency(
@@ -107,12 +108,11 @@ export async function scanVault(
 		}
 	}
 
-	// Baseline paths under an unreadable directory are unknown, not deleted.
-	for (const dir of unreadable) {
-		for (const path of Object.keys(hashCache)) {
-			if (path.startsWith(`${dir}/`)) {
-				skipped.push({ path, reason: "Directory could not be listed" });
-			}
+	// Cached entries under an unreadable directory are carried forward: dropping
+	// them would re-hash the whole subtree once it becomes readable again.
+	for (const [path, entry] of Object.entries(hashCache)) {
+		if (!updatedCache[path] && isUnderUnreadable(path, unreadable)) {
+			updatedCache[path] = entry;
 		}
 	}
 
@@ -120,7 +120,13 @@ export async function scanVault(
 	// a made-up file name would bypass extension-based ignore rules.
 	const emptyFolders = rawEmptyFolders.filter((dir) => scope.canDescend(dir));
 	return {
-		snapshot: { files, skipped, emptyFolders, ignoredPaths },
+		snapshot: {
+			files,
+			skipped,
+			emptyFolders,
+			ignoredPaths,
+			unreadableDirs: unreadable,
+		},
 		updatedCache,
 	};
 }
@@ -229,4 +235,11 @@ async function safeList(
 		// Not "the directory is empty": the caller has to know it saw nothing.
 		return { read: false, files: [], folders: [] };
 	}
+}
+
+function isUnderUnreadable(path: string, dirs: ReadonlyArray<string>): boolean {
+	for (const dir of dirs) {
+		if (dir === "" || path.startsWith(`${dir}/`)) return true;
+	}
+	return false;
 }
