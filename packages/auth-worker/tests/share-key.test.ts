@@ -4,7 +4,7 @@ import {
 	shareBasePrefix,
 	shareListPrefix,
 	shareObjectKey,
-} from "../../auth-worker/src/share-key";
+} from "../src/share-key";
 
 const PREFIX = "my-vault";
 const SHARE = "abc123";

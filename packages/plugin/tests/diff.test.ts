@@ -15,7 +15,7 @@ function mockManifest(
 	const filledFiles: Record<string, ManifestEntry> = {};
 	for (const [k, v] of Object.entries(files)) {
 		filledFiles[k] = {
-			hash: null as any,
+			hash: "",
 			size: 0,
 			mtime: 0,
 			kind: EFileKind.Vault,
@@ -39,7 +39,7 @@ function mockLocal(
 	const filledFiles: Record<string, ManifestEntry> = {};
 	for (const [k, v] of Object.entries(files)) {
 		filledFiles[k] = {
-			hash: null as any,
+			hash: "",
 			size: 0,
 			mtime: 0,
 			kind: EFileKind.Vault,

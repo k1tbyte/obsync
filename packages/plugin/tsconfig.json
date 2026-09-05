@@ -11,16 +11,12 @@
 		"module": "ESNext",
 		"target": "ES6",
 		"allowJs": true,
-		"noImplicitAny": true,
-		"noImplicitThis": true,
+		"strict": true,
 		"noImplicitReturns": true,
 		"importHelpers": true,
 		"noUncheckedIndexedAccess": true,
 		"isolatedModules": true,
-		"strictNullChecks": true,
-		"strictBindCallApply": true,
 		"allowSyntheticDefaultImports": true,
-		"useUnknownInCatchVariables": true,
 		"lib": ["DOM", "ES2018"]
 	},
 	"include": ["src/**/*.ts", "tests/**/*.ts"]
