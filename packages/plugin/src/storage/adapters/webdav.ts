@@ -2,6 +2,7 @@ import { requestUrl } from "obsidian";
 
 import { DEFAULT_CONCURRENCY } from "../../constants";
 import { normalizeKeyPrefix } from "../../shared/path";
+import { toArrayBuffer } from "../../utils/bytes";
 import { EStorageBackend, type WebDAVStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -14,7 +15,6 @@ import {
 	isRetryableStatus,
 	STORAGE_TIMEOUT_MS,
 	StorageHttpError,
-	toArrayBuffer,
 	withRetry,
 	withTimeout,
 } from "./util";
@@ -338,5 +338,11 @@ function relativizeHref(href: string, rootUrl: string): string | null {
 	}
 	if (absolute.origin !== root.origin) return null;
 	if (!absolute.pathname.startsWith(root.pathname)) return null;
-	return decodeURIComponent(absolute.pathname.slice(root.pathname.length));
+	const relative = absolute.pathname.slice(root.pathname.length);
+	try {
+		return decodeURIComponent(relative);
+	} catch {
+		// A server that emits a stray "%" would otherwise kill the whole listing.
+		return relative;
+	}
 }

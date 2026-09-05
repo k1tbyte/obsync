@@ -18,18 +18,30 @@ function authUrl(query = ""): URL {
 	return new URL(`https://auth.example.com/auth${query}`);
 }
 
-/** Runs the consent leg and returns the `state` the worker minted. */
-async function mintState(): Promise<string> {
-	const response = await handleAuthCallback(authUrl(), env);
+function authRequest(query = "", cookie?: string): Request {
+	return new Request(
+		authUrl(query),
+		cookie ? { headers: { Cookie: cookie } } : undefined,
+	);
+}
+
+function callback(query: string, cookie?: string): Promise<Response> {
+	return handleAuthCallback(authUrl(query), env, authRequest(query, cookie));
+}
+
+/** Runs the consent leg and returns the state, both minted and as a cookie. */
+async function mintState(): Promise<{ state: string; cookie: string }> {
+	const response = await callback("");
 	const consent = new URL(response.headers.get("Location") ?? "");
 	const state = consent.searchParams.get("state");
+	const setCookie = response.headers.get("Set-Cookie") ?? "";
 	if (!state) throw new Error("no state on the consent redirect");
-	return state;
+	return { state, cookie: setCookie.split(";")[0] as string };
 }
 
 describe("consent redirect", () => {
 	it("sends the user to Google with a state and an offline scope", async () => {
-		const response = await handleAuthCallback(authUrl(), env);
+		const response = await callback("");
 		const consent = new URL(response.headers.get("Location") ?? "");
 
 		expect(consent.origin).toBe("https://accounts.google.com");
@@ -39,13 +51,14 @@ describe("consent redirect", () => {
 		);
 		expect(consent.searchParams.get("access_type")).toBe("offline");
 		expect(consent.searchParams.get("state")).toMatch(/^\d+\.[0-9a-f]{64}$/);
+		// The signature alone proves only that this worker minted it; the cookie
+		// is what ties the round trip to one browser.
+		expect(response.headers.get("Set-Cookie")).toContain("obsync_oauth_state=");
+		expect(response.headers.get("Set-Cookie")).toContain("HttpOnly");
 	});
 
 	it("passes a denied consent back to the plugin", async () => {
-		const response = await handleAuthCallback(
-			authUrl("?error=access_denied"),
-			env,
-		);
+		const response = await callback("?error=access_denied");
 		expect(response.headers.get("Location")).toBe(
 			"obsidian://obsync-auth?error=access_denied",
 		);
@@ -57,7 +70,7 @@ describe("state verification", () => {
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
 
-		const response = await handleAuthCallback(authUrl("?code=abc"), env);
+		const response = await callback("?code=abc");
 
 		expect(response.status).toBe(400);
 		// The code must never be redeemed: that is the whole point of the check.
@@ -66,36 +79,57 @@ describe("state verification", () => {
 
 	it("refuses a state this worker did not sign", async () => {
 		const forged = `${Date.now()}.${"0".repeat(64)}`;
-		const response = await handleAuthCallback(
-			authUrl(`?code=abc&state=${forged}`),
-			env,
-		);
+		const response = await callback(`?code=abc&state=${forged}`);
 		expect(response.status).toBe(400);
 	});
 
 	it("refuses a state signed under a different secret", async () => {
-		const state = await mintState();
+		const { state, cookie } = await mintState();
 		const other = { ...env, GDRIVE_CLIENT_SECRET: "another-secret" };
+		const query = `?code=abc&state=${state}`;
 		const response = await handleAuthCallback(
-			authUrl(`?code=abc&state=${state}`),
+			authUrl(query),
 			other,
+			authRequest(query, cookie),
 		);
 		expect(response.status).toBe(400);
 	});
 
+	it("refuses a valid state that arrives without its cookie", async () => {
+		const { state } = await mintState();
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+
+		// The attacker mints a state by loading /auth themselves, then feeds the
+		// victim a link carrying it plus their own authorization code.
+		const response = await callback(`?code=attacker-code&state=${state}`);
+
+		expect(response.status).toBe(400);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("refuses a cookie that does not match the state in the link", async () => {
+		const { state } = await mintState();
+		const other = await mintState();
+
+		const response = await callback(`?code=abc&state=${state}`, other.cookie);
+
+		expect(response.status).toBe(400);
+	});
+
 	it("refuses a state older than its lifetime", async () => {
-		const state = await mintState();
+		const { state } = await mintState();
 		const [issued, signature] = state.split(".");
 		const old = `${Number(issued) - 11 * 60 * 1000}.${signature}`;
-		const response = await handleAuthCallback(
-			authUrl(`?code=abc&state=${old}`),
-			env,
+		const response = await callback(
+			`?code=abc&state=${old}`,
+			`obsync_oauth_state=${old}`,
 		);
 		expect(response.status).toBe(400);
 	});
 
 	it("accepts its own state and hands the tokens to the plugin", async () => {
-		const state = await mintState();
+		const { state, cookie } = await mintState();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => ({
@@ -109,19 +143,16 @@ describe("state verification", () => {
 			})),
 		);
 
-		const response = await handleAuthCallback(
-			authUrl(`?code=abc&state=${state}`),
-			env,
-		);
-		const callback = new URL(response.headers.get("Location") ?? "");
+		const response = await callback(`?code=abc&state=${state}`, cookie);
+		const redirect = new URL(response.headers.get("Location") ?? "");
 
-		expect(callback.protocol).toBe("obsidian:");
-		expect(callback.searchParams.get("access_token")).toBe("at");
-		expect(callback.searchParams.get("refresh_token")).toBe("rt");
+		expect(redirect.protocol).toBe("obsidian:");
+		expect(redirect.searchParams.get("access_token")).toBe("at");
+		expect(redirect.searchParams.get("refresh_token")).toBe("rt");
 	});
 
 	it("reports a Google failure instead of parsing its HTML", async () => {
-		const state = await mintState();
+		const { state, cookie } = await mintState();
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => ({
@@ -133,10 +164,7 @@ describe("state verification", () => {
 			})),
 		);
 
-		const response = await handleAuthCallback(
-			authUrl(`?code=abc&state=${state}`),
-			env,
-		);
+		const response = await callback(`?code=abc&state=${state}`, cookie);
 		expect(response.status).toBe(400);
 	});
 });

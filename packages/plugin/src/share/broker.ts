@@ -109,12 +109,21 @@ async function adminRequest<T>(
 		throw: false,
 	});
 	if (res.status !== 200) {
-		const detail = res.json as { message?: string } | undefined;
-		throw new Error(
-			`Share broker error: ${detail?.message ?? `HTTP ${res.status}`}`,
-		);
+		throw new Error(`Share broker error: ${brokerMessage(res)}`);
 	}
 	return res.json as T;
+}
+
+/** An edge error page is HTML, and Obsidian parses `.json` lazily: reading it
+ * would throw a SyntaxError over the status the caller actually needs. */
+function brokerMessage(res: { status: number; json?: unknown }): string {
+	try {
+		const detail = res.json as { message?: string } | undefined;
+		if (detail?.message) return detail.message;
+	} catch {
+		// Not JSON; the status is the whole story.
+	}
+	return `HTTP ${res.status}`;
 }
 
 function normalizeUrl(url: string): string {

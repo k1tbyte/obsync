@@ -102,7 +102,20 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			if (checking) return true;
 			void plugin.shares
 				?.syncAll()
-				.then(() => notifyInfo("Shared folders synced."))
+				.then(() => {
+					// syncAll swallows per-share failures into their statuses.
+					const failed = plugin.settings.sharedFolders.filter(
+						(share) => plugin.shares?.getStatus(share.id).error,
+					).length;
+					if (failed > 0) {
+						notifyError(
+							"Could not sync shared folders",
+							new Error(`${failed} folder(s) failed. See settings.`),
+						);
+						return;
+					}
+					notifyInfo("Shared folders synced.");
+				})
 				.catch((err: unknown) =>
 					notifyError("Could not sync shared folders", err),
 				);
@@ -148,6 +161,13 @@ async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
 			return;
 		}
 		await plugin.controller.pushPaths(paths);
+		// runOperation records the failure on the snapshot instead of throwing,
+		// so reporting success without looking would be a lie.
+		const error = plugin.controller.getSnapshot().error;
+		if (error) {
+			notifyError("Push all failed", new Error(error));
+			return;
+		}
 		notifyInfo(`Pushed ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Push all failed", err);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeSettings } from "../src/settings/model";
+import { DEFAULT_SETTINGS, mergeSettings } from "../src/settings/model";
 import {
 	EStorageBackend,
 	type StorageAdapterConfig,
@@ -73,5 +73,51 @@ describe("mergeSettings", () => {
 			},
 		});
 		expect(merged.storageConfigs[EStorageBackend.S3]?.concurrency).toBe(4);
+	});
+});
+
+describe("mergeSettings clamps", () => {
+	it("refuses a negative or zero value and falls back to the default", () => {
+		const merged = mergeSettings({
+			autoPullIntervalMinutes: -5,
+			maxFileBytes: 0,
+			fileHistoryMaxSnapshots: 0,
+		});
+
+		expect(merged.autoPullIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		);
+		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
+		expect(merged.fileHistoryMaxSnapshots).toBe(
+			DEFAULT_SETTINGS.fileHistoryMaxSnapshots,
+		);
+	});
+
+	it("caps a value that is merely greedy", () => {
+		const merged = mergeSettings({
+			autoPullIntervalMinutes: 999_999,
+			fileHistoryMaxSnapshots: 1e9,
+		});
+
+		expect(merged.autoPullIntervalMinutes).toBe(24 * 60);
+		expect(merged.fileHistoryMaxSnapshots).toBe(1000);
+	});
+
+	it("ignores a number that is not one", () => {
+		const merged = mergeSettings({
+			maxFileBytes: Number.NaN,
+			autoPullIntervalMinutes: "10" as unknown as number,
+		});
+
+		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
+		expect(merged.autoPullIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		);
+	});
+
+	it("keeps a value that is already in range", () => {
+		expect(
+			mergeSettings({ autoPullIntervalMinutes: 15 }).autoPullIntervalMinutes,
+		).toBe(15);
 	});
 });

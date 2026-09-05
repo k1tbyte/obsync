@@ -1,5 +1,10 @@
 import type { Chunk } from "@codemirror/merge";
-import { StateEffect, StateField, type Text } from "@codemirror/state";
+import {
+	type EditorState,
+	StateEffect,
+	StateField,
+	type Text,
+} from "@codemirror/state";
 import { editorInfoField } from "obsidian";
 
 export interface ChunksData {
@@ -41,9 +46,7 @@ export const chunksField = StateField.define<ChunksData>({
 	},
 });
 
-function pathFromState(
-	state: import("@codemirror/state").EditorState,
-): string | null {
+export function pathFromState(state: EditorState): string | null {
 	try {
 		return state.field(editorInfoField, false)?.file?.path ?? null;
 	} catch {

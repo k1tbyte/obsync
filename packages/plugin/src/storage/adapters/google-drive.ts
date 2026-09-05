@@ -2,6 +2,7 @@ import { type ObsidianProtocolData, requestUrl } from "obsidian";
 
 import { DEFAULT_GDRIVE_AUTH_SERVER } from "../../constants";
 import { notifyError, notifyInfo } from "../../ui/notices";
+import { toArrayBuffer } from "../../utils/bytes";
 import { EStorageBackend, type GoogleDriveStorageConfig } from "../config";
 import {
 	CONCURRENCY_FIELD,
@@ -14,7 +15,6 @@ import {
 	isRetryableStatus,
 	STORAGE_TIMEOUT_MS,
 	StorageHttpError,
-	toArrayBuffer,
 	withRetry,
 	withTimeout,
 } from "./util";
@@ -23,19 +23,21 @@ export async function handleGoogleDriveProtocol(
 	params: ObsidianProtocolData,
 	config: GoogleDriveStorageConfig,
 	saveCallback: () => Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
 	if (params.error) {
 		notifyError(`Google Drive auth failed`, params.error);
-		return;
+		return true;
 	}
 
 	const accessToken = params.access_token;
 	const refreshToken = params.refresh_token;
 	const expiresIn = params.expires_in;
 
+	// No token at all: this callback was meant for some other backend.
+	if (!accessToken && !refreshToken) return false;
 	if (!accessToken) {
 		notifyError("Google Drive auth failed - no access token received.");
-		return;
+		return true;
 	}
 
 	config.accessToken = accessToken;
@@ -44,7 +46,16 @@ export async function handleGoogleDriveProtocol(
 	config.expiresAt = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : 0;
 
 	await saveCallback();
-	notifyInfo("Successfully authenticated with Google Drive!");
+	// Without a refresh token the backend still reads as unconfigured, so
+	// reporting success would leave the user waiting for a sync that cannot run.
+	if (!config.refreshToken) {
+		notifyError(
+			"Google Drive returned no refresh token. Remove Obsync from your Google account permissions and connect again.",
+		);
+		return true;
+	}
+	notifyInfo("Connected to Google Drive.");
+	return true;
 }
 
 export function defaultGoogleDriveConfig(): GoogleDriveStorageConfig {
@@ -158,12 +169,16 @@ export function createGoogleDriveAdapter(
 		}
 		const tokenData = res.json as {
 			access_token?: string;
+			refresh_token?: string;
 			expires_in?: number;
 		};
 		if (!tokenData.access_token) {
 			throw new Error("Google Drive token refresh returned no access token");
 		}
 		config.accessToken = tokenData.access_token;
+		// Google rotates refresh tokens on some accounts; dropping the new one
+		// leaves the next refresh holding a revoked credential.
+		if (tokenData.refresh_token) config.refreshToken = tokenData.refresh_token;
 		const expiresIn = Number(tokenData.expires_in);
 		config.expiresAt = Number.isFinite(expiresIn)
 			? Date.now() + expiresIn * 1000
@@ -171,29 +186,47 @@ export function createGoogleDriveAdapter(
 		onTokenRefreshed?.();
 	};
 
+	// Every worker shares one refresh: eight parallel uploads must not fire
+	// eight refreshes and race each other's tokens.
+	const refreshOnce = async (): Promise<void> => {
+		tokenRefresh ??= refreshAccessToken().finally(() => {
+			tokenRefresh = null;
+		});
+		await tokenRefresh;
+	};
+
 	const getHeaders = async (): Promise<Record<string, string>> => {
-		// Every worker shares one refresh: eight parallel uploads must not fire
-		// eight refreshes and race each other's tokens.
-		if (needsRefresh(config)) {
-			tokenRefresh ??= refreshAccessToken().finally(() => {
-				tokenRefresh = null;
-			});
-			await tokenRefresh;
-		}
+		if (needsRefresh(config)) await refreshOnce();
 		return {
 			Authorization: `Bearer ${config.accessToken}`,
 			"Content-Type": "application/json",
 		};
 	};
 
+	/**
+	 * A token can die mid-run: Drive answers 401, which is not a retryable
+	 * status, so without this one long sync would fail on an expired token it
+	 * could simply have replaced.
+	 */
+	const authorized = async (
+		build: (
+			headers: Record<string, string>,
+		) => Parameters<typeof requestUrl>[0],
+	): Promise<DriveResponse> => {
+		const first = await driveRequest(build(await getHeaders()));
+		if (first.status !== 401) return first;
+		await refreshOnce();
+		return driveRequest(build(await getHeaders()));
+	};
+
 	const findFolder = async (): Promise<string | null> => {
 		const q = `name = '${escapeDriveQueryValue(config.folderName)}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-		const res = await driveRequest({
+		const res = await authorized((headers) => ({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
-			headers: await getHeaders(),
+			headers,
 			throw: false,
-		});
+		}));
 		// A failed search must not fall through to "create": that is how a 5xx
 		// ends up making a second sync folder.
 		assertOk(res, "find folder", config.folderName);
@@ -209,17 +242,17 @@ export function createGoogleDriveAdapter(
 				cachedFolderId = existing;
 				return existing;
 			}
-			const createRes = await driveRequest({
+			const createRes = await authorized((headers) => ({
 				url: DRIVE_API,
 				method: "POST",
-				headers: await getHeaders(),
+				headers,
 				body: JSON.stringify({
 					name: config.folderName,
 					mimeType: "application/vnd.google-apps.folder",
 					parents: ["root"],
 				}),
 				throw: false,
-			});
+			}));
 			assertOk(createRes, "create folder", config.folderName);
 			const created = (createRes.json as { id?: string }).id;
 			if (!created) {
@@ -238,12 +271,12 @@ export function createGoogleDriveAdapter(
 		if (cached) return cached;
 		const folderId = await getFolderId();
 		const q = `name = '${escapeDriveQueryValue(key)}' and '${escapeDriveQueryValue(folderId)}' in parents and trashed = false`;
-		const res = await driveRequest({
+		const res = await authorized((headers) => ({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
-			headers: await getHeaders(),
+			headers,
 			throw: false,
-		});
+		}));
 		assertOk(res, "look up", key);
 		const data = res.json as GoogleDriveListResponse;
 		const id = data.files?.[0]?.id ?? null;
@@ -257,19 +290,17 @@ export function createGoogleDriveAdapter(
 		contentType: string | undefined,
 		existingId: string | null,
 	): Promise<void> => {
-		const id =
-			body.length > MULTIPART_MAX_BYTES
-				? await resumableUpload(key, body, contentType, existingId, getHeaders)
-				: await multipartUpload(
-						key,
-						body,
-						contentType,
-						existingId,
-						getHeaders,
-						{
-							folderId: await getFolderId(),
-						},
-					);
+		const context = { folderId: await getFolderId() };
+		const send =
+			body.length > MULTIPART_MAX_BYTES ? resumableUpload : multipartUpload;
+		const id = await send(
+			key,
+			body,
+			contentType,
+			existingId,
+			getHeaders,
+			context,
+		);
 		if (id) fileIdCache.set(key, id);
 	};
 
@@ -283,12 +314,12 @@ export function createGoogleDriveAdapter(
 		async get(key: string): Promise<Uint8Array | null> {
 			const id = await findFileId(key);
 			if (!id) return null;
-			const res = await driveRequest({
+			const res = await authorized((headers) => ({
 				url: `${DRIVE_API}/${id}?alt=media`,
 				method: "GET",
-				headers: await getHeaders(),
+				headers,
 				throw: false,
-			});
+			}));
 			if (res.status === NOT_FOUND) {
 				fileIdCache.delete(key);
 				return null;
@@ -313,12 +344,12 @@ export function createGoogleDriveAdapter(
 		async delete(key: string): Promise<void> {
 			const id = await findFileId(key);
 			if (!id) return;
-			const res = await driveRequest({
+			const res = await authorized((headers) => ({
 				url: `${DRIVE_API}/${id}`,
 				method: "DELETE",
-				headers: await getHeaders(),
+				headers,
 				throw: false,
-			});
+			}));
 			fileIdCache.delete(key);
 			// Already gone is the outcome the caller asked for.
 			if (res.status === NOT_FOUND) return;
@@ -341,12 +372,12 @@ export function createGoogleDriveAdapter(
 				url.searchParams.set("fields", "nextPageToken, files(id,name)");
 				if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-				const res = await driveRequest({
+				const res = await authorized((headers) => ({
 					url: url.toString(),
 					method: "GET",
-					headers: await getHeaders(),
+					headers,
 					throw: false,
-				});
+				}));
 				assertOk(res, "list", prefix);
 
 				const data = res.json as GoogleDriveListResponse;
@@ -444,6 +475,7 @@ async function resumableUpload(
 	contentType: string | undefined,
 	existingId: string | null,
 	getHeaders: DriveHeaders,
+	context: { folderId: string },
 ): Promise<string | null> {
 	const start = await driveRequest({
 		url: existingId
@@ -454,7 +486,10 @@ async function resumableUpload(
 			...(await getHeaders()),
 			"X-Upload-Content-Type": contentType ?? "application/octet-stream",
 		},
-		body: JSON.stringify({ name: key }),
+		body: JSON.stringify({
+			name: key,
+			...(existingId ? {} : { parents: [context.folderId] }),
+		}),
 		throw: false,
 	});
 	assertOk(start, "start upload of", key);

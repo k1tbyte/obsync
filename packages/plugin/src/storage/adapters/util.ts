@@ -51,21 +51,32 @@ export function isRetryableStatus(status: number): boolean {
 	return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+/** Transport failures the platform reports as a plain Error or TypeError. */
+const NETWORK_FAILURE =
+	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
+
 export function isRetryableError(err: unknown): boolean {
 	if (err instanceof StorageTimeoutError) return true;
 	if (err instanceof StorageHttpError) return isRetryableStatus(err.status);
 	if (!err || typeof err !== "object") return false;
-	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+	const e = err as {
+		name?: string;
+		message?: string;
+		$metadata?: { httpStatusCode?: number };
+	};
+	// A cancelled request is a decision, not a hiccup: retrying it ignores the
+	// caller that asked to stop.
+	if (e.name === "AbortError") return false;
 	if (
 		e.name === "TimeoutError" ||
 		e.name === "NetworkingError" ||
-		e.name === "RequestTimeout" ||
-		e.name === "AbortError"
+		e.name === "RequestTimeout"
 	) {
 		return true;
 	}
 	const status = e.$metadata?.httpStatusCode;
-	return status !== undefined && isRetryableStatus(status);
+	if (status !== undefined) return isRetryableStatus(status);
+	return typeof e.message === "string" && NETWORK_FAILURE.test(e.message);
 }
 
 /** The one retry policy. Adapters differ in transport, not in patience. */
@@ -102,11 +113,4 @@ export function assertOk(
 		res.status,
 		`Failed to ${action} "${key}" (HTTP ${res.status})${detail}`,
 	);
-}
-
-/** Shared view over a Uint8Array without copying when it already owns its buffer. */
-export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
-		? (bytes.buffer as ArrayBuffer)
-		: (bytes.slice().buffer as ArrayBuffer);
 }

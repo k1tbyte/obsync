@@ -31,7 +31,9 @@ export default {
 		if (shareResponse) return shareResponse;
 
 		if (url.pathname === "/refresh") return handleTokenRefresh(request, env);
-		if (url.pathname === "/auth") return handleAuthCallback(url, env);
+		if (url.pathname === "/auth") {
+			return handleAuthCallback(url, env, request);
+		}
 
 		return new Response(NOT_FOUND, { status: 404 });
 	},

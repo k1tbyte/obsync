@@ -94,7 +94,15 @@ async function signObject(request: Request, env: ShareEnv): Promise<Response> {
 		return jsonError(400, "bad_request", "Invalid JSON body");
 	}
 
-	const op = body.op ?? "";
+	// Every field is participant-controlled: a number here would reach
+	// assertSafeKey and throw a TypeError, answering 500 instead of 400.
+	if (!isOptionalString(body.key) || !isOptionalString(body.prefix)) {
+		return jsonError(400, "bad_request", "key and prefix must be strings");
+	}
+	if (!isOptionalString(body.cursor)) {
+		return jsonError(400, "bad_request", "cursor must be a string");
+	}
+	const op = typeof body.op === "string" ? body.op : "";
 	if (WRITE_OPS.has(op) && record.role !== EShareRole.ReadWrite) {
 		return jsonError(403, "read_only", "This share token is read-only");
 	}
@@ -135,6 +143,10 @@ async function signObject(request: Request, env: ShareEnv): Promise<Response> {
 		}
 		throw err;
 	}
+}
+
+function isOptionalString(value: unknown): boolean {
+	return value === undefined || typeof value === "string";
 }
 
 function objectMethod(op: string): PresignMethod | null {

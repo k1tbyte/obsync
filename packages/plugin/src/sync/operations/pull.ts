@@ -4,9 +4,9 @@ import { formatBytes, sumBytes } from "../../shared/format";
 import type { Manifest, ManifestEntry } from "../../types";
 import { deletePath } from "../../vault/io";
 import {
+	baselineForPath,
 	buildSessionState,
 	mergeWrittenIntoCache,
-	updateBaselineEntry,
 } from "../baseline";
 import { textToBytes, writeRemoteObject } from "../content";
 import { pullPaths } from "../engine";
@@ -80,10 +80,16 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 	const merged = applyHunks(sides.left, hunks, selected);
 	const localEntry = await writeLocalFile(deps, path, textToBytes(merged));
 
-	const baseline = updateBaselineEntry(
-		deps.state.baseline ?? result.remote,
+	// Only a pull that took every hunk has acknowledged the remote version.
+	// Moving the baseline after a partial pull would hide the hunks that were
+	// left behind and let the next push overwrite them.
+	const baseline = baselineForPath(
+		deps.state.baseline,
+		result.remote,
 		path,
-		remoteEntry,
+		selected.size === hunks.length
+			? remoteEntry
+			: (deps.state.baseline?.files[path] ?? null),
 	);
 	const hashCache = { ...result.updatedCache };
 	hashCache[path] = {
@@ -118,8 +124,10 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 	if (conflictPaths.length === 0) {
 		throw new Error("No matching conflicts to resolve");
 	}
+	// A slot with no baseline has acknowledged nothing: seeding from the whole
+	// remote would turn every file it has not downloaded into a local deletion.
 	const baselineFiles: Record<string, ManifestEntry> = {
-		...(deps.state.baseline?.files ?? remote.files),
+		...(deps.state.baseline?.files ?? {}),
 	};
 	const nextHashCache = { ...result.updatedCache };
 	const localEntries = new Map<string, ManifestEntry | null>();

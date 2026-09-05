@@ -43,7 +43,11 @@ type RealtimeServerMessage = RealtimePresenceMessage | RealtimeSyncMessage;
 export interface RealtimeClientOptions {
 	serverUrl: string;
 	channelId: string;
+	/** Relay deployment secret. The room token is derived from it. */
 	token?: string;
+	/** A room token derived elsewhere, for a participant who was handed one
+	 * instead of the deployment secret. */
+	roomToken?: string;
 	deviceId?: string;
 	deviceName?: string;
 	onRemoteSync: () => void;
@@ -173,6 +177,12 @@ export class RealtimeClient {
 
 	/** Room URL carrying the room-scoped token, derived once per client. */
 	private async roomUrl(serverUrl: string): Promise<string> {
+		if (this.options.roomToken) {
+			return buildRoomUrl(serverUrl, {
+				...this.options,
+				token: this.options.roomToken,
+			});
+		}
 		const secret = this.options.token;
 		if (!secret) {
 			return buildRoomUrl(serverUrl, { ...this.options, token: undefined });

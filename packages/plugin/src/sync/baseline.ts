@@ -120,14 +120,31 @@ export function resetSessionState(state: SessionState): SessionState {
 	};
 }
 
-export function updateBaselineEntry(
-	baseline: Manifest,
+/**
+ * The baseline after an operation that touched one path.
+ *
+ * `previous` may be null on a slot that has never synced, and that must not
+ * become an excuse to adopt `published` wholesale: every remote file this
+ * device has not downloaded would then sit in the baseline with nothing on
+ * disk, and the next push would publish all of them as deletions.
+ */
+export function baselineForPath(
+	previous: Manifest | null,
+	published: Manifest,
 	path: string,
-	entry: ManifestEntry,
+	entry: ManifestEntry | null,
 ): Manifest {
+	const files: Record<string, ManifestEntry> = { ...(previous?.files ?? {}) };
+	if (entry) {
+		files[path] = entry;
+	} else {
+		delete files[path];
+	}
 	return {
-		...baseline,
-		files: { ...baseline.files, [path]: entry },
+		...published,
+		files,
+		folders: previous?.folders ?? published.folders,
+		parentSnapshotId: previous?.snapshotId ?? null,
 	};
 }
 

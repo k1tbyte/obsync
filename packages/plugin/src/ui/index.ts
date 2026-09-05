@@ -17,11 +17,9 @@ export {
 	PassphraseModal,
 	RemoteResetModal,
 	type RemoteResetTarget,
-	type ReportActions,
 	SettingsTransferConfirmModal,
 	SettingsTransferExportModal,
 	SettingsTransferImportModal,
-	SyncReportModal,
 	showSettingsTransferExport,
 } from "./modals";
 export {

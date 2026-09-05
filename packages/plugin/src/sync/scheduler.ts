@@ -62,15 +62,21 @@ export function registerScheduler(
 
 	// The interval is read on every wake-up, not captured at startup: changing
 	// it in settings used to do nothing until Obsidian was restarted.
-	let nextDue = dueAfter(host.settings.autoPullIntervalMinutes);
+	let minutesInEffect = host.settings.autoPullIntervalMinutes;
+	let nextDue = dueAfter(minutesInEffect);
 	host.registerInterval(
 		window.setInterval(() => {
 			const minutes = host.settings.autoPullIntervalMinutes;
 			if (minutes <= 0) {
 				nextDue = 0;
+				minutesInEffect = 0;
 				return;
 			}
-			if (nextDue === 0) nextDue = dueAfter(minutes);
+			// A shortened interval must not wait out the old one.
+			if (nextDue === 0 || minutes !== minutesInEffect) {
+				nextDue = dueAfter(minutes);
+				minutesInEffect = minutes;
+			}
 			if (Date.now() < nextDue) return;
 			nextDue = dueAfter(minutes);
 			// Realtime replaces polling only while it is actually connected.

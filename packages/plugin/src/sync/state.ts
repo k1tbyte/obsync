@@ -2,7 +2,8 @@ import type { DataAdapter } from "obsidian";
 import { PLUGIN_ID, STATE_FILE_NAME } from "../constants";
 import { randomId } from "../crypto";
 import type { LocalState } from "../types";
-import { ensureParent, writeAtomic } from "../vault/atomic-write";
+import { writeAtomic } from "../vault/atomic-write";
+import { ensureParent } from "../vault/io";
 import { defaultDeviceName } from "./device";
 
 export function stateFilePath(configDir: string): string {

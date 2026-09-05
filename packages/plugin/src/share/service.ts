@@ -17,6 +17,7 @@ import { RealtimeClient } from "../sync/realtime";
 import type { LocalState, SessionState } from "../types";
 import { base64UrlToBytes } from "../utils/base64";
 import { runWithConcurrency } from "../utils/concurrency";
+import { ensureDir } from "../vault/io";
 import { createSymlinkDetector } from "../vault/symlinks";
 import { createShareScopePolicy } from "./scope";
 import { ScopedVaultAdapter } from "./scoped-adapter";
@@ -28,6 +29,7 @@ import {
 	isPathInShare,
 	type SharedFolderConfig,
 	type ShareStatus,
+	shareChannelId,
 	shareSlotKey,
 } from "./types";
 
@@ -363,7 +365,7 @@ export class ShareSyncService {
 			}
 		}
 		if (stat?.type === "folder") return;
-		await mkdirDeep(adapter, share.localRoot);
+		await ensureDir(adapter, share.localRoot);
 	}
 
 	private async openShareSession(
@@ -437,8 +439,9 @@ export class ShareSyncService {
 		const state = this.host.getState();
 		const client = new RealtimeClient({
 			serverUrl: share.relayUrl,
-			channelId: `obsync-share-${share.id}`,
+			channelId: shareChannelId(share.id),
 			token: share.relayToken || undefined,
+			roomToken: share.relayRoomToken || undefined,
 			deviceId: state?.deviceId,
 			deviceName: state?.deviceName,
 			onRemoteSync: () => this.scheduleSync(share.id),
@@ -485,22 +488,5 @@ export class ShareSyncService {
 }
 
 function realtimeCfgKey(share: SharedFolderConfig): string {
-	return `${share.relayUrl}|${share.relayToken ?? ""}`;
-}
-
-async function mkdirDeep(
-	adapter: {
-		exists(p: string): Promise<boolean>;
-		mkdir(p: string): Promise<void>;
-	},
-	path: string,
-): Promise<void> {
-	const segments = path.split("/").filter(Boolean);
-	let current = "";
-	for (const segment of segments) {
-		current = current ? `${current}/${segment}` : segment;
-		if (!(await adapter.exists(current))) {
-			await adapter.mkdir(current);
-		}
-	}
+	return `${share.relayUrl}|${share.relayToken ?? ""}|${share.relayRoomToken ?? ""}`;
 }

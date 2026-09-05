@@ -106,6 +106,36 @@ export function isStorageConfigured(settings: ObsyncSettings): boolean {
 	return isAdapterConfigured(activeStorage(settings));
 }
 
+/**
+ * Bounds for every numeric setting. `mergeSettings` is the only door into the
+ * settings object - loading `data.json`, and importing a transfer token both
+ * come through it - so clamping here is what keeps a hand-edited file or a
+ * crafted token from handing the engine a zero size cap or a negative interval.
+ */
+const NUMERIC_BOUNDS = {
+	maxFileBytes: { min: 1, max: 2 * 1024 * 1024 * 1024 },
+	autoPullIntervalMinutes: { min: 0, max: 24 * 60 },
+	fileHistoryMaxSnapshots: { min: 1, max: 1000 },
+} as const satisfies Partial<Record<keyof ObsyncSettings, Bounds>>;
+
+const CONCURRENCY_BOUNDS: Bounds = { min: 1, max: 32 };
+
+interface Bounds {
+	min: number;
+	max: number;
+}
+
+/**
+ * Below the minimum the value is nonsense (a negative interval, a zero size
+ * cap) and the default is the honest answer; above the maximum the user is
+ * asking for as much as possible, so cap rather than discard.
+ */
+function clamp(value: unknown, bounds: Bounds, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	if (value < bounds.min) return fallback;
+	return Math.min(bounds.max, Math.round(value));
+}
+
 /** Legacy single-field shape, folded into `storageConfigs` on first load. */
 interface LegacyStorageShape {
 	storage?: StorageAdapterConfig;
@@ -128,11 +158,11 @@ export function mergeSettings(
 	// concurrency) from that backend's defaults, so older configs pick up
 	// new defaults without a re-save.
 	for (const [kind, config] of Object.entries(storageConfigs)) {
-		if (typeof config.concurrency !== "number" || config.concurrency < 1) {
-			config.concurrency = getDescriptor(
-				kind as EStorageBackend,
-			).defaults().concurrency;
-		}
+		config.concurrency = clamp(
+			config.concurrency,
+			CONCURRENCY_BOUNDS,
+			getDescriptor(kind as EStorageBackend).defaults().concurrency,
+		);
 	}
 	const requested = stored?.activeStorageKind ?? legacy?.kind;
 	const activeStorageKind =
@@ -153,6 +183,10 @@ export function mergeSettings(
 		},
 		sharedFolders: normalizeSharedFolders(stored?.sharedFolders),
 	} as ObsyncSettings & LegacyStorageShape;
+	for (const [key, bounds] of Object.entries(NUMERIC_BOUNDS)) {
+		const field = key as keyof typeof NUMERIC_BOUNDS;
+		merged[field] = clamp(merged[field], bounds, DEFAULT_SETTINGS[field]);
+	}
 	delete merged.storage;
 	return merged;
 }

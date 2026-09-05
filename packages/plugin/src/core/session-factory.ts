@@ -8,8 +8,9 @@ import {
 import { createStorageAdapter, type StorageAdapter } from "@/storage";
 import type { EngineDependencies } from "@/sync/engine";
 import { PassphraseRotatedError } from "@/sync/keyfile";
+import { projectSession } from "@/sync/session-state";
 import { loadState } from "@/sync/state";
-import type { LocalState, SessionState } from "@/types";
+import type { SessionState } from "@/types";
 import { notifyInfo } from "@/ui";
 import {
 	loadLocalIgnoreMatcher,
@@ -100,23 +101,12 @@ async function openSession(
 			symlinks: createSymlinkDetector(adapter, settings.ignoreSymlinks),
 		}),
 		key,
-		state: buildSessionView(currentState, storage.identity()),
+		state: projectSession(currentState, storage.identity()) as SessionState,
 		maxFileBytes: settings.maxFileBytes,
 		concurrency: activeStorage(settings).concurrency,
 		history: settings.fileHistoryEnabled
 			? { maxSnapshots: settings.fileHistoryMaxSnapshots }
 			: undefined,
-	};
-}
-
-function buildSessionView(local: LocalState, identity: string): SessionState {
-	const slot = local.storages[identity];
-	return {
-		deviceId: local.deviceId,
-		deviceName: local.deviceName,
-		vaultId: slot?.vaultId ?? null,
-		baseline: slot?.baseline ?? null,
-		hashCache: local.hashCache,
 	};
 }
 

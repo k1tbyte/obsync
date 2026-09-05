@@ -15,6 +15,10 @@ export interface DiffInput {
 
 export function diff(input: DiffInput): DiffResult {
 	const localFiles = input.local.files;
+	// A file the scan could not read is absent from `files`, and treating that
+	// absence as a deletion would push it away on the next sync. It stays out of
+	// the diff entirely until a scan can see it again.
+	const unreadable = new Set(input.local.skipped.map((entry) => entry.path));
 	const remoteFiles = input.remote?.files ?? {};
 	const baselineFiles = input.baseline?.files ?? {};
 
@@ -29,6 +33,7 @@ export function diff(input: DiffInput): DiffResult {
 	const converged: string[] = [];
 
 	for (const path of paths) {
+		if (unreadable.has(path)) continue;
 		const local = localFiles[path]?.hash ?? null;
 		const remote = remoteFiles[path]?.hash ?? null;
 		const baseline = baselineFiles[path]?.hash ?? null;

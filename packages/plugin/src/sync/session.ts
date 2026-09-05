@@ -14,7 +14,10 @@ export async function loadOrCreateSalt(
 	const existing = await storage.get(REMOTE_SALT_KEY);
 	if (existing && existing.length >= SALT_BYTES) return existing;
 	const fresh = randomBytes(SALT_BYTES);
-	if (await storage.putIfAbsent(REMOTE_SALT_KEY, fresh)) return fresh;
+	// The conditional write reports whether it created the object, but a backend
+	// that ignores the condition would report success after overwriting. Reading
+	// back is what settles which salt the vault actually has.
+	await storage.putIfAbsent(REMOTE_SALT_KEY, fresh);
 	const winner = await storage.get(REMOTE_SALT_KEY);
 	if (winner && winner.length >= SALT_BYTES) return winner;
 	throw new Error(

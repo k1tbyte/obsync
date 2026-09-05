@@ -11,16 +11,12 @@ import {
 	decryptJson,
 	type EncryptionKey,
 	encryptJson,
+	importAesKey,
 	randomBytes,
 } from "./index";
 
 interface CachedPayload {
 	version: 1;
-	passphrase: string;
-	binding: string;
-}
-
-export interface PassphraseCacheRecord {
 	passphrase: string;
 	binding: string;
 }
@@ -90,23 +86,6 @@ async function loadDeviceKey(
 	const fresh = randomBytes(DEVICE_KEY_BYTES);
 	await writeBinary(adapter, path, fresh);
 	return importAesKey(fresh);
-}
-
-function importAesKey(bytes: Uint8Array): Promise<EncryptionKey> {
-	return window.crypto.subtle.importKey(
-		"raw",
-		toArrayBuffer(bytes),
-		{ name: "AES-GCM" },
-		false,
-		["encrypt", "decrypt"],
-	);
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer as ArrayBuffer;
-	}
-	return bytes.slice().buffer as ArrayBuffer;
 }
 
 function pluginFolder(configDir: string): string {
