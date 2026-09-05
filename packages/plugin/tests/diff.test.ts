@@ -51,6 +51,7 @@ function mockLocal(
 		skipped: [],
 		emptyFolders: [],
 		ignoredPaths: [],
+		unreadableDirs: [],
 	};
 }
 

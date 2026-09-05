@@ -301,15 +301,46 @@ describe("scanVault", () => {
 			if (path === "notes") throw new Error("EPERM");
 			return list(path);
 		};
-		const { snapshot } = await scanVault(
-			data,
+		const first = await scanVault(data, policy(), options, clean.updatedCache);
+		const result = diff({
+			local: first.snapshot,
+			remote: synced,
+			baseline: synced,
+		});
+
+		expect(first.snapshot.unreadableDirs).toContain("notes");
+		expect(result.localChanges).toHaveLength(0);
+
+		// And again on the next scan, which starts from the cache this one wrote:
+		// deriving the exclusion from that cache would forget it here.
+		const second = await scanVault(data, policy(), options, first.updatedCache);
+		const after = diff({
+			local: second.snapshot,
+			remote: synced,
+			baseline: synced,
+		});
+		expect(after.localChanges).toHaveLength(0);
+		expect(second.updatedCache["notes/a.md"]).toBeDefined();
+	});
+
+	it("keeps every path when the vault root itself will not list", async () => {
+		const adapter = vault({ "a.md": "one" });
+		const clean = await scanVault(
+			adapter.asDataAdapter(),
 			policy(),
 			options,
-			clean.updatedCache,
+			{},
 		);
+		const synced = manifestOf(clean.snapshot.files);
+
+		const data = adapter.asDataAdapter();
+		data.list = async () => {
+			throw new Error("EPERM");
+		};
+		const { snapshot } = await scanVault(data, policy(), options, {});
 		const result = diff({ local: snapshot, remote: synced, baseline: synced });
 
-		expect(snapshot.skipped.map((s) => s.path)).toContain("notes/a.md");
+		expect(snapshot.unreadableDirs).toContain("");
 		expect(result.localChanges).toHaveLength(0);
 	});
 

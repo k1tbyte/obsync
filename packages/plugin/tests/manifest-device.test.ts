@@ -8,6 +8,7 @@ const snapshot: LocalSnapshot = {
 	skipped: [],
 	emptyFolders: [],
 	ignoredPaths: [],
+	unreadableDirs: [],
 };
 
 describe("buildManifest deviceName", () => {

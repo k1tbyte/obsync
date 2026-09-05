@@ -303,6 +303,9 @@ export default class ObsyncPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		// Every settings write funnels through here, and any of them can change
+		// the room or the credentials the relay client is using.
+		this.realtime?.restartIfChanged();
 	}
 
 	getLogs(): readonly SyncLogEntry[] {

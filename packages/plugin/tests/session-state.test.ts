@@ -45,6 +45,7 @@ function compareResult(local: Record<string, string>): CompareResult {
 			skipped: [],
 			emptyFolders: [],
 			ignoredPaths: [],
+			unreadableDirs: [],
 		},
 		remote: null,
 		diff: {

@@ -19,6 +19,7 @@ export function diff(input: DiffInput): DiffResult {
 	// absence as a deletion would push it away on the next sync. It stays out of
 	// the diff entirely until a scan can see it again.
 	const unreadable = new Set(input.local.skipped.map((entry) => entry.path));
+	const unreadableDirs = input.local.unreadableDirs;
 	const remoteFiles = input.remote?.files ?? {};
 	const baselineFiles = input.baseline?.files ?? {};
 
@@ -33,7 +34,9 @@ export function diff(input: DiffInput): DiffResult {
 	const converged: string[] = [];
 
 	for (const path of paths) {
-		if (unreadable.has(path)) continue;
+		if (unreadable.has(path) || isUnderUnreadableDir(path, unreadableDirs)) {
+			continue;
+		}
 		const local = localFiles[path]?.hash ?? null;
 		const remote = remoteFiles[path]?.hash ?? null;
 		const baseline = baselineFiles[path]?.hash ?? null;
@@ -90,4 +93,15 @@ function classify(
 	if (current === null)
 		return remote ? EChangeType.RemoteDelete : EChangeType.LocalDelete;
 	return remote ? EChangeType.RemoteModify : EChangeType.LocalModify;
+}
+
+/** An empty entry is the vault root: nothing was listed, so nothing is known. */
+function isUnderUnreadableDir(
+	path: string,
+	dirs: ReadonlyArray<string>,
+): boolean {
+	for (const dir of dirs) {
+		if (dir === "" || path.startsWith(`${dir}/`)) return true;
+	}
+	return false;
 }

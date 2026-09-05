@@ -208,11 +208,7 @@ export function createGoogleDriveAdapter(
 	 * status, so without this one long sync would fail on an expired token it
 	 * could simply have replaced.
 	 */
-	const authorized = async (
-		build: (
-			headers: Record<string, string>,
-		) => Parameters<typeof requestUrl>[0],
-	): Promise<DriveResponse> => {
+	const authorized: AuthorizedRequest = async (build) => {
 		const first = await driveRequest(build(await getHeaders()));
 		if (first.status !== 401) return first;
 		await refreshOnce();
@@ -298,7 +294,7 @@ export function createGoogleDriveAdapter(
 			body,
 			contentType,
 			existingId,
-			getHeaders,
+			authorized,
 			context,
 		);
 		if (id) fileIdCache.set(key, id);
@@ -406,7 +402,14 @@ function needsRefresh(config: GoogleDriveStorageConfig): boolean {
 }
 
 type DriveResponse = Awaited<ReturnType<typeof requestUrl>>;
-type DriveHeaders = () => Promise<Record<string, string>>;
+
+/**
+ * Sends a request with a fresh Authorization header, replacing the token once
+ * if Drive answers 401. Uploads use it too: a long sync outlives a token.
+ */
+type AuthorizedRequest = (
+	build: (headers: Record<string, string>) => Parameters<typeof requestUrl>[0],
+) => Promise<DriveResponse>;
 
 /** `requestUrl` under the shared timeout and retry policy. */
 async function driveRequest(
@@ -431,7 +434,7 @@ async function multipartUpload(
 	body: Uint8Array,
 	contentType: string | undefined,
 	existingId: string | null,
-	getHeaders: DriveHeaders,
+	authorized: AuthorizedRequest,
 	context: { folderId: string },
 ): Promise<string | null> {
 	const metadata = {
@@ -451,18 +454,18 @@ async function multipartUpload(
 	payload.set(body, top.length);
 	payload.set(bottom, top.length + body.length);
 
-	const res = await driveRequest({
+	const res = await authorized((headers) => ({
 		url: existingId
 			? `${DRIVE_UPLOAD_API}/${existingId}?uploadType=multipart`
 			: `${DRIVE_UPLOAD_API}?uploadType=multipart`,
 		method: existingId ? "PATCH" : "POST",
 		headers: {
-			...(await getHeaders()),
+			...headers,
 			"Content-Type": `multipart/related; boundary=${MULTIPART_BOUNDARY}`,
 		},
 		body: toArrayBuffer(payload),
 		throw: false,
-	});
+	}));
 	assertOk(res, "upload", key);
 	return existingId ?? (res.json as { id?: string } | null)?.id ?? null;
 }
@@ -474,16 +477,16 @@ async function resumableUpload(
 	body: Uint8Array,
 	contentType: string | undefined,
 	existingId: string | null,
-	getHeaders: DriveHeaders,
+	authorized: AuthorizedRequest,
 	context: { folderId: string },
 ): Promise<string | null> {
-	const start = await driveRequest({
+	const start = await authorized((headers) => ({
 		url: existingId
 			? `${DRIVE_UPLOAD_API}/${existingId}?uploadType=resumable`
 			: `${DRIVE_UPLOAD_API}?uploadType=resumable`,
 		method: existingId ? "PATCH" : "POST",
 		headers: {
-			...(await getHeaders()),
+			...headers,
 			"X-Upload-Content-Type": contentType ?? "application/octet-stream",
 		},
 		body: JSON.stringify({
@@ -491,7 +494,7 @@ async function resumableUpload(
 			...(existingId ? {} : { parents: [context.folderId] }),
 		}),
 		throw: false,
-	});
+	}));
 	assertOk(start, "start upload of", key);
 	const session = start.headers.location ?? start.headers.Location;
 	if (!session) {

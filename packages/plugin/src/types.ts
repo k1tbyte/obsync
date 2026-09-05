@@ -76,6 +76,12 @@ export interface LocalSnapshot {
 	skipped: SkippedFile[];
 	emptyFolders: string[];
 	ignoredPaths: string[];
+	/**
+	 * Directories the adapter refused to list. Everything under them is unknown
+	 * rather than absent, and the diff has to leave those paths alone: an empty
+	 * string means the vault root itself could not be listed.
+	 */
+	unreadableDirs: string[];
 }
 
 export interface SkippedFile {
