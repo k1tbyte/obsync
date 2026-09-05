@@ -14,6 +14,7 @@ import {
 	readSnapshotIndex,
 	snapshotKey,
 } from "./history/store";
+import type { SnapshotIndex } from "./history/types";
 import { fetchRemoteManifest, objectKey } from "./manifest";
 
 export interface MaintenanceOptions {
@@ -32,21 +33,36 @@ export interface CleanResult {
 	deletedSnapshots: number;
 }
 
+interface ReachableManifests {
+	manifests: Manifest[];
+	head: Manifest | null;
+	index: SnapshotIndex;
+	/** False when a snapshot could not be read, so the live set is unknown. */
+	complete: boolean;
+}
+
 /** Loads HEAD + every archived snapshot manifest reachable from the index. */
 async function reachableManifests(
 	storage: StorageAdapter,
 	key: EncryptionKey,
 	concurrency: number,
-): Promise<Manifest[]> {
+): Promise<ReachableManifests> {
 	const manifests: Manifest[] = [];
-	const head = await fetchRemoteManifest(storage, key);
+	const [head, index] = await Promise.all([
+		fetchRemoteManifest(storage, key),
+		readSnapshotIndex(storage, key),
+	]);
 	if (head) manifests.push(head);
-	const index = await readSnapshotIndex(storage, key);
+	let complete = true;
 	await runWithConcurrency(index.entries, concurrency, async (entry) => {
 		const m = await fetchArchivedManifest(storage, key, entry.snapshotId);
-		if (m) manifests.push(m);
+		if (m) {
+			manifests.push(m);
+			return;
+		}
+		complete = false;
 	});
-	return manifests;
+	return { manifests, head, index, complete };
 }
 
 /**
@@ -61,9 +77,14 @@ export async function verifyRemote(
 	options: MaintenanceOptions = {},
 ): Promise<VerifyResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const manifests = await reachableManifests(storage, key, concurrency);
+	const reachable = await reachableManifests(storage, key, concurrency);
+	if (!reachable.complete) {
+		throw new Error(
+			"Some snapshots could not be read, so the check would be incomplete. Try again later.",
+		);
+	}
 	const hashes = new Set<string>();
-	for (const m of manifests) collectHashes(m, hashes);
+	for (const m of reachable.manifests) collectHashes(m, hashes);
 
 	const list = [...hashes];
 	const missing: string[] = [];
@@ -97,23 +118,41 @@ export async function deepCleanOrphans(
 	options: MaintenanceOptions = {},
 ): Promise<CleanResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const manifests = await reachableManifests(storage, key, concurrency);
+	const reachable = await reachableManifests(storage, key, concurrency);
+	// An unreadable snapshot means the live set is unknown, and an object that
+	// cannot be proven unreachable must not be deleted.
+	if (!reachable.complete) {
+		throw new Error(
+			"Some snapshots could not be read, so orphans cannot be identified safely. Try again later.",
+		);
+	}
 	const liveHashes = new Set<string>();
-	for (const m of manifests) collectHashes(m, liveHashes);
+	for (const m of reachable.manifests) collectHashes(m, liveHashes);
 
-	const index = await readSnapshotIndex(storage, key);
 	const liveSnapshotKeys = new Set<string>([
 		REMOTE_SNAPSHOT_INDEX_KEY,
-		...index.entries.map((e) => snapshotKey(e.snapshotId)),
+		...reachable.index.entries.map((e) => snapshotKey(e.snapshotId)),
 	]);
 
-	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
+	const [objectKeys, snapshotKeys] = await Promise.all([
+		storage.list(REMOTE_OBJECTS_PREFIX),
+		storage.list(REMOTE_SNAPSHOTS_PREFIX),
+	]);
+
+	// Listing takes time, and another device may have published in the meantime;
+	// its new objects would look like orphans. Bail out instead of deleting them.
+	const headNow = await fetchRemoteManifest(storage, key);
+	if ((headNow?.snapshotId ?? null) !== (reachable.head?.snapshotId ?? null)) {
+		throw new Error(
+			"Another device pushed while cleaning; nothing was deleted. Try again.",
+		);
+	}
+
 	const liveObjectKeys = new Set([...liveHashes].map((h) => objectKey(h)));
 	const orphanObjects = objectKeys.filter(
 		(k) => k.startsWith(REMOTE_OBJECTS_PREFIX) && !liveObjectKeys.has(k),
 	);
 
-	const snapshotKeys = await storage.list(REMOTE_SNAPSHOTS_PREFIX);
 	const orphanSnapshots = snapshotKeys.filter(
 		(k) => k.startsWith(REMOTE_SNAPSHOTS_PREFIX) && !liveSnapshotKeys.has(k),
 	);

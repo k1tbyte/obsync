@@ -7,7 +7,7 @@ import {
 import type { EncryptionKey } from "../../crypto";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
-import { objectKey } from "../manifest";
+import { fetchRemoteManifest, objectKey } from "../manifest";
 import {
 	fetchArchivedManifest,
 	snapshotKey,
@@ -119,8 +119,14 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	}
 
 	let deletedObjects = 0;
-	const skippedObjectSweep = !retainedComplete;
-	if (retainedComplete) {
+	// Reading the head again catches a device that published between the
+	// reachability walk and the sweep: its objects must not be collected.
+	const headNow = await fetchRemoteManifest(storage, key);
+	if (headNow) collectHashes(headNow, liveHashes);
+	const headMoved =
+		headNow !== null && headNow.snapshotId !== input.headManifest.snapshotId;
+	const skippedObjectSweep = !retainedComplete || headMoved;
+	if (!skippedObjectSweep) {
 		for (const hash of evictedHashes) {
 			if (liveHashes.has(hash)) continue;
 			await safeDelete(storage, objectKey(hash));
