@@ -1,6 +1,7 @@
 import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "../constants";
 import { type EncryptionKey, encryptBytes, sha256Hex } from "../crypto";
+import { reportWarning } from "../shared/diagnostics";
 import type { StorageAdapter } from "../storage/types";
 import {
 	type DiffResult,
@@ -70,10 +71,14 @@ export async function compare(
 	assertVaultCompatibility(deps.state, fetched);
 	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
 	if (fetched && remote !== fetched) {
-		console.warn("[obsync] storage returned stale manifest", {
-			fetched: fetched.snapshotId,
-			baseline: deps.state.baseline?.snapshotId,
-		});
+		reportWarning(
+			"Storage returned a stale manifest; using the baseline.",
+			undefined,
+			[
+				`fetched: ${fetched.snapshotId}`,
+				`baseline: ${deps.state.baseline?.snapshotId ?? "none"}`,
+			],
+		);
 	}
 	const result = diff({
 		local: snapshot,

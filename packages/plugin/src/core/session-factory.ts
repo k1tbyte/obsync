@@ -66,7 +66,7 @@ async function openSession(
 			ESyncLogOperation.Session,
 			"Session blocked because storage is not configured.",
 		);
-		notifyInfo("configure storage backend first.");
+		notifyInfo("Configure a storage backend first.");
 		return null;
 	}
 	if (!(await passphrase.prompt(false))) {
@@ -74,7 +74,7 @@ async function openSession(
 			ESyncLogOperation.Session,
 			"Session blocked because the passphrase is missing.",
 		);
-		notifyInfo("passphrase is required.");
+		notifyInfo("A passphrase is required.");
 		return null;
 	}
 	const adapter = app.vault.adapter;

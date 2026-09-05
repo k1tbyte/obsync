@@ -12,6 +12,10 @@ export class ConflictPreviewManager {
 	private readonly loadPreview: (path: string) => Promise<FileDiffModel | null>;
 	private readonly previewCache = new Map<string, FileDiffModel | null>();
 	private readonly loadingPreviews = new Set<string>();
+	private readonly pendingTargets = new Map<
+		string,
+		{ previewEl: HTMLElement; handlers: ConflictPreviewHandlers }
+	>();
 	private readonly expandedPreviews = new Set<string>();
 
 	constructor(deps: ConflictPreviewManagerDeps) {
@@ -21,6 +25,7 @@ export class ConflictPreviewManager {
 	clearCache(): void {
 		this.previewCache.clear();
 		this.loadingPreviews.clear();
+		this.pendingTargets.clear();
 	}
 
 	collapse(path: string): void {
@@ -52,13 +57,29 @@ export class ConflictPreviewManager {
 			return;
 		}
 		previewEl.setText("Loading diff…");
+		// The element a load was started for may already be detached by a
+		// re-render, so the newest one is remembered and filled instead.
+		this.pendingTargets.set(path, { previewEl, handlers });
 		if (this.loadingPreviews.has(path)) return;
 		this.loadingPreviews.add(path);
-		void this.loadPreview(path).then((model) => {
-			this.previewCache.set(path, model);
-			this.loadingPreviews.delete(path);
-			this.renderInto(previewEl, model, path, handlers);
-		});
+		void this.loadPreview(path)
+			.then((model) => {
+				this.previewCache.set(path, model);
+				this.settle(path, model);
+			})
+			.catch(() => {
+				// Not cached: a transient failure should be retried on the next open.
+				this.settle(path, null);
+			});
+	}
+
+	private settle(path: string, model: FileDiffModel | null): void {
+		this.loadingPreviews.delete(path);
+		const target = this.pendingTargets.get(path);
+		this.pendingTargets.delete(path);
+		if (target) {
+			this.renderInto(target.previewEl, model, path, target.handlers);
+		}
 	}
 
 	private renderInto(

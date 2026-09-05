@@ -9,6 +9,7 @@ import {
 } from "../../storage/config";
 import { EFieldKind, type SettingsFieldSpec } from "../../storage/field-spec";
 import { getDescriptor, listBackends } from "../../storage/registry";
+import { notifyError } from "../../ui/notices";
 import { activeStorage } from "../model";
 
 const BACKEND_SETTINGS_CHANGED = "Storage backend changed.";
@@ -100,12 +101,16 @@ function renderBackendField(
 		return;
 	}
 	setting.addText((t) => {
-		if (field.kind === EFieldKind.Password) t.inputEl.type = "password";
+		const isSecret = field.kind === EFieldKind.Password;
+		if (isSecret) t.inputEl.type = "password";
 		if (field.placeholder) t.setPlaceholder(field.placeholder);
 		const raw = storage[field.key];
 		const text = typeof raw === "string" ? raw : "";
 		t.setValue(text).onChange((v) => {
-			updateStorage(plugin, { [field.key]: v.trim() });
+			// Only non-secret fields are trimmed: a password may legitimately begin
+			// or end with a space, and silently dropping it breaks authentication
+			// with no visible cause.
+			updateStorage(plugin, { [field.key]: isSecret ? v : v.trim() });
 		});
 	});
 }
@@ -145,5 +150,7 @@ function updateStorage(
 		...patch,
 	} as StorageAdapterConfig;
 	settings.storageConfigs[settings.activeStorageKind] = next;
-	void plugin.saveSettings();
+	void plugin
+		.saveSettings()
+		.catch((err: unknown) => notifyError("Could not save settings", err));
 }

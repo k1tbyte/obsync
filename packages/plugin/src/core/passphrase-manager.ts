@@ -7,6 +7,7 @@ import {
 	saveCachedPassphrase,
 } from "@/crypto/passphrase-cache";
 import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import { reportWarning } from "@/shared/diagnostics";
 import { type ObjectStorage, storageIdentity } from "@/storage";
 import { resolveContentKey } from "@/sync/keyfile";
 import { askPassphrase } from "@/ui";
@@ -43,7 +44,7 @@ export class PassphraseManager {
 		try {
 			await clearCachedPassphrase(this.adapter, this.configDir);
 		} catch (err) {
-			console.warn("[obsync] failed to clear cached passphrase", err);
+			reportWarning("Could not clear the cached passphrase.", err);
 		}
 	}
 
@@ -97,7 +98,7 @@ export class PassphraseManager {
 				this.bindingSignature(),
 			);
 		} catch (err) {
-			console.warn("[obsync] failed to cache passphrase", err);
+			reportWarning("Could not cache the passphrase.", err);
 		}
 	}
 

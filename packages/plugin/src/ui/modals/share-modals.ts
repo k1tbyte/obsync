@@ -42,6 +42,7 @@ export function findShareOverlap(
 }
 
 export class CreateShareModal extends Modal {
+	private submitting = false;
 	private folder: string;
 	private name = "";
 	private relayUrl: string;
@@ -124,6 +125,10 @@ export class CreateShareModal extends Modal {
 	}
 
 	private async submit(): Promise<void> {
+		// Creating a share mints a key and calls the broker; a double click would
+		// do both twice.
+		if (this.submitting) return;
+		this.submitting = true;
 		try {
 			const root = normalizeShareRoot(this.folder);
 			if (!root) throw new Error("Enter a folder to share.");
@@ -162,6 +167,8 @@ export class CreateShareModal extends Modal {
 			new ShareInviteModal(this.plugin, share).open();
 		} catch (err) {
 			notifyError("Could not create share", err);
+		} finally {
+			this.submitting = false;
 		}
 	}
 }

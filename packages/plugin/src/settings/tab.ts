@@ -312,7 +312,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		try {
 			const imported = await this.plugin.importSettingsTransfer(input);
 			if (!imported) return;
-			notifyInfo("settings imported.");
+			notifyInfo("Settings imported.");
 			this.display();
 		} catch (err) {
 			reportError(err);

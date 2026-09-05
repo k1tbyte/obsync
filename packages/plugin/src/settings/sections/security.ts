@@ -25,13 +25,17 @@ export function renderSecuritySection(
 		.addToggle((t) =>
 			t.setValue(plugin.settings.cachePassphrase).onChange(async (v) => {
 				Object.assign(plugin.settings, { cachePassphrase: v });
-				void plugin.saveSettings();
-				if (!v) {
-					await clearCachedPassphrase(
-						plugin.app.vault.adapter,
-						plugin.app.vault.configDir,
-					);
+				await plugin.saveSettings();
+				if (v) {
+					// Turning the toggle on with a passphrase already loaded should
+					// cache that one, not wait for the next prompt.
+					await plugin.persistCachedPassphrase();
+					return;
 				}
+				await clearCachedPassphrase(
+					plugin.app.vault.adapter,
+					plugin.app.vault.configDir,
+				);
 			}),
 		);
 
@@ -53,7 +57,7 @@ export function renderSecuritySection(
 				.setDisabled(!plugin.hasPassphrase())
 				.onClick(async () => {
 					await plugin.forgetPassphrase();
-					notifyInfo("passphrase forgotten.");
+					notifyInfo("Passphrase forgotten.");
 					onDisplay();
 				}),
 		);

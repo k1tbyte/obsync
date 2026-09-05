@@ -1,4 +1,5 @@
 import type { EncryptionKey } from "../../crypto";
+import { reportWarning } from "../../shared/diagnostics";
 import type { ObjectStorage } from "../../storage/types";
 import type { Manifest } from "../../types";
 import { publishManifestWithGuard } from "../manifest";
@@ -64,6 +65,9 @@ export async function publishManifestWithHistory(
 			});
 		}
 	} catch (err) {
-		console.warn("[obsync] file history update failed (push succeeded)", err);
+		reportWarning(
+			"File history could not be updated; the push itself succeeded.",
+			err,
+		);
 	}
 }

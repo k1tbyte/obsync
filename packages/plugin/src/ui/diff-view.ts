@@ -36,9 +36,9 @@ enum EDiffMode {
 }
 
 const HUNK_OPS = {
-	push: { ok: "pushed hunk", fail: "Push hunk failed" },
-	pull: { ok: "pulled hunk", fail: "Pull hunk failed" },
-	revert: { ok: "reverted hunk", fail: "Revert hunk failed" },
+	push: { ok: "Pushed the hunk.", fail: "Push hunk failed" },
+	pull: { ok: "Pulled the hunk.", fail: "Pull hunk failed" },
+	revert: { ok: "Reverted the hunk.", fail: "Revert hunk failed" },
 } as const;
 
 type HunkOpKind = keyof typeof HUNK_OPS;
@@ -471,7 +471,7 @@ export class DiffView extends ItemView {
 		if (!path) return;
 		await this.runOnFile(
 			() => this.plugin.controller.resolveConflictKeepLocal(path),
-			"kept local version",
+			"Kept the local version.",
 			"Resolve keep local failed",
 			() => this.advanceAfterResolve(path),
 		);
@@ -482,7 +482,7 @@ export class DiffView extends ItemView {
 		if (!path) return;
 		await this.runOnFile(
 			() => this.plugin.controller.resolveConflictAcceptRemote(path),
-			"accepted remote version",
+			"Accepted the remote version.",
 			"Resolve accept remote failed",
 			() => this.advanceAfterResolve(path),
 		);

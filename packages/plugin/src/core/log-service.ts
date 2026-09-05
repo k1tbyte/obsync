@@ -4,11 +4,12 @@ import {
 	appendSyncLog,
 	createSyncLogEntry,
 	ESyncLogLevel,
-	type ESyncLogOperation,
+	ESyncLogOperation,
 	loadSyncLogs,
 	type SyncLogEntry,
 	saveSyncLogs,
 } from "../logs/store";
+import { setDiagnosticsSink } from "../shared/diagnostics";
 
 export class LogService {
 	private entries: SyncLogEntry[] = [];
@@ -23,6 +24,13 @@ export class LogService {
 
 	async load(): Promise<void> {
 		this.entries = await loadSyncLogs(this.adapter, this.configDir);
+		setDiagnosticsSink((message, details) => {
+			void this.warn(ESyncLogOperation.Session, message, details ?? []);
+		});
+	}
+
+	dispose(): void {
+		setDiagnosticsSink(null);
 	}
 
 	getEntries(): readonly SyncLogEntry[] {

@@ -6,10 +6,14 @@ import type {
 	EConflictStrategy,
 	SyncStatusSnapshot,
 } from "../../sync/controller";
-import { notifyError, notifyInfo } from "../notices";
+import { notifyError, notifyInfo, runWithNotice } from "../notices";
 import { openInEditor, revealInFileExplorer } from "../obsidian-helpers";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
-import { confirmAdoptNewVault, confirmBatchResolve } from "./modals";
+import {
+	confirmAdoptNewVault,
+	confirmBatchResolve,
+	confirmRevert,
+} from "./modals";
 import type { SectionStateManager } from "./section-state-manager";
 import { ESection } from "./types";
 
@@ -70,7 +74,14 @@ export class SourceControlActions {
 			item
 				.setTitle("Copy path")
 				.setIcon("clipboard")
-				.onClick(() => void navigator.clipboard.writeText(path)),
+				.onClick(
+					() =>
+						void runWithNotice(
+							() => navigator.clipboard.writeText(path),
+							"Path copied.",
+							"Could not copy the path",
+						),
+				),
 		);
 		if (this.plugin.settings.fileHistoryEnabled) {
 			menu.addItem((item) =>
@@ -109,17 +120,19 @@ export class SourceControlActions {
 
 	async resolveKeepLocal(path: string): Promise<void> {
 		this.previews.collapse(path);
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.resolveConflictKeepLocal(path),
-			` kept local version of ${path}`,
+			`Kept the local version of ${path}.`,
+			"Could not keep the local version",
 		);
 	}
 
 	async resolveAcceptRemote(path: string): Promise<void> {
 		this.previews.collapse(path);
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.resolveConflictAcceptRemote(path),
-			` accepted remote version of ${path}`,
+			`Accepted the remote version of ${path}.`,
+			"Could not accept the remote version",
 		);
 	}
 
@@ -136,18 +149,24 @@ export class SourceControlActions {
 			if (!ok) return;
 		}
 		this.previews.collapseAll(paths);
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.resolveConflicts(paths, strategy),
-			` resolved ${paths.length} conflict(s)`,
+			`Resolved ${paths.length} conflict(s).`,
+			"Could not resolve the conflicts",
 		);
 	}
 
 	async revertSelected(section: ESection): Promise<void> {
-		const paths = this.sections.takeSelection(section);
+		const paths = this.sections.selectedPaths(section);
 		if (paths.length === 0) return;
-		await this.runOperation(
+		// Revert overwrites unsaved local work with the last synced version, so it
+		// asks first — the same courtesy the reset command already extends.
+		if (!(await confirmRevert(this.plugin.app, paths))) return;
+		await this.runSelection(
+			section,
 			() => this.plugin.controller.revertPaths(paths),
-			` reverted ${paths.length} file(s)`,
+			`Reverted ${paths.length} file(s).`,
+			"Revert failed",
 		);
 	}
 
@@ -155,22 +174,46 @@ export class SourceControlActions {
 		section: ESection,
 		kind: "push" | "pull",
 	): Promise<void> {
-		const paths = this.sections.takeSelection(section);
+		const paths = this.sections.selectedPaths(section);
 		if (paths.length === 0) return;
 		const action =
 			kind === "push"
 				? () => this.plugin.controller.pushPaths(paths)
 				: () => this.plugin.controller.pullPaths(paths);
-		const verb = kind === "push" ? "pushed" : "pulled";
-		await this.runOperation(action, ` ${verb} ${paths.length} file(s)`);
+		const verb = kind === "push" ? "Pushed" : "Pulled";
+		await this.runSelection(
+			section,
+			action,
+			`${verb} ${paths.length} file(s).`,
+			kind === "push" ? "Push failed" : "Pull failed",
+		);
+	}
+
+	/** Clears the selection only once the operation succeeded, so a failure
+	 * leaves the user something to retry. */
+	private async runSelection(
+		section: ESection,
+		action: () => Promise<unknown>,
+		successMessage: string,
+		failureLabel: string,
+	): Promise<void> {
+		try {
+			await action();
+		} catch (error) {
+			notifyError(failureLabel, error);
+			return;
+		}
+		this.sections.clearSelection(section);
+		notifyInfo(successMessage);
 	}
 
 	async adoptNewVault(): Promise<void> {
 		const ok = await confirmAdoptNewVault(this.plugin.app);
 		if (!ok) return;
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.adoptNewVault(),
-			" adopted new remote vault.",
+			"Adopted the new remote vault.",
+			"Could not adopt the new vault",
 		);
 	}
 
@@ -179,9 +222,10 @@ export class SourceControlActions {
 		if (!diff) return;
 		const paths = diff.localChanges.map((change) => change.path);
 		if (paths.length === 0) return;
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.pushPaths(paths),
-			` pushed ${paths.length} file(s)`,
+			`Pushed ${paths.length} file(s).`,
+			"Push failed",
 		);
 	}
 
@@ -190,28 +234,19 @@ export class SourceControlActions {
 		if (!diff) return;
 		const paths = diff.remoteChanges.map((change) => change.path);
 		if (paths.length === 0) return;
-		await this.runOperation(
+		await runWithNotice(
 			() => this.plugin.controller.pullPaths(paths),
-			` pulled ${paths.length} file(s)`,
+			`Pulled ${paths.length} file(s).`,
+			"Pull failed",
 		);
 	}
 
 	private async revertSingle(path: string): Promise<void> {
-		await this.runOperation(
+		if (!(await confirmRevert(this.plugin.app, [path]))) return;
+		await runWithNotice(
 			() => this.plugin.controller.revertPaths([path]),
-			` reverted ${path}`,
+			`Reverted ${path}.`,
+			"Revert failed",
 		);
-	}
-
-	private async runOperation(
-		action: () => Promise<unknown>,
-		successMessage: string,
-	): Promise<void> {
-		try {
-			await action();
-			notifyInfo(successMessage);
-		} catch (error) {
-			notifyError("Operation failed", error);
-		}
 	}
 }

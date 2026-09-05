@@ -27,6 +27,7 @@ import {
 	type SharedFolderConfig,
 	ShareSyncService,
 } from "@/share";
+import { reportWarning } from "@/shared/diagnostics";
 import { createStorageAdapter, handleStorageProtocol } from "@/storage";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { defaultDeviceName } from "@/sync/device";
@@ -63,7 +64,7 @@ function safely(step: () => void): void {
 	try {
 		step();
 	} catch (err) {
-		console.warn("[obsync] teardown step failed", err);
+		reportWarning("A teardown step failed during unload.", err);
 	}
 }
 
@@ -152,6 +153,7 @@ export default class ObsyncPlugin extends Plugin {
 		this.realtime = null;
 		safely(() => this.shares?.dispose());
 		this.shares = null;
+		safely(() => this.logs?.dispose());
 	}
 
 	private initShares(): void {
@@ -322,6 +324,10 @@ export default class ObsyncPlugin extends Plugin {
 
 	async forgetPassphrase(): Promise<void> {
 		await this.passphraseManager.forget();
+	}
+
+	async persistCachedPassphrase(): Promise<void> {
+		await this.passphraseManager.persistIfEnabled();
 	}
 
 	async promptPassphrase(replace: boolean): Promise<boolean> {

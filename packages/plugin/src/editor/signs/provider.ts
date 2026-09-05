@@ -100,7 +100,7 @@ export class SignsProvider {
 				left: baseline.hash,
 				right: await sha256Hex(textToBytes(currentText)),
 			});
-			notifyInfo("Pushed hunk");
+			notifyInfo("Pushed the hunk.");
 		} catch (err) {
 			notifyError("Push hunk failed", err);
 		}
