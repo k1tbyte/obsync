@@ -27,13 +27,14 @@ import {
  * `requestUrl` so neither the broker nor the bucket needs CORS configured.
  */
 
-enum EOp {
-	Head = "head",
-	Get = "get",
-	Put = "put",
-	Delete = "delete",
-	List = "list",
-}
+const EOp = {
+	Head: "head",
+	Get: "get",
+	Put: "put",
+	Delete: "delete",
+	List: "list",
+} as const;
+type EOp = (typeof EOp)[keyof typeof EOp];
 
 interface SignedRequest {
 	url: string;

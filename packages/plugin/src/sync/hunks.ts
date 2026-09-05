@@ -1,10 +1,11 @@
 import { structuredPatch } from "diff";
 
-export enum EHunkKind {
-	Added = "added",
-	Removed = "removed",
-	Modified = "modified",
-}
+export const EHunkKind = {
+	Added: "added",
+	Removed: "removed",
+	Modified: "modified",
+} as const;
+export type EHunkKind = (typeof EHunkKind)[keyof typeof EHunkKind];
 
 export interface SyncHunk {
 	index: number;

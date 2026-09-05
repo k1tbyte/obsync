@@ -9,20 +9,23 @@ const LOG_FILE_NAME = "logs.json";
 const MAX_LOG_ENTRIES = 200;
 const MAX_LOG_DETAILS = 50;
 
-export enum ESyncLogLevel {
-	Info = "info",
-	Warn = "warn",
-	Error = "error",
-}
+export const ESyncLogLevel = {
+	Info: "info",
+	Warn: "warn",
+	Error: "error",
+} as const;
+export type ESyncLogLevel = (typeof ESyncLogLevel)[keyof typeof ESyncLogLevel];
 
-export enum ESyncLogOperation {
-	Compare = "compare",
-	Push = "push",
-	Pull = "pull",
-	Reset = "reset",
-	Session = "session",
-	Share = "share",
-}
+export const ESyncLogOperation = {
+	Compare: "compare",
+	Push: "push",
+	Pull: "pull",
+	Reset: "reset",
+	Session: "session",
+	Share: "share",
+} as const;
+export type ESyncLogOperation =
+	(typeof ESyncLogOperation)[keyof typeof ESyncLogOperation];
 
 export interface SyncLogEntry {
 	id: string;

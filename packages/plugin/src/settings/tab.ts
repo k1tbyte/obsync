@@ -23,10 +23,12 @@ import {
 	renderSharesSection,
 } from "./sections";
 
-enum ESettingsViewTab {
-	Settings = "settings",
-	Logs = "logs",
-}
+const ESettingsViewTab = {
+	Settings: "settings",
+	Logs: "logs",
+} as const;
+type ESettingsViewTab =
+	(typeof ESettingsViewTab)[keyof typeof ESettingsViewTab];
 
 const SETTINGS_TAB_LABELS: Record<ESettingsViewTab, string> = {
 	[ESettingsViewTab.Settings]: "Settings",
@@ -116,7 +118,7 @@ const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: ObsyncPlugin;
-	private activeTab = ESettingsViewTab.Settings;
+	private activeTab: ESettingsViewTab = ESettingsViewTab.Settings;
 	private sectionUnsubs: Array<() => void> = [];
 
 	constructor(app: App, plugin: ObsyncPlugin) {
@@ -229,7 +231,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			parent,
 			this.fieldContext(),
 			SETTINGS_SYNC_ROWS.map((row) => ({
-				kind: EFieldKind.Toggle as const,
+				kind: EFieldKind.Toggle,
 				name: row.name,
 				desc: row.desc,
 				get: (s: ObsyncSettings) => s.settingsSync[row.key],

@@ -30,10 +30,11 @@ interface DiffViewState {
 	historySize?: number;
 }
 
-enum EDiffMode {
-	Split = "split",
-	Unified = "unified",
-}
+const EDiffMode = {
+	Split: "split",
+	Unified: "unified",
+} as const;
+type EDiffMode = (typeof EDiffMode)[keyof typeof EDiffMode];
 
 const HUNK_OPS = {
 	push: { ok: "Pushed the hunk.", fail: "Push hunk failed" },

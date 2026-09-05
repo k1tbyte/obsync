@@ -18,10 +18,11 @@ import {
 
 type SectionActionKind = "push" | "pull" | "none";
 
-enum ESourceTab {
-	Changes = "changes",
-	History = "history",
-}
+const ESourceTab = {
+	Changes: "changes",
+	History: "history",
+} as const;
+type ESourceTab = (typeof ESourceTab)[keyof typeof ESourceTab];
 
 /** Gives a clickable non-button the semantics a keyboard user needs. */
 function makeActivatable(

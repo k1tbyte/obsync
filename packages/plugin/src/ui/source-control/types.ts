@@ -1,8 +1,9 @@
-export enum ESection {
-	Conflicts = "conflicts",
-	Local = "local",
-	Remote = "remote",
-}
+export const ESection = {
+	Conflicts: "conflicts",
+	Local: "local",
+	Remote: "remote",
+} as const;
+export type ESection = (typeof ESection)[keyof typeof ESection];
 
 export interface SectionState {
 	collapsed: boolean;

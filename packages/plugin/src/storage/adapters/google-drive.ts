@@ -98,14 +98,14 @@ export const GOOGLE_DRIVE_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
 		key: "clientId",
 		name: "Client ID",
-		desc: "Leave empty to use the default Obsync client, or provide your own.",
+		desc: "Leave empty to use the auth server's own client, or provide your own.",
 		kind: EFieldKind.Text,
 		placeholder: "...",
 	},
 	{
 		key: "authServerUrl",
-		name: "Auth Server URL",
-		desc: "The Cloudflare Worker proxy that securely exchanges auth codes.",
+		name: "Auth server URL",
+		desc: "Worker that exchanges Google auth codes for tokens. The default is run by the plugin author, and your refresh token is sent to it. Deploy packages/auth-worker and point this at your own copy to avoid that.",
 		kind: EFieldKind.Text,
 		placeholder: "https://obsync-auth...workers.dev",
 	},

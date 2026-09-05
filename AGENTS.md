@@ -83,6 +83,9 @@ npm run build
 - **Unit tests**: `vitest` is configured for core logic testing (`diff.ts`, `hunks.ts`, `concurrency.ts`, `ignore.ts`, etc.).
   - Run tests with `npm run test` or `npm run test:watch`.
   - ALL domain logic (diffs, merging, concurrency, hunks matching, baseline cache) must have complete unit-test coverage.
+- **Hunk source of truth**: a hunk operation must take both texts from `loadHunkSides`, the same function the projection uses, and must verify the sha256 of each side before it applies an index. A view that diffs one pair of texts while the operation recomputes from another will apply the wrong hunk.
+- **Baseline advance**: the baseline may only move for paths an operation actually wrote. Adopting a whole published or remote manifest silently claims every file this device has not downloaded, and the next push publishes them as deletions.
+- **Unreadable is not absent**: a file or directory the scan could not read is reported in `snapshot.skipped` and excluded from the diff. Treating it as missing turns a locked file into a remote deletion.
   - Tests live in the `tests/` directory at the root.
 - **Manual install for testing**: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
   ```

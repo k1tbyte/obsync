@@ -31,10 +31,11 @@ export interface ShareEnv {
 	SHARE_S3_FORCE_PATH_STYLE?: string;
 }
 
-export enum EShareRole {
-	ReadWrite = "rw",
-	ReadOnly = "ro",
-}
+export const EShareRole = {
+	ReadWrite: "rw",
+	ReadOnly: "ro",
+} as const;
+export type EShareRole = (typeof EShareRole)[keyof typeof EShareRole];
 
 interface TokenRecord {
 	shareId: string;

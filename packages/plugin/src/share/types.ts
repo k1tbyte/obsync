@@ -38,12 +38,14 @@ export function isOwnedShare(share: SharedFolderConfig): boolean {
 	return share.storage.kind !== EStorageBackend.ShareBroker;
 }
 
-export enum EShareSyncState {
-	Idle = "idle",
-	Syncing = "syncing",
-	Error = "error",
-	Paused = "paused",
-}
+export const EShareSyncState = {
+	Idle: "idle",
+	Syncing: "syncing",
+	Error: "error",
+	Paused: "paused",
+} as const;
+export type EShareSyncState =
+	(typeof EShareSyncState)[keyof typeof EShareSyncState];
 
 export interface ShareStatus {
 	state: EShareSyncState;

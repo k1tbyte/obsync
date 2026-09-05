@@ -29,20 +29,20 @@ interface FieldBase {
 }
 
 export interface ToggleField extends FieldBase {
-	kind: EFieldKind.Toggle;
+	kind: typeof EFieldKind.Toggle;
 	get: (settings: ObsyncSettings) => boolean;
 	set: (value: boolean, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
 }
 
 export interface TextField extends FieldBase {
-	kind: EFieldKind.Text | EFieldKind.Password;
+	kind: typeof EFieldKind.Text | typeof EFieldKind.Password;
 	placeholder?: string;
 	get: (settings: ObsyncSettings) => string;
 	set: (value: string, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
 }
 
 export interface NumberField extends FieldBase {
-	kind: EFieldKind.Number;
+	kind: typeof EFieldKind.Number;
 	get: (settings: ObsyncSettings) => string;
 	/** Clamps/validates the raw input; the result is what gets stored. */
 	parse: (raw: string) => number;
