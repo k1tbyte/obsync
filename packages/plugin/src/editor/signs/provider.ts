@@ -1,4 +1,4 @@
-import { Text } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
 import { sha256Hex } from "@/crypto";
@@ -7,6 +7,7 @@ import type { SyncController } from "@/sync/controller";
 import { notifyError, notifyInfo } from "@/ui";
 
 import { pathFromState } from "./compute";
+import { toCmText } from "./helpers";
 import { setCompareTextEffect } from "./state";
 
 const BASELINE_CACHE_MAX = 64;
@@ -248,13 +249,4 @@ function safeDispatch(
 			}
 		});
 	}
-}
-
-/**
- * A CodeMirror document keeps the empty last line a trailing newline implies,
- * so the baseline must too — dropping it made every file that ends in a
- * newline show a phantom "added line" at the end, forever.
- */
-function toCmText(raw: string): Text {
-	return Text.of(raw.replace(/\r\n?/g, "\n").split("\n"));
 }

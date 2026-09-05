@@ -104,13 +104,31 @@ export async function publishManifestWithGuard(
 	await publishManifest(storage, key, manifest);
 	const verify = await fetchRemoteManifest(storage, key);
 	if (verify?.snapshotId === manifest.snapshotId) return;
-	// Reading back the manifest we just replaced is a stale read of our own
-	// write, not somebody else's push.
-	if (verify && verify.snapshotId === manifest.parentSnapshotId) return;
+	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {
+		return;
+	}
 	throw new ConcurrentPushError(
 		"Another device overwrote the manifest immediately after our push.",
 		verify,
 	);
+}
+
+/**
+ * Snapshot ids this device published on the way to `published`. A lagging
+ * backend can still serve any of them; a competing writer always mints a fresh
+ * id, so reading one of ours back is a stale read and not a lost push.
+ */
+function ownSnapshotIds(
+	published: Manifest,
+	baseline: Manifest | null,
+): Set<string> {
+	const ids = new Set<string>();
+	if (published.parentSnapshotId) ids.add(published.parentSnapshotId);
+	if (baseline) {
+		ids.add(baseline.snapshotId);
+		if (baseline.parentSnapshotId) ids.add(baseline.parentSnapshotId);
+	}
+	return ids;
 }
 
 export function buildManifest(

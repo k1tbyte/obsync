@@ -1,5 +1,5 @@
 import type { Chunk } from "@codemirror/merge";
-import type { Text } from "@codemirror/state";
+import { Text } from "@codemirror/state";
 
 import { computeHunks, type SyncHunk } from "@/sync/hunks";
 
@@ -9,6 +9,15 @@ export interface PresentedChunk {
 	addedFromLine: number | null;
 	addedToLine: number | null;
 	deletionLine: number;
+}
+
+/**
+ * A CodeMirror document keeps the empty last line a trailing newline implies,
+ * so the baseline must too - dropping it made every file that ends in a
+ * newline show a phantom "added line" at the end, forever.
+ */
+export function toCmText(raw: string): Text {
+	return Text.of(raw.replace(/\r\n?/g, "\n").split("\n"));
 }
 
 export function shouldRedeliverBaseline(
