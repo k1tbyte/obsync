@@ -6,7 +6,9 @@
  * - On receiving "sync": triggers an auto-pull via the scheduler callback.
  *
  * The channel ID is derived from the storage identity so each vault+storage
- * combo gets its own isolated PartyKit room.
+ * combo gets its own isolated PartyKit room. The room is entered with a token
+ * derived from the deployment token and the room id, so holding the deployment
+ * token for one share does not open anyone else's room.
  *
  * PartyKit URL format:
  *   WebSocket: wss://<project>.<user>.partykit.dev/party/<roomId>
@@ -52,6 +54,7 @@ export class RealtimeClient {
 	private reconnectTimer: number | null = null;
 	private pingTimer: number | null = null;
 	private disposed = false;
+	private roomToken: Promise<string> | null = null;
 	private readonly options: RealtimeClientOptions;
 
 	constructor(options: RealtimeClientOptions) {
@@ -59,10 +62,22 @@ export class RealtimeClient {
 	}
 
 	connect(): void {
+		void this.openSocket();
+	}
+
+	private async openSocket(): Promise<void> {
 		if (this.disposed) return;
 		this.cleanup();
 
-		const wsUrl = buildRoomUrl(this.options.serverUrl, this.options);
+		let wsUrl: string;
+		try {
+			wsUrl = await this.roomUrl(this.options.serverUrl);
+		} catch {
+			// A malformed server URL cannot be fixed by retrying.
+			this.options.onConnectionChange?.(false);
+			return;
+		}
+		if (this.disposed) return;
 
 		let socket: WebSocket;
 		try {
@@ -136,13 +151,29 @@ export class RealtimeClient {
 	}
 
 	private async notifyViaHttp(): Promise<void> {
+		if (this.disposed) return;
 		const baseUrl = this.options.serverUrl.replace(/^ws(s)?:/, "http$1:");
-		const url = buildRoomUrl(baseUrl, this.options);
 		try {
+			const url = await this.roomUrl(baseUrl);
 			await requestUrl({ url, method: "POST", throw: false });
 		} catch {
 			// Best-effort, don't block sync on signalling failure
 		}
+	}
+
+	/** Room URL carrying the room-scoped token, derived once per client. */
+	private async roomUrl(serverUrl: string): Promise<string> {
+		const secret = this.options.token;
+		if (!secret) {
+			return buildRoomUrl(serverUrl, { ...this.options, token: undefined });
+		}
+		if (!this.roomToken) {
+			this.roomToken = deriveRoomToken(secret, this.options.channelId);
+		}
+		return buildRoomUrl(serverUrl, {
+			...this.options,
+			token: await this.roomToken,
+		});
 	}
 
 	private cleanup(): void {
@@ -202,12 +233,36 @@ export function normalizePresenceDevices(
 		const name = (entry as { name?: unknown }).name;
 		if (typeof id !== "string" || id.trim().length === 0) continue;
 		if (typeof name !== "string" || name.trim().length === 0) continue;
-		devices.set(id, { id, name: name.trim() });
+		const trimmedId = id.trim();
+		devices.set(trimmedId, { id: trimmedId, name: name.trim() });
 	}
 	return [...devices.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
 	);
+}
+
+/**
+ * HMAC-SHA256(deployment token, room id) as lowercase hex. Must stay identical
+ * to `deriveRoomToken` in packages/relay: it is what the relay compares
+ * against, and a mismatch simply refuses the connection.
+ */
+export async function deriveRoomToken(
+	secret: string,
+	roomId: string,
+): Promise<string> {
+	const encoder = new TextEncoder();
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(roomId));
+	return [...new Uint8Array(mac)]
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
 }
 
 function buildRoomUrl(
@@ -225,6 +280,8 @@ function buildRoomUrl(
 	}
 	if (options.deviceId) {
 		url.searchParams.set("deviceId", options.deviceId);
+		// Lets the HTTP fallback skip this device's own socket.
+		url.searchParams.set("from", options.deviceId);
 	}
 	if (options.deviceName) {
 		url.searchParams.set("deviceName", options.deviceName);

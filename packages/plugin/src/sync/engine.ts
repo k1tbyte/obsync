@@ -48,6 +48,9 @@ export interface CompareResult {
 
 export async function compare(
 	deps: EngineDependencies,
+	/** A manifest the caller just fetched. Re-comparing after a local write
+	 * still needs a fresh scan, but not a second download of the same head. */
+	knownRemote?: Manifest | null,
 ): Promise<CompareResult> {
 	const [{ snapshot, updatedCache }, fetched] = await Promise.all([
 		scanVault(
@@ -60,7 +63,9 @@ export async function compare(
 			},
 			deps.state.hashCache,
 		),
-		fetchRemoteManifest(deps.storage, deps.key),
+		knownRemote === undefined
+			? fetchRemoteManifest(deps.storage, deps.key)
+			: Promise.resolve(knownRemote),
 	]);
 	assertVaultCompatibility(deps.state, fetched);
 	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
@@ -89,7 +94,12 @@ export function filterManifestForDiff(
 	for (const [path, entry] of Object.entries(manifest.files)) {
 		if (scope.includesInDiff(path)) files[path] = entry;
 	}
-	return { ...manifest, files };
+	// Folders come from the manifest as well, and pull acts on them with mkdir
+	// and rmdir. Unfiltered, a participant could name a folder outside the share.
+	const folders = (manifest.folders ?? []).filter((dir) =>
+		scope.canDescend(dir),
+	);
+	return { ...manifest, files, folders };
 }
 
 export async function pushPaths(

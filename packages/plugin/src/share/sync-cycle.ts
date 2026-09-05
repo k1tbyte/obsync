@@ -74,7 +74,9 @@ export async function runShareSyncCycle(
 		if (resolution.baseline) {
 			session = { ...session, baseline: resolution.baseline };
 			await hooks.persist(session);
-			result = await compare(current());
+			// Resolution wrote files, so the folder has to be re-scanned — but the
+			// remote head has not moved, so it is not fetched again.
+			result = await compare(current(), result.remote);
 		}
 		if (result.diff.conflicts.length > 0) {
 			throw new Error(

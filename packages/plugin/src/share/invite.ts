@@ -55,6 +55,11 @@ export async function createShareInviteUrl(
 	brokerStorage: ShareBrokerStorageConfig,
 ): Promise<string> {
 	if (!passphrase) throw new Error("Invite passphrase is empty");
+	// An invite carries a broker token and nothing else. Passing any other
+	// backend here would pack the owner's storage credentials into the link.
+	if (brokerStorage.kind !== EStorageBackend.ShareBroker) {
+		throw new Error("Invites may only carry share-broker storage");
+	}
 	const payload: InvitePayload = {
 		id: share.id,
 		n: share.name,
@@ -144,7 +149,8 @@ function extractInviteToken(input: string): string {
 	if (!trimmed) throw new Error("Invite link is empty");
 	try {
 		const url = new URL(trimmed);
-		const data = url.searchParams.get(INVITE_PARAM);
+		const data =
+			url.searchParams.get(INVITE_PARAM) ?? url.searchParams.get("data");
 		if (typeof data === "string" && data.length > 0) return data;
 	} catch {
 		return trimmed;
