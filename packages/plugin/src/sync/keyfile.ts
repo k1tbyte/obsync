@@ -78,6 +78,18 @@ export async function writeKeyfile(
 	);
 }
 
+/** First writer wins; returns false when the keyfile already existed. */
+async function createKeyfile(
+	storage: ObjectStorage,
+	keyfile: Keyfile,
+): Promise<boolean> {
+	return storage.putIfAbsent(
+		REMOTE_KEYFILE_KEY,
+		encoder.encode(JSON.stringify(keyfile)),
+		"application/json",
+	);
+}
+
 /**
  * Resolves the content (data) key for the vault. Creates the keyfile with a
  * fresh random data key on first use. The data key is constant for the life
@@ -98,14 +110,24 @@ export async function resolveContentKey(
 
 	const raw = randomBytes(DATA_KEY_BYTES);
 	const now = Date.now();
-	await writeKeyfile(storage, {
+	const created = await createKeyfile(storage, {
 		version: KEYFILE_VERSION,
 		epoch: INITIAL_EPOCH,
 		wrapped: await wrapRawKey(kek, raw),
 		createdAt: now,
 		rotatedAt: now,
 	});
-	return { contentKey: await importAesKey(raw), epoch: INITIAL_EPOCH };
+	if (created) {
+		return { contentKey: await importAesKey(raw), epoch: INITIAL_EPOCH };
+	}
+	// Another device created the keyfile first. Its data key is the vault's, and
+	// ours is discarded: minting a second one would orphan everything it wrote.
+	const winner = await readKeyfile(storage);
+	if (!winner) {
+		throw new Error("Keyfile vanished while it was being created.");
+	}
+	const winnerRaw = await unwrapRawKey(kek, winner.wrapped);
+	return { contentKey: await importAesKey(winnerRaw), epoch: winner.epoch };
 }
 
 /**

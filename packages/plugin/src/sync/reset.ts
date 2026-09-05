@@ -15,11 +15,6 @@ export async function resetRemoteStorage(
 	concurrency = DEFAULT_CONCURRENCY,
 	onProgress?: (done: number, total: number) => void,
 ): Promise<RemoteResetResult> {
-	if (!storage.capabilities.canList) {
-		throw new Error(
-			"This storage backend does not support listing; reset is unavailable until manifest-based fallback ships.",
-		);
-	}
 	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
 	const keys = uniqueKeys([
 		REMOTE_MANIFEST_KEY,

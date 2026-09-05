@@ -1,16 +1,10 @@
-import type {
-	StorageAdapter,
-	StorageCapabilities,
-} from "../../src/storage/types";
+import type { StorageAdapter } from "../../src/storage/types";
 
 /** In-memory {@link StorageAdapter} for tests. `map` is exposed for assertions. */
 export class FakeStorage implements StorageAdapter {
 	readonly map = new Map<string, Uint8Array>();
 	/** Counts existence probes, so tests can assert redundant ones are skipped. */
 	existsCalls = 0;
-	readonly capabilities: StorageCapabilities = {
-		canList: true,
-	};
 
 	identity(): string {
 		return "fake";
@@ -28,6 +22,12 @@ export class FakeStorage implements StorageAdapter {
 	put(key: string, body: Uint8Array): Promise<void> {
 		this.map.set(key, body);
 		return Promise.resolve();
+	}
+
+	putIfAbsent(key: string, body: Uint8Array): Promise<boolean> {
+		if (this.map.has(key)) return Promise.resolve(false);
+		this.map.set(key, body);
+		return Promise.resolve(true);
 	}
 
 	delete(key: string): Promise<void> {
