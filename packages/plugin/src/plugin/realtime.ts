@@ -13,7 +13,8 @@ import { RealtimeClient, type RealtimePresenceDevice } from "@/sync/realtime";
 export class PluginRealtime {
 	private client: RealtimeClient | null = null;
 	private onRemoteSync: ReturnType<typeof debounce> | null = null;
-	private channelId: string | null = null;
+	/** Everything the connection depends on, so a change to any of it restarts. */
+	private connectionKey: string | null = null;
 	private connected = false;
 	private readonly listeners = new Set<(connected: boolean) => void>();
 	private devices: RealtimePresenceDevice[] = [];
@@ -47,14 +48,11 @@ export class PluginRealtime {
 	}
 
 	/** Reconnects when the room or the credentials changed; otherwise leaves an
-	 * established connection alone. */
+	 * established connection alone. Called after every settings save, so a
+	 * backend switch cannot leave the client sitting in the old room. */
 	restartIfChanged(): void {
-		const settings = this.getSettings();
-		const next =
-			settings.realtimeSync && isStorageConfigured(settings)
-				? storageIdentity(activeStorage(settings))
-				: null;
-		if (next === this.channelId && this.client) return;
+		const next = connectionKeyOf(this.getSettings());
+		if (next === this.connectionKey && (this.client || next === null)) return;
 		this.restart();
 	}
 
@@ -67,13 +65,10 @@ export class PluginRealtime {
 		this.emitStatus(false);
 
 		const settings = this.getSettings();
-		this.channelId = null;
-		if (!settings.realtimeSync) return;
-		if (!settings.realtimeServerUrl) return;
-		if (!isStorageConfigured(settings)) return;
+		this.connectionKey = connectionKeyOf(settings);
+		if (this.connectionKey === null) return;
 
 		const channelId = storageIdentity(activeStorage(settings));
-		this.channelId = channelId;
 		const currentDevice = this.controller.currentDevice();
 		// resetTimer is deliberately off: a steady stream of remote signals must
 		// still let a pull through instead of pushing the deadline out forever.
@@ -110,7 +105,7 @@ export class PluginRealtime {
 		this.client = null;
 		this.onRemoteSync?.cancel();
 		this.onRemoteSync = null;
-		this.channelId = null;
+		this.connectionKey = null;
 		this.connected = false;
 		this.devices = [];
 		this.listeners.clear();
@@ -146,4 +141,16 @@ function sameDevices(
 		(device, index) =>
 			device.id === next[index]?.id && device.name === next[index]?.name,
 	);
+}
+
+/** Null when realtime cannot run at all with these settings. */
+function connectionKeyOf(settings: ObsyncSettings): string | null {
+	if (!settings.realtimeSync) return null;
+	if (!settings.realtimeServerUrl) return null;
+	if (!isStorageConfigured(settings)) return null;
+	return [
+		storageIdentity(activeStorage(settings)),
+		settings.realtimeServerUrl,
+		settings.realtimeToken,
+	].join("|");
 }
