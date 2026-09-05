@@ -8,7 +8,11 @@ import {
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
-import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
+import {
+	DIFF_VIEW_TYPE,
+	HUNK_TEXT_MAX_BYTES,
+	SOURCE_CONTROL_VIEW_TYPE,
+} from "../constants";
 import type ObsyncPlugin from "../main";
 import { errorMessage } from "../shared/errors";
 import { formatBytes } from "../shared/format";
@@ -362,10 +366,22 @@ export class DiffView extends ItemView {
 			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
 			onSelectHunk: (i) => this.setCurrentHunk(i),
 		};
+		// A forced diff goes up to FORCE_DIFF_MAX_BYTES, but a hunk operation
+		// refuses anything past HUNK_TEXT_MAX_BYTES: offering the arrows here
+		// would hand the user a button that always fails.
+		const actionable =
+			model.leftSize <= HUNK_TEXT_MAX_BYTES &&
+			model.rightSize <= HUNK_TEXT_MAX_BYTES;
 		for (const hunk of hunks) {
 			this.hunkCards.push(
-				renderHunkCard(list, hunk, model.direction, callbacks),
+				renderHunkCard(list, hunk, model.direction, callbacks, actionable),
 			);
+		}
+		if (!actionable) {
+			list.createDiv({
+				cls: "obsync-diff-hint",
+				text: "This file is too large for per-hunk actions; use the whole-file buttons above.",
+			});
 		}
 		if (
 			this.currentHunkIndex >= 0 &&

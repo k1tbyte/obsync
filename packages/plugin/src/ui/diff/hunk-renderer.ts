@@ -15,13 +15,14 @@ export function renderHunkCard(
 	hunk: SyncHunk,
 	direction: EDiffDirection,
 	callbacks: HunkCardCallbacks,
+	actionable = true,
 ): HTMLElement {
 	const card = parent.createDiv({ cls: "obsync-hunk-card" });
 	card.setAttr("data-hunk-index", String(hunk.index));
 	card.addClass(`is-${hunk.kind}`);
 
 	const gutter = card.createDiv({ cls: "obsync-hunk-gutter" });
-	renderHunkActions(gutter, hunk.index, direction, callbacks);
+	if (actionable) renderHunkActions(gutter, hunk.index, direction, callbacks);
 
 	const main = card.createDiv({ cls: "obsync-hunk-main" });
 	const meta = main.createDiv({ cls: "obsync-hunk-meta" });
