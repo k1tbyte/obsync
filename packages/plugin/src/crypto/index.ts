@@ -1,9 +1,14 @@
 import {
 	BLOB_VERSION,
+	BLOB_VERSION_GZIP,
+	GZIP_LENGTH_BYTES,
+	GZIP_PAD_BYTES,
 	IV_BYTES,
+	JSON_GZIP_MIN_BYTES,
 	KDF_ITERATIONS,
 	KDF_SALT_LABEL,
 } from "@/crypto/constants";
+import { deflateBytes, GZIP, inflateBytes } from "@/utils/compress";
 
 const subtle = window.crypto.subtle;
 const encoder = new TextEncoder();
@@ -58,19 +63,43 @@ export async function encryptBytes(
 	key: EncryptionKey,
 	plaintext: Uint8Array,
 ): Promise<Uint8Array> {
+	return sealBytes(key, plaintext, BLOB_VERSION);
+}
+
+async function sealBytes(
+	key: EncryptionKey,
+	plaintext: Uint8Array,
+	version: number,
+): Promise<Uint8Array> {
 	const iv = randomBytes(IV_BYTES);
+	const aad = versionAad(version);
 	const ciphertext = new Uint8Array(
 		await subtle.encrypt(
-			{ name: "AES-GCM", iv: toBufferSource(iv) },
+			{
+				name: "AES-GCM",
+				iv: toBufferSource(iv),
+				...(aad ? { additionalData: toBufferSource(aad) } : {}),
+			},
 			key,
 			toBufferSource(plaintext),
 		),
 	);
 	const out = new Uint8Array(1 + iv.length + ciphertext.length);
-	out[0] = BLOB_VERSION;
+	out[0] = version;
 	out.set(iv, 1);
 	out.set(ciphertext, 1 + iv.length);
 	return out;
+}
+
+/**
+ * The version byte sits outside the ciphertext, so without this a blob could be
+ * relabelled as compressed and its plaintext fed to the inflater. Only the new
+ * version is bound: {@link BLOB_VERSION} predates this and its blobs were
+ * sealed without it, and binding it now would make every stored blob
+ * undecryptable. Relabelling either way fails the tag instead.
+ */
+function versionAad(version: number): Uint8Array | undefined {
+	return version === BLOB_VERSION ? undefined : new Uint8Array([version]);
 }
 
 export async function decryptBytes(
@@ -80,24 +109,83 @@ export async function decryptBytes(
 	if (blob.length < 1 + IV_BYTES + 16) {
 		throw new Error("Encrypted blob is too short");
 	}
-	if (blob[0] !== BLOB_VERSION) {
-		throw new Error(`Unsupported blob version: ${blob[0]}`);
+	const version = blob[0];
+	if (version !== BLOB_VERSION && version !== BLOB_VERSION_GZIP) {
+		throw new Error(`Unsupported blob version: ${version}`);
 	}
 	const iv = blob.subarray(1, 1 + IV_BYTES);
 	const ciphertext = blob.subarray(1 + IV_BYTES);
-	const plaintext = await subtle.decrypt(
-		{ name: "AES-GCM", iv: toBufferSource(iv) },
-		key,
-		toBufferSource(ciphertext),
+	const aad = versionAad(version);
+	const plaintext = new Uint8Array(
+		await subtle.decrypt(
+			{
+				name: "AES-GCM",
+				iv: toBufferSource(iv),
+				...(aad ? { additionalData: toBufferSource(aad) } : {}),
+			},
+			key,
+			toBufferSource(ciphertext),
+		),
 	);
-	return new Uint8Array(plaintext);
+	if (version !== BLOB_VERSION_GZIP) return plaintext;
+	if (typeof DecompressionStream !== "function") {
+		throw new Error(
+			"This remote is compressed and this device cannot decompress it. Update Obsidian, or sync this vault from another device.",
+		);
+	}
+	return inflateBytes(unpad(plaintext), GZIP);
+}
+
+function pad(gzipped: Uint8Array): Uint8Array {
+	const framed = GZIP_LENGTH_BYTES + gzipped.length;
+	const size = Math.ceil(framed / GZIP_PAD_BYTES) * GZIP_PAD_BYTES;
+	const out = new Uint8Array(size);
+	new DataView(out.buffer).setUint32(0, gzipped.length, true);
+	out.set(gzipped, GZIP_LENGTH_BYTES);
+	return out;
+}
+
+function unpad(padded: Uint8Array): Uint8Array {
+	if (padded.length < GZIP_LENGTH_BYTES) {
+		throw new Error("Compressed blob is too short");
+	}
+	const length = new DataView(
+		padded.buffer,
+		padded.byteOffset,
+		padded.byteLength,
+	).getUint32(0, true);
+	const end = GZIP_LENGTH_BYTES + length;
+	if (end > padded.length) throw new Error("Compressed blob is truncated");
+	return padded.subarray(GZIP_LENGTH_BYTES, end);
 }
 
 export async function encryptJson(
 	key: EncryptionKey,
 	value: unknown,
 ): Promise<Uint8Array> {
-	return encryptBytes(key, encoder.encode(JSON.stringify(value)));
+	const json = encoder.encode(JSON.stringify(value));
+	const gzipped = await gzipJson(json);
+	if (!gzipped) return encryptBytes(key, json);
+	return sealBytes(key, pad(gzipped), BLOB_VERSION_GZIP);
+}
+
+/**
+ * Null keeps the document at {@link BLOB_VERSION}, which every build reads. A
+ * device whose web engine has no CompressionStream still writes a remote its
+ * peers can use.
+ */
+async function gzipJson(json: Uint8Array): Promise<Uint8Array | null> {
+	if (json.length < JSON_GZIP_MIN_BYTES) return null;
+	try {
+		const out = await deflateBytes(json, GZIP);
+		if (!out) return null;
+		const framed =
+			Math.ceil((GZIP_LENGTH_BYTES + out.length) / GZIP_PAD_BYTES) *
+			GZIP_PAD_BYTES;
+		return framed < json.length ? out : null;
+	} catch {
+		return null;
+	}
 }
 
 export async function decryptJson<T>(

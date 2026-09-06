@@ -29,14 +29,23 @@ export async function loadState(
 	return createEmptyState();
 }
 
+/**
+ * Split from the write so a caller can compare payloads and skip a write that
+ * would land the bytes already on disk. Compact: indenting a 20k-file hash
+ * cache adds 0.74 MB to every rewrite and nothing reads this file by eye.
+ */
+export function serializeState(state: LocalState): string {
+	return JSON.stringify(state);
+}
+
 export async function saveState(
 	adapter: DataAdapter,
 	configDir: string,
-	state: LocalState,
+	serialized: string,
 ): Promise<void> {
 	const path = stateFilePath(configDir);
 	await ensureParent(adapter, path);
-	await writeAtomic(adapter, path, JSON.stringify(state, null, 2));
+	await writeAtomic(adapter, path, serialized);
 }
 
 export async function resetState(
@@ -45,7 +54,7 @@ export async function resetState(
 	previous: LocalState | null,
 ): Promise<LocalState> {
 	const next = createEmptyState(previous ?? undefined);
-	await saveState(adapter, configDir, next);
+	await saveState(adapter, configDir, serializeState(next));
 	return next;
 }
 

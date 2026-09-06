@@ -57,7 +57,13 @@ export async function publishManifest(
 	key: EncryptionKey,
 	manifest: Manifest,
 ): Promise<void> {
-	const blob = await encryptJson(key, manifest);
+	await putManifest(storage, await encryptJson(key, manifest));
+}
+
+async function putManifest(
+	storage: ObjectStorage,
+	blob: Uint8Array,
+): Promise<void> {
 	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
 }
 
@@ -81,6 +87,10 @@ export async function publishManifestWithGuard(
 	expectedParentSnapshotId: string | null,
 	baseline: Manifest | null = null,
 ): Promise<void> {
+	// Sealed first: gzipping a 20k-file manifest is ~50 ms of main thread, and
+	// spending it after the precheck would widen the window a competing writer
+	// has to slip through.
+	const blob = await encryptJson(key, manifest);
 	// Stale-read reconciliation prevents a lagging backend from appearing as a competing writer.
 	const fetched = await fetchRemoteManifest(storage, key);
 	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
@@ -91,7 +101,7 @@ export async function publishManifestWithGuard(
 			precheck,
 		);
 	}
-	await publishManifest(storage, key, manifest);
+	await putManifest(storage, blob);
 	const verify = await fetchRemoteManifest(storage, key);
 	if (verify?.snapshotId === manifest.snapshotId) return;
 	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {

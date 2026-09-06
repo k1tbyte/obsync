@@ -304,24 +304,178 @@ with a note open must produce 1 `fetch` and single-digit `exists` calls.
 
 ---
 
-## Phase 3 — Persistence and wire volume (P1)
+## Phase 3 — Persistence and wire volume (P1) — DONE
 
-1. `sync/state.ts:39` writes `JSON.stringify(state, null, 2)` — 4.05 MB per
-   refresh at 20k files. Drop the indent (−0.74 MB) and skip writes when the
-   serialized state is unchanged; `core/state-persister.ts:119` currently
-   debounces but always writes.
-2. Split `baseline` and `hashCache` into separate files so a hash-cache update
-   does not rewrite the baseline.
-3. Compress the manifest before encrypting. Measured: 3.17 MB → 0.23 MB in 18 ms
-   with gzip, a 14x reduction on every auto-pull. `utils/compress.ts` already exists.
-4. `sync/manifest.ts:85` and `:95` fetch the full manifest before and after every
-   push — 6.4 MB of extra traffic per push at 20k files. Use a conditional
-   request or an ETag for the verify step.
-5. `sync/engine.ts:326` issues `storage.exists(objectKey(hash))` per uploaded
-   object; a first push of 20k files means 20,000 HEAD requests.
-6. Serve the manifest with `If-None-Match` so an unchanged remote returns 304
-   instead of a full download plus decrypt. Drop the cache-buster at
-   `storage/adapters/s3.ts:127`, which currently defeats caching on every GET.
+Measured on the same 20,211-file vault, three consecutive settled refreshes:
+
+| Metric | Before | After |
+|---|---|---|
+| Warm refresh | 694–1,207 ms | **509–597 ms** |
+| `state.json` written per refresh | 3.86 MB | **0** |
+| `adapter.write` / `rename` / `remove` per refresh | 1 / 4 / 2 | **0 / 0 / 0** |
+| `adapter.exists` per refresh | 4–10 | **0** |
+| `state.json` on disk | 4,046,944 B | **3,307,734 B** |
+| Manifest on the wire, 20k files | 3.36 MB | **1.00 MB** (3.36x) |
+| HEAD requests on a first push of 20k files | 20,000 | **~20** (one listing) |
+
+### 1. The state file is written only when its bytes change
+
+`saveState` pretty-printed the whole document on every persist, and
+`StatePersister` debounced writes but never compared them. A settled refresh
+rebuilds an identical hash cache and rewrote 3.86 MB for it.
+
+`sync/state.ts` now exposes `serializeState` separately from `saveState`, and
+`StatePersister` keeps the last payload it wrote and returns early when the next
+one matches. The indent is gone: nothing reads this file by eye, and at 20k
+files it cost 0.74 MB per write.
+
+`lastWritten` is deliberately never seeded from `setInitial`. `loadState`
+normalises what it read and can mint a device id that has to reach disk, so the
+first persist of a session always writes.
+
+### 2. The scan output is ordered by path
+
+Prerequisite for the above, not a separate optimisation. Scan workers finish in
+whatever order the adapter answers, so `snapshot.files` and `updatedCache` had a
+different key order every scan and the payload comparison would never have
+matched. `vault/scanner.ts` sorts both before returning; the sort costs ~20 ms
+against a 3.3 MB write it removes, and makes `state.json` diffable.
+
+### 3. Large JSON documents travel gzipped
+
+`crypto/index.ts` compresses any JSON payload over 16 KB and marks it with a new
+envelope version (`BLOB_VERSION_GZIP = 0x02`) that `decryptBytes` inflates
+transparently. Covers the head manifest, history log and history pins through
+one code path.
+
+Measured in the Obsidian renderer on a real 20,224-entry manifest: 3.36 MB of
+JSON → 1.00 MB, 51 ms to compress, **11 ms to inflate**, 21 ms to parse. The
+earlier "3.17 MB → 0.23 MB, 14x" figure in this document was wrong: it came from
+the synthetic corpus, whose 20,000 files share content and therefore share
+hashes. A real vault has distinct hashes, and 64 hex characters per entry is
+most of the document. 3.36x is the number to plan against.
+
+Below 16 KB a document stays at `BLOB_VERSION`, so the keyfile and the
+passphrase cache are untouched. A device whose engine has no `CompressionStream`
+keeps writing version 1, which every build reads. Opaque file bytes are never
+compressed — they stream through the same envelope and are as often
+already-compressed media.
+
+**Remote format change.** A build that predates this reads a compressed manifest
+and fails with `Unsupported blob version: 2` rather than a parse error, but it
+does fail. Every device on a vault has to be updated together. Nothing is
+overwritten and no data is lost — the compare simply refuses to run.
+
+### 4. A big push lists the bucket instead of probing each object
+
+`uploadObject` did one `storage.exists` HEAD per object not already named by the
+remote head. A first push of a 20k-file vault is 20,000 sequential-ish round
+trips, which on a phone is the entire sync.
+
+`sync/engine.ts` now counts how many objects still need settling and, above 64,
+replaces the probes with a single `list(REMOTE_OBJECTS_PREFIX)` — one request
+per 1,000 stored objects. A live listing outranks any manifest: it survives a
+history GC that a stale baseline would not have noticed. Below the threshold, or
+when a backend refuses to list, the per-object probe still runs.
+
+### Deferred, with the measurement that justifies it
+
+- **Splitting `baseline` from `hashCache`.** Measured on the live vault: the
+  baselines are 65 KB of a 3.31 MB `state.json`; the hash cache is 98% of it. A
+  split saves 2% here and ~50% only for a vault whose 20k files are all pushed.
+  The real defect is that a one-entry delta rewrites the whole document, which a
+  file split does not fix — that needs incremental persistence, and it is a
+  bigger design change than this phase.
+- **`If-None-Match` on the manifest.** Would remove the fetch entirely on an
+  unchanged remote, but needs ETag plumbing through `ObjectStorage` and all four
+  adapters. Compression already takes the manifest to 1.00 MB, so the remaining
+  win is one round trip.
+- **The double manifest fetch in `publishManifestWithGuard`.** Both reads are
+  correctness: the precheck is the compare-and-swap guard, the verify catches a
+  writer that raced it. Compression takes the pair from 6.72 MB to 2.00 MB.
+- **The cache-buster at `storage/adapters/s3.ts:127`.** Objects are
+  content-addressed and could be served cacheable, but a settled refresh now
+  makes zero object GETs and a pull fetches each object exactly once, so the
+  cache would never be read. Not worth a layering change for no measured effect.
+
+### Review outcome
+
+Four swarm reviews, one concern each. 12 findings acted on, 6 refuted and agreed
+with. Every fix was mutation-checked: the fix removed, the test confirmed to
+fail, the fix restored.
+
+**Security, in the compression layer.**
+
+- *The version byte was not authenticated.* It rides outside the ciphertext, and
+  AES-GCM was called without additional data, so anyone with write access could
+  relabel a stored blob `0x01` → `0x02` and have its plaintext fed to the
+  inflater — a stored `.gz` attachment then expands in memory before any hash
+  check runs. The version is now bound as AES-GCM additional data, but only for
+  `BLOB_VERSION_GZIP`: binding it for `BLOB_VERSION` would make every blob
+  already on every remote undecryptable. Relabelling in either direction now
+  fails the tag.
+- *Compress-then-encrypt leaks through ciphertext length.* Someone who can put
+  chosen strings into a document and also read the stored blob learns whether a
+  guessed string already appears in it, from how well the pair compressed. The
+  compressed payload is now framed as `[uint32 length][gzip][zero padding]` and
+  padded to a 4 KB grid, which costs at most 4 KB on a document that is at least
+  16 KB of JSON. Exposure needs read access to the vault's own bucket *and* the
+  ability to write paths into that vault: a share participant has neither
+  (their own key, their own `shares/<id>` prefix, broker-presigned URLs), so the
+  realistic case is an insider who holds the bucket credentials and is also in a
+  share mounted in the vault. Padding raises the cost of a probe rather than
+  removing the channel; the manifest's size already reveals roughly how many
+  paths it holds.
+- *Compression sat inside the compare-and-swap window.* `publishManifestWithGuard`
+  compressed between the precheck read and the PUT, adding ~50 ms to the window
+  a competing writer can slip through. The manifest is now sealed before the
+  precheck.
+
+**Correctness, in the upload listing.** The first version added every listed
+hash to the known set, which trusts a listing for the whole push. History GC
+runs automatically after a push (`sync/history/publish.ts:51`), so another
+device deleting exactly these orphans mid-push would leave a dangling reference
+— and an eventually-consistent LIST can name a deleted object outright. The
+listing is now only acted on in the direction that is safe: an object it does
+not name is uploaded (a stale answer costs a redundant PUT), and an object it
+does name is still confirmed with a probe before the upload is skipped. A first
+push of an empty bucket, the case this was built for, still costs zero probes.
+The threshold moved from 64 to 256: a listing costs one request per 1,000 stored
+objects, so it only loses on a bucket holding more than a quarter of a million.
+Cancellation is now checked either side of the listing.
+
+**Correctness, in the state write skip.** A write that failed part-way left the
+memo naming a payload that was no longer on disk — `writeAtomic` can fail with
+the old file already renamed aside — so reverting to that state would have been
+skipped. The memo is cleared before the write and only restored on success; the
+same applies to `reset()`.
+
+**Ordering, at one choke point instead of seven.** Sorting the scan output alone
+was not enough: pulls, conflict resolutions and incremental pushes all append
+paths to a record that a later scan produces sorted, so each would have caused
+exactly the redundant write this phase removes. `sortedByPath` moved to
+`shared/records.ts`, and `buildSessionState` sorts every persisted hash cache in
+one place — all seven callers reach it. `buildPartialFileMap` sorts the manifest
+it publishes, `collectFromWalk` now sorts its folders the way the index path
+already did.
+
+Sorting the manifest turned out to pay for itself twice: sorted paths share
+longer prefixes, and the same 20k-file manifest gzips to 1.00 MB sorted against
+1.09 MB shuffled — **8.5% off every manifest on the wire.**
+
+**Accepted, not fixed.**
+
+- `lastWritten` retains a 3.3 MB string alongside the state object it mirrors.
+  Measured against a 650 MB renderer heap on the 20k vault, that is 0.5%. A
+  digest instead would trade an exact comparison for one whose failure mode is a
+  silently skipped write.
+- `Object.keys().sort()` still hoists a path that reads as an array index
+  (a file named `42`). Every engine does this the same way, and the requirement
+  is that two equal records serialise identically, not that the order is
+  lexicographic. Documented in the helper.
+- A carried-forward cache entry under an unreadable directory bypasses the
+  case-collision pass. A path under an unreadable directory is never enumerated
+  into `files`, so the two sets do not intersect; and this predates the phase.
 
 ---
 

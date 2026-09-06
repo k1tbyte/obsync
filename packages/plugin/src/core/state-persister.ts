@@ -1,5 +1,5 @@
 import type { DataAdapter } from "obsidian";
-import { resetState, saveState } from "@/sync/state";
+import { resetState, saveState, serializeState } from "@/sync/state";
 import type { LocalState } from "@/sync/types";
 
 const PERSIST_STATE_DEBOUNCE_MS = 500;
@@ -8,6 +8,13 @@ export class StatePersister {
 	private current: LocalState | null = null;
 	private pendingHashCacheState: LocalState | null = null;
 	private flushTimer: number | null = null;
+	/**
+	 * The payload of the last successful write. A settled refresh persists a
+	 * state identical to the one on disk, which at 20k files is a 3.3 MB rewrite
+	 * for no new bytes. Never seeded from {@link setInitial}: `loadState`
+	 * normalises what it read and can mint a device id that has to reach disk.
+	 */
+	private lastWritten: string | null = null;
 	/** Serialises every write: a debounced flush and a direct persist otherwise
 	 * interleave and the older state can land last. */
 	private writes: Promise<void> = Promise.resolve();
@@ -37,7 +44,16 @@ export class StatePersister {
 	}
 
 	private write(state: LocalState): Promise<void> {
-		return this.enqueue(() => saveState(this.adapter, this.configDir, state));
+		return this.enqueue(async () => {
+			const serialized = serializeState(state);
+			if (serialized === this.lastWritten) return;
+			// writeAtomic can fail between renaming the old file aside and moving
+			// the new one in. Keeping the memo would then skip a retry of the very
+			// state that is no longer on disk.
+			this.lastWritten = null;
+			await saveState(this.adapter, this.configDir, serialized);
+			this.lastWritten = serialized;
+		});
 	}
 
 	/** Every write to the state file goes through here, in order. */
@@ -67,10 +83,12 @@ export class StatePersister {
 		this.cancelTimer();
 		// resetState writes the same file the chain does, so it has to take its
 		// turn rather than race a persist that is already in flight.
+		this.lastWritten = null;
 		const next = await this.enqueue(() =>
 			resetState(this.adapter, this.configDir, this.current),
 		);
 		this.current = next;
+		this.lastWritten = serializeState(next);
 		return next;
 	}
 
