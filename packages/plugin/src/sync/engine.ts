@@ -5,6 +5,7 @@ import { reportWarning } from "@/shared/diagnostics";
 import { entryAt } from "@/shared/records";
 import type { StorageAdapter } from "@/storage/types";
 import { runWithConcurrency } from "@/utils/concurrency";
+import type { VaultIndex } from "@/vault/file-index";
 import { deletePath, ensureDir, readBinary, removeEmptyDir } from "@/vault/io";
 import { scanVault } from "@/vault/scanner";
 import type { ScopePolicy } from "@/vault/scope";
@@ -34,6 +35,8 @@ export interface EngineDependencies {
 	adapter: DataAdapter;
 	storage: StorageAdapter;
 	scope: ScopePolicy;
+	/** Absent falls the scanner back to walking the adapter. */
+	index?: VaultIndex;
 	key: EncryptionKey;
 	state: SessionState;
 	maxFileBytes: number;
@@ -64,6 +67,8 @@ export async function compare(
 				maxFileBytes: deps.maxFileBytes,
 				onProgress: deps.onScanProgress,
 				concurrency: deps.concurrency,
+				index: deps.index,
+				expected: deps.state.baseline?.files,
 			},
 			deps.state.hashCache,
 		),

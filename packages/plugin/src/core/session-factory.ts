@@ -1,4 +1,5 @@
-import type { App } from "obsidian";
+import { type App, TFile } from "obsidian";
+import { IGNORE_FILE_NAME } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import {
 	activeStorage,
@@ -6,13 +7,16 @@ import {
 	type ObsyncSettings,
 } from "@/settings/model";
 import { createStorageAdapter, type StorageAdapter } from "@/storage";
+import { clearRemoteTextCache } from "@/sync/content";
 import type { EngineDependencies } from "@/sync/engine";
 import { PassphraseRotatedError } from "@/sync/keyfile";
 import { projectSession } from "@/sync/session-state";
 import { loadState } from "@/sync/state";
 import type { SessionState } from "@/sync/types";
 import { notifyInfo } from "@/ui";
+import { createVaultIndex } from "@/vault/file-index";
 import {
+	type IgnoreMatcher,
 	loadLocalIgnoreMatcher,
 	loadSharedIgnoreMatcher,
 } from "@/vault/ignore";
@@ -40,6 +44,7 @@ export function createSessionOpener(
 	// per operation discards those and forces a fresh Drive folder-resolve +
 	// cold lookups on every push. Any config change (creds, folder, token
 	// refresh) changes the key and rebuilds.
+	const getScope = createScopeMatchers(deps);
 	let cached: { key: string; adapter: StorageAdapter } | null = null;
 	const getStorage = (): StorageAdapter => {
 		const config = activeStorage(deps.settings);
@@ -49,17 +54,66 @@ export function createSessionOpener(
 			// The adapter mutated its own config (refreshed token): drop the
 			// memo so the next call rebuilds against the saved values.
 			cached = null;
+			// Cached remote text is namespaced by adapter instance, so entries
+			// keyed to the replaced one are unreachable weight.
+			clearRemoteTextCache();
 			void deps.persistSettings?.();
 		});
 		cached = { key, adapter };
 		return adapter;
 	};
-	return () => openSession(deps, getStorage);
+	return () => openSession(deps, getStorage, getScope);
+}
+
+interface ScopeMatchers {
+	shared: IgnoreMatcher;
+	local: IgnoreMatcher;
+}
+
+/**
+ * Rebuilding the ignore matchers costs an `exists` plus a `read` of the shared
+ * ignore note, and a session is opened for every operation and every editor
+ * baseline load. The metadata cache carries that note's mtime and size for
+ * free, so the memo invalidates itself without an IPC round trip of its own.
+ */
+function createScopeMatchers(
+	deps: SessionFactoryDeps,
+): () => Promise<ScopeMatchers> {
+	let memo: (ScopeMatchers & { stamp: string; patterns: string }) | null = null;
+	return async () => {
+		const file = deps.app.vault.getAbstractFileByPath(IGNORE_FILE_NAME);
+		const patterns = deps.settings.ignorePatterns;
+		// An absent note is never memoised. The index lags a file the user has
+		// just created, and answering from a memo built while it really was
+		// absent would sync the very files those new rules exclude.
+		if (file instanceof TFile) {
+			const stamp = `${file.stat.mtime}:${file.stat.size}`;
+			if (memo && memo.stamp === stamp && memo.patterns === patterns) {
+				return memo;
+			}
+		} else {
+			memo = null;
+		}
+		const [shared, local] = await Promise.all([
+			loadSharedIgnoreMatcher(deps.app.vault.adapter),
+			loadLocalIgnoreMatcher(patterns),
+		]);
+		const next: ScopeMatchers & { stamp: string; patterns: string } = {
+			stamp:
+				file instanceof TFile ? `${file.stat.mtime}:${file.stat.size}` : "",
+			patterns,
+			shared,
+			local,
+		};
+		memo = file instanceof TFile ? next : null;
+		return next;
+	};
 }
 
 async function openSession(
 	deps: SessionFactoryDeps,
 	getStorage: () => StorageAdapter,
+	getScope: () => Promise<ScopeMatchers>,
 ): Promise<EngineDependencies | null> {
 	const { app, settings, passphrase, state, logs } = deps;
 	if (!isStorageConfigured(settings)) {
@@ -86,13 +140,11 @@ async function openSession(
 		state.state ?? (await loadState(adapter, app.vault.configDir));
 	state.setInitial(currentState);
 
-	const [sharedIgnore, localIgnore] = await Promise.all([
-		loadSharedIgnoreMatcher(adapter),
-		loadLocalIgnoreMatcher(settings.ignorePatterns),
-	]);
+	const { shared: sharedIgnore, local: localIgnore } = await getScope();
 	return {
 		adapter,
 		storage,
+		index: createVaultIndex(app.vault),
 		scope: createScopePolicy({
 			settingsSync: settings.settingsSync,
 			configDir: app.vault.configDir,

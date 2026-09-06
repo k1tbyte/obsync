@@ -4,7 +4,7 @@ import { ESyncLogOperation } from "@/logs/store";
 import type { ObsyncSettings } from "@/settings/model";
 import { writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
-import { textToBytes } from "./content";
+import { clearRemoteTextCache, textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
 import type { EngineDependencies } from "./engine";
 import type {
@@ -149,6 +149,7 @@ export class SyncController {
 	dispose(): void {
 		this.runtimeState.dispose();
 		this.fileDiffs.clear();
+		clearRemoteTextCache();
 	}
 
 	getStatusForPath(path: string): PathStatus | null {
