@@ -32,11 +32,11 @@ export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 			localEntries.set(path, null);
 			continue;
 		}
-		const bytes = await writeRemoteObject(deps, path, baselineEntry.hash);
+		const size = await writeRemoteObject(deps, path, baselineEntry.hash);
 		const stat = await deps.adapter.stat(path).catch(() => null);
 		const entry: ManifestEntry = {
 			hash: baselineEntry.hash,
-			size: bytes.length,
+			size,
 			mtime: stat?.mtime ?? Date.now(),
 			kind: baselineEntry.kind,
 		};

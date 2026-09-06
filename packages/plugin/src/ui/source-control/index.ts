@@ -1,4 +1,5 @@
 export { SourceControlActions } from "./actions";
+export { ChangesTab } from "./changes-tab";
 export { renderConflictPreview } from "./conflict-preview";
 export { ConflictPreviewManager } from "./conflict-preview-manager";
 export { buildHistoryRows, type HistoryRow, sizeDelta } from "./history-rows";

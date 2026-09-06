@@ -1,4 +1,5 @@
 import { randomId } from "@/crypto";
+import { entryAt } from "@/shared/records";
 import type { CompareResult } from "./engine";
 import type {
 	HashCacheEntry,
@@ -56,7 +57,7 @@ export function advanceBaselineForPaths(
 		...(previous?.files ?? {}),
 	};
 	for (const path of paths) {
-		const entry = published.files[path];
+		const entry = entryAt(published.files, path);
 		if (entry) {
 			files[path] = entry;
 		} else {
@@ -77,10 +78,10 @@ export function publishedDelta(
 	const paths = new Set<string>();
 	const beforeFiles = before?.files ?? {};
 	for (const [path, entry] of Object.entries(after.files)) {
-		if (beforeFiles[path]?.hash !== entry.hash) paths.add(path);
+		if (entryAt(beforeFiles, path)?.hash !== entry.hash) paths.add(path);
 	}
 	for (const path of Object.keys(beforeFiles)) {
-		if (!after.files[path]) paths.add(path);
+		if (!entryAt(after.files, path)) paths.add(path);
 	}
 	return paths;
 }

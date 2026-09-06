@@ -2,12 +2,14 @@ import type { DataAdapter } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { type EncryptionKey, encryptBytes, sha256Hex } from "@/crypto";
 import { reportWarning } from "@/shared/diagnostics";
+import { entryAt } from "@/shared/records";
 import type { StorageAdapter } from "@/storage/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath, ensureDir, readBinary, removeEmptyDir } from "@/vault/io";
 import { scanVault } from "@/vault/scanner";
 import type { ScopePolicy } from "@/vault/scope";
 import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
+import { throwIfCancelled } from "./cancel";
 import { writeRemoteObject } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
@@ -36,6 +38,8 @@ export interface EngineDependencies {
 	state: SessionState;
 	maxFileBytes: number;
 	concurrency?: number;
+	/** Aborts long operations between files; see `sync/cancel.ts`. */
+	signal?: AbortSignal;
 	onScanProgress?: (scanned: number) => void;
 	history?: HistoryConfig;
 }
@@ -124,12 +128,21 @@ export async function pushPaths(
 	// pointing at a blob that is already gone.
 	const knownHashes = knownRemoteHashes(compareResult);
 	let done = 0;
-	await runWithConcurrency(uploads, concurrency, async (entry) => {
-		if (!knownHashes.has(entry.hash)) {
-			await uploadObject(deps, entry);
-		}
-		onProgress?.(++done, uploads.length);
-	});
+	await runWithConcurrency(
+		uploads,
+		concurrency,
+		async (entry) => {
+			if (!knownHashes.has(entry.hash)) {
+				await uploadObject(deps, entry);
+			}
+			onProgress?.(++done, uploads.length);
+		},
+		deps.signal,
+	);
+	// Publishing a manifest for objects that were never uploaded would leave
+	// dangling references, so a cancelled push publishes nothing at all. The
+	// blobs that did upload stay and make the next attempt cheaper.
+	throwIfCancelled(deps.signal);
 
 	const nextFiles = buildPartialFileMap({
 		base: compareResult.remote,
@@ -144,6 +157,8 @@ export interface PullResult {
 	baseline: Manifest;
 	/** What each pulled path now looks like on disk (null = deleted). */
 	written: Map<string, ManifestEntry | null>;
+	/** Stopped early: `written` holds only what actually landed. */
+	cancelled: boolean;
 }
 
 export async function pullPaths(
@@ -168,28 +183,68 @@ export async function pullPaths(
 	let done = 0;
 
 	const written = new Map<string, ManifestEntry | null>();
-	await runWithConcurrency(downloads, concurrency, async (change) => {
-		const entry = remote.files[change.path];
-		if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
-		const bytes = await writeRemoteObject(deps, change.path, entry.hash);
-		const stat = await deps.adapter.stat(change.path).catch(() => null);
-		written.set(change.path, {
-			hash: entry.hash,
-			size: bytes.length,
-			mtime: stat?.mtime ?? Date.now(),
-			kind: entry.kind,
-		});
-		onProgress?.(++done, total);
-	});
+	await runWithConcurrency(
+		downloads,
+		concurrency,
+		async (change) => {
+			const entry = entryAt(remote.files, change.path);
+			if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
+			const size = await writeRemoteObject(deps, change.path, entry.hash);
+			const stat = await deps.adapter.stat(change.path).catch(() => null);
+			written.set(change.path, {
+				hash: entry.hash,
+				size,
+				mtime: stat?.mtime ?? Date.now(),
+				kind: entry.kind,
+			});
+			onProgress?.(++done, total);
+		},
+		deps.signal,
+	);
 
 	for (const change of deletions) {
+		if (deps.signal?.aborted) break;
 		await deletePath(deps.adapter, change.path);
 		written.set(change.path, null);
 		onProgress?.(++done, total);
 	}
 
-	// pullPaths acts on these with mkdir and rmdir. Unfiltered folders could
-	// allow a participant to create folders outside the share root.
+	// Unlike a push there is nothing atomic to withhold: every file already
+	// written is correct on its own, and the baseline only advances for those.
+	// The folder pass is skipped though - it reconciles the whole tree, which a
+	// partial pull has not reached.
+	const cancelled = deps.signal?.aborted === true;
+	if (!cancelled) await syncFolders(deps, remote);
+
+	// `written`, not `paths`: a requested path with no remote change was never
+	// downloaded, and advancing its baseline would turn an unresolved conflict
+	// into a local edit that the next push publishes over the remote.
+	const baseline = advanceBaselineForPaths(
+		deps.state.baseline,
+		remote,
+		new Set(written.keys()),
+	);
+	return {
+		// The baseline otherwise adopts the remote's whole folder set, which a
+		// cancelled pull never created on disk - and the next push would then read
+		// those folders as locally deleted and drop them from the manifest.
+		baseline: cancelled
+			? { ...baseline, folders: deps.state.baseline?.folders }
+			: baseline,
+		written,
+		cancelled,
+	};
+}
+
+/**
+ * Mirrors the remote folder set, so empty directories survive a round trip.
+ * Filtered by scope: unfiltered folders would let a share participant create
+ * directories outside the share root.
+ */
+async function syncFolders(
+	deps: EngineDependencies,
+	remote: Manifest,
+): Promise<void> {
 	const remoteFolders = (remote.folders ?? []).filter((dir) =>
 		deps.scope.canDescend(dir),
 	);
@@ -197,7 +252,6 @@ export async function pullPaths(
 		deps.scope.canDescend(dir),
 	);
 	const remoteFolderSet = new Set(remoteFolders);
-
 	for (const dir of remoteFolders) {
 		await ensureDir(deps.adapter, dir);
 	}
@@ -206,18 +260,6 @@ export async function pullPaths(
 			await removeEmptyDir(deps.adapter, dir);
 		}
 	}
-
-	return {
-		// `written`, not `paths`: a requested path with no remote change was never
-		// downloaded, and advancing its baseline would turn an unresolved conflict
-		// into a local edit that the next push publishes over the remote.
-		baseline: advanceBaselineForPaths(
-			deps.state.baseline,
-			remote,
-			new Set(written.keys()),
-		),
-		written,
-	};
 }
 
 export interface SingleFilePushInput {
@@ -334,14 +376,16 @@ function collectUploads(
 	changes: ReadonlyArray<{ path: string; type: EChangeType }>,
 	snapshot: LocalSnapshot,
 ): Array<{ path: string; hash: string }> {
-	const uploads: Array<{ path: string; hash: string }> = [];
+	// One upload per hash: identical content under two paths would otherwise both
+	// miss the known-hash check and upload the same blob twice.
+	const byHash = new Map<string, { path: string; hash: string }>();
 	for (const change of changes) {
 		if (change.type === EChangeType.LocalDelete) continue;
-		const entry: ManifestEntry | undefined = snapshot.files[change.path];
-		if (!entry) continue;
-		uploads.push({ path: change.path, hash: entry.hash });
+		const entry = entryAt(snapshot.files, change.path);
+		if (!entry || byHash.has(entry.hash)) continue;
+		byHash.set(entry.hash, { path: change.path, hash: entry.hash });
 	}
-	return uploads;
+	return [...byHash.values()];
 }
 
 function assertVaultCompatibility(

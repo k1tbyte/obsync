@@ -264,11 +264,17 @@ export class SyncController {
 		);
 	}
 
+	/** Stops the running operation between files; see `sync/cancel.ts`. */
+	cancel(): void {
+		this.runtimeState.cancel();
+	}
+
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {
 		if (paths.length === 0) return;
 		await this.operations.runOperation(
 			ESyncLogOperation.Push,
 			(deps, result, ctx) => pushPathsOp(deps, result, paths, ctx),
+			true,
 		);
 	}
 
@@ -277,6 +283,7 @@ export class SyncController {
 		await this.operations.runOperation(
 			ESyncLogOperation.Pull,
 			(deps, result, ctx) => pullPathsOp(deps, result, paths, ctx),
+			true,
 		);
 	}
 

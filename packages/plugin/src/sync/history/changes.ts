@@ -1,4 +1,8 @@
+import { entryAt } from "@/shared/records";
 import type { Manifest, ManifestEntry } from "@/sync/types";
+
+export { entryAt };
+
 import type { SnapshotChanges, SnapshotEntry } from "./types";
 
 function emptyChanges(): SnapshotChanges {
@@ -12,17 +16,6 @@ function sameEntry(a: ManifestEntry, b: ManifestEntry): boolean {
 		a.mtime === b.mtime &&
 		a.kind === b.kind
 	);
-}
-
-/**
- * Own-property lookup. A vault may hold a file called `toString` or `constructor`,
- * and plain index access would hand back something off Object.prototype.
- */
-export function entryAt<T>(
-	map: Record<string, T>,
-	path: string,
-): T | undefined {
-	return Object.hasOwn(map, path) ? map[path] : undefined;
 }
 
 /**

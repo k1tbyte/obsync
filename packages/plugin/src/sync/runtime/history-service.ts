@@ -7,7 +7,7 @@ import {
 	textToBytes,
 	writeRemoteObject,
 } from "@/sync/content";
-import { compare, type EngineDependencies } from "@/sync/engine";
+import type { EngineDependencies } from "@/sync/engine";
 import {
 	type DeletedFilesResult,
 	type FileVersion,
@@ -27,9 +27,10 @@ import {
 	type FileDiffModel,
 	type HistoryDiffRequest,
 } from "@/sync/projection";
-import type { Manifest } from "@/sync/types";
+import type { LocalSnapshot, Manifest } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath, writeBinary } from "@/vault/io";
+import { scanVault } from "@/vault/scanner";
 
 const NO_SESSION = "Storage session unavailable";
 
@@ -71,7 +72,7 @@ export class HistoryService {
 		const session = await this.requireSession();
 		return planVaultRestore(
 			await this.requireSnapshot(session, snapshotId),
-			(await compare(session)).snapshot,
+			await scanLocal(session),
 		);
 	}
 
@@ -85,7 +86,7 @@ export class HistoryService {
 			const target = await this.requireSnapshot(session, snapshotId);
 			// Re-planned here, not taken from the preview: the vault may have moved
 			// while the user was reading the confirmation.
-			const plan = planVaultRestore(target, (await compare(session)).snapshot);
+			const plan = planVaultRestore(target, await scanLocal(session));
 			await runWithConcurrency(
 				plan.write,
 				session.concurrency ?? DEFAULT_CONCURRENCY,
@@ -202,4 +203,21 @@ export class HistoryService {
 		if (!session) throw new Error(NO_SESSION);
 		return session;
 	}
+}
+
+/**
+ * The local half of a compare. A restore plan needs only what is on disk, and
+ * `compare` would additionally download the remote manifest and diff against it.
+ */
+async function scanLocal(session: EngineDependencies): Promise<LocalSnapshot> {
+	const { snapshot } = await scanVault(
+		session.adapter,
+		session.scope,
+		{
+			maxFileBytes: session.maxFileBytes,
+			concurrency: session.concurrency,
+		},
+		session.state.hashCache,
+	);
+	return snapshot;
 }

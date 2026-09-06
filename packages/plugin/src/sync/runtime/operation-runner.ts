@@ -1,6 +1,7 @@
 import { ESyncLogOperation } from "@/logs/store";
 import { errorMessage } from "@/shared/errors";
 import { advanceBaselineForPaths } from "@/sync/baseline";
+import { isCancellation } from "@/sync/cancel";
 import type { SyncControllerHost } from "@/sync/controller";
 import {
 	type CompareResult,
@@ -117,19 +118,29 @@ export class OperationRunner {
 			result: CompareResult,
 			ctx: OperationContext,
 		) => Promise<OperationOutcome>,
+		/** Only for operations that read `deps.signal`; see `sync/cancel.ts`. */
+		cancellable = false,
 	): Promise<void> {
 		return this.deps.runtimeState.enqueue(async () => {
 			this.deps.runtimeState.clearError();
+			let scope: { signal: AbortSignal; end: () => void } | null = null;
 			try {
 				const session = await this.deps.host.openSession();
 				if (!session) return;
 				let result = this.deps.runtimeState.getResult();
 				if (!result) {
+					// Opened after the scan, which has no signal of its own: offering a
+					// Cancel that cannot stop the scan is worse than offering none.
 					result = await compare(session);
 					this.deps.runtimeState.setResult(result);
 				}
+				if (cancellable) scope = this.deps.runtimeState.beginCancellable();
 				const ctx = this.buildContext(session);
-				const outcome = await fn(session, result, ctx);
+				const outcome = await fn(
+					scope ? { ...session, signal: scope.signal } : session,
+					result,
+					ctx,
+				);
 				const freshState =
 					projectSession(
 						this.deps.host.getState(),
@@ -144,10 +155,27 @@ export class OperationRunner {
 				this.deps.runtimeState.setResult(recomputed);
 				this.deps.clearFileDiffs();
 				this.deps.runtimeState.setStaleReason(null);
+				if (outcome.cancelled) {
+					this.deps.runtimeState.setStaleReason(
+						outcome.touchedPaths.size === 0
+							? "Stopped before anything changed."
+							: `Stopped after ${outcome.touchedPaths.size} file(s). Compare again to see where things stand.`,
+					);
+					return;
+				}
 				if (operation === ESyncLogOperation.Push) {
 					this.deps.host.onPushComplete?.();
 				}
 			} catch (err) {
+				if (isCancellation(err)) {
+					// Not a failure: nothing was published, and saying so beats a red error.
+					this.deps.runtimeState.setError(null);
+					this.deps.runtimeState.setStaleReason(
+						"Stopped before publishing. Nothing on the remote changed.",
+					);
+					await this.deps.host.logWarn(operation, "Cancelled by the user.");
+					return;
+				}
 				if (err instanceof ConcurrentPushError) {
 					this.deps.runtimeState.setError(null);
 					this.deps.runtimeState.setStaleReason(
@@ -172,7 +200,10 @@ export class OperationRunner {
 				this.deps.runtimeState.setError(message);
 				await this.deps.host.logError(operation, message);
 			} finally {
-				this.deps.runtimeState.setProgressText(null);
+				scope?.end();
+				// Broadcast, not just set: a queued operation keeps pendingOps above
+				// zero, so nothing else would repaint away a stale "Cancelling…".
+				this.deps.runtimeState.publishProgress(null);
 			}
 		});
 	}
