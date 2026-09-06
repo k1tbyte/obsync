@@ -1,5 +1,5 @@
 import { randomId } from "@/crypto";
-import { entryAt } from "@/shared/records";
+import { entryAt, sortedByPath } from "@/shared/records";
 import type { CompareResult } from "./engine";
 import type {
 	HashCacheEntry,
@@ -18,7 +18,11 @@ export function buildSessionState(
 		deviceName: previous.deviceName,
 		vaultId: baseline.vaultId,
 		baseline,
-		hashCache,
+		// Every persisted hash cache passes through here. Pulls and conflict
+		// resolutions add their paths at the end, and the next scan produces the
+		// same entries sorted - which would rewrite the state file for the order
+		// alone. Sorting once at the choke point beats sorting at each caller.
+		hashCache: sortedByPath(hashCache),
 	};
 }
 

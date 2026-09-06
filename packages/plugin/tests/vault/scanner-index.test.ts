@@ -129,6 +129,38 @@ describe("scanVault with a vault index", () => {
 		expect(indexed.updatedCache).toEqual(walked.updatedCache);
 	});
 
+	it("orders its output by path however the workers finish", async () => {
+		const files: Record<string, string> = {};
+		for (let i = 0; i < 40; i++) files[`notes/file-${i}.md`] = `body ${i}`;
+		const adapter = vault(files);
+		const data = adapter.asDataAdapter();
+		// Answering out of order is what a real adapter does; the scan result is
+		// compared against the last one written to disk, and an order that moves
+		// rewrites megabytes for bytes that did not change.
+		const jittered = Object.create(data) as DataAdapter;
+		jittered.stat = async (path: string) => {
+			await new Promise((resolve) => setTimeout(resolve, path.length % 3));
+			return data.stat(path);
+		};
+
+		const walked = await scanVault(jittered, policy(), options, {});
+		const indexed = await scanVault(
+			jittered,
+			policy(),
+			{ ...options, index: await indexOf(adapter) },
+			{},
+		);
+
+		const paths = Object.keys(walked.snapshot.files);
+		expect(paths).toEqual([...paths].sort());
+		expect(paths).toHaveLength(40);
+		expect(Object.keys(walked.updatedCache)).toEqual(paths);
+		// Both collection paths have to agree, or a vault that switches between
+		// them rewrites the state file for the order alone.
+		expect(Object.keys(indexed.snapshot.files)).toEqual(paths);
+		expect(Object.keys(indexed.updatedCache)).toEqual(paths);
+	});
+
 	it("still scans the config directory the index cannot see", async () => {
 		const adapter = vault({
 			"a.md": "one",

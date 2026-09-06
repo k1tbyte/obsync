@@ -2,6 +2,7 @@ import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { sha256Hex } from "@/crypto";
+import { sortedByPath } from "@/shared/records";
 import type {
 	HashCacheEntry,
 	LocalSnapshot,
@@ -174,13 +175,13 @@ export async function scanVault(
 	const emptyFolders = rawEmptyFolders.filter((dir) => scope.canDescend(dir));
 	return {
 		snapshot: {
-			files,
+			files: sortedByPath(files),
 			skipped,
 			emptyFolders,
 			ignoredPaths,
 			unreadableDirs: unreadable,
 		},
-		updatedCache,
+		updatedCache: sortedByPath(updatedCache),
 	};
 }
 
@@ -248,11 +249,14 @@ async function collectFromWalk(
 	scope: ScopePolicy,
 ): Promise<Collected> {
 	const walked = await listAllFiles(adapter, scope, ROOT);
+	// The index path sorts these too. A shared folder scans through the walk
+	// while the vault scans through the index, and folders published in DFS
+	// order would rewrite the state file every time the two swap.
 	return {
 		files: walked.files.map((path) => ({ path })),
-		emptyFolders: walked.emptyFolders,
+		emptyFolders: [...walked.emptyFolders].sort(),
 		ignored: walked.ignored,
-		unreadable: walked.unreadable,
+		unreadable: [...walked.unreadable].sort(),
 	};
 }
 
