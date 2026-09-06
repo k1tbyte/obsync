@@ -479,29 +479,158 @@ longer prefixes, and the same 20k-file manifest gzips to 1.00 MB sorted against
 
 ---
 
-## Phase 4 — Replace the AWS SDK (P1)
+## Phase 4 — Replace the AWS SDK (P1) — DONE
 
-Motivated by CORS, not by bundle size. Two options:
+Motivated by CORS, not by bundle size. The plugin runs at origin
+`app://obsidian.md`; the SDK talks over `fetch`, which is subject to CORS
+there, so AWS S3 and most compatible backends refuse it until the user
+hand-writes a bucket CORS policy. Obsidian's `requestUrl` is not a browser
+fetch and is never asked. The other two backends already use it
+(`webdav.ts:244`, `share-broker.ts:194`).
 
-- **A**: keep the SDK, supply a custom `requestHandler` backed by `requestUrl`.
-  Fixes CORS, keeps 283 KB.
-- **B**: hand-rolled SigV4 over `requestUrl`. Fixes CORS, removes 265 KB, lets
-  `src/polyfills.ts` go (it exists only to shim `Buffer` for the SDK; no plugin
-  source uses `Buffer`), and drops the per-request middleware stack.
+| Metric | Before | After |
+|---|---|---|
+| `main.js` | 623,461 B | **331,578 B** (−47%) |
+| Runtime dependencies | 8 | **6** |
+| Node globals shimmed into the renderer | `Buffer`, `process` | **none** |
 
-Recommend B. `packages/auth-worker/src/sigv4.ts` already implements SigV4 with
-WebCrypto HMAC and handles both path-style and virtual-host addressing; it needs
-`Authorization`-header signing, payload hashing, and a small XML reader for
-`ListBucketResult` and error codes.
+Option B from the original plan: SigV4 signed by hand over `requestUrl`.
+Three files replace the SDK.
 
-Required surface, from `storage/adapters/s3.ts`: HeadObject, GetObject,
-PutObject (with `IfNoneMatch: "*"`), DeleteObject, ListObjectsV2 with
-continuation tokens.
+- `storage/adapters/s3-signer.ts` builds the URL and the `Authorization`
+  header. Signing keys are derived per (secret, day, region) and cached, since
+  a push signs one request per object. A body is signed as `UNSIGNED-PAYLOAD`:
+  hashing an upload would mean a second full pass over every blob on the thread
+  that draws the UI, and TLS already protects the body in transit. A request
+  with no body carries the SHA-256 of the empty string.
+- `storage/adapters/s3-xml.ts` reads `ListBucketResult` and the `Code` of an
+  error document. Four tags; an XML parser dependency would undo what removing
+  the SDK bought, and `DOMParser` does not exist in the test runner.
+- `storage/adapters/s3.ts` keeps its shape, and now goes through the same
+  `withRetry` + `withTimeout` + `assertOk` policy the WebDAV adapter uses.
+  Signing happens **inside** the retry: a signature carries the minute it was
+  made, and a request replayed after a backoff is refused for skew.
 
-Also: `diff2html` is in `package.json` but imported nowhere — remove it.
-`qrcode` (23 KB) is imported statically at
-`ui/modals/settings-transfer-modal.ts:2` and could be dynamic or swapped for
-`qrcode-generator`.
+Also removed: `src/polyfills.ts` (it existed only to shim `Buffer` for the SDK;
+no plugin source uses it), the `buffer` dev dependency and the esbuild rule that
+kept `buffer` bundled, and `diff2html`, which was in `package.json` and imported
+nowhere.
+
+### One thing the rewrite improves
+
+The SDK could not tell a missing object from a missing bucket on a GET, because
+it mapped both to a 404 error class. The raw response carries the error
+document, so a 404 whose `Code` is `NoSuchBucket` is now re-raised instead of
+reported as absence — reporting it as absence would re-upload the whole vault
+into nowhere. A HEAD still cannot tell, because a HEAD has no body, and neither
+could the SDK.
+
+### Verification
+
+Unit: the signature for AWS's own published "GET Object" SigV4 example is
+reproduced exactly, which pins the implementation to an answer written down
+outside this repository rather than to a second copy of the same algorithm.
+Plus signed-header lists, path-style and virtual-host URLs, endpoints that sit
+under a path, query canonicalisation, key escaping, and a new signing day.
+
+Live, against the real Oracle S3-compatible endpoint the vault syncs to
+(path-style, `us-east-1`): `refresh()` fetched and decrypted the real 40,263
+byte manifest in 538 ms with no error; `exists` answered true and false; `get`
+returned bytes and `null`; `list("objects/")` returned 290 correctly-prefixed
+keys. A scratch key under `__obsync_probe__/` then exercised the write path -
+`put`, byte-identical read-back, `putIfAbsent` correctly refusing the second
+write with 412, `delete`, and confirmation that the key was gone from both
+`exists` and `list`.
+
+Not verified live: a listing past 1,000 keys (the bucket holds 290, so the
+continuation token is covered by unit test only), and a region redirect. The SDK
+followed a 307 to the correct region; this adapter surfaces it as a failed
+request, since `assertOk` treats 3xx as failure rather than saving a redirect
+page as object bytes.
+
+### Deliberately unchanged
+
+- `Cache-Control: no-cache, no-store, must-revalidate` is still stored with every
+  object, as the SDK adapter did. Phase 3 measured that making immutable objects
+  cacheable buys nothing (a settled refresh makes zero object GETs, and a pull
+  fetches each object exactly once), so this port does not change it.
+- The per-request cache-buster is gone, because it was a `ResponseCacheControl`
+  query parameter the SDK needed; the same intent is now one signed
+  `Cache-Control: no-cache` request header on GET, which does not change the URL
+  per request.
+
+### Review outcome
+
+Two swarm reviews, one on the signing, one on behaviour parity with the SDK.
+9 findings acted on, 6 refuted and agreed with. Each fix mutation-checked.
+
+**Signing.**
+
+- *A capitalised bucket broke virtual-host addressing.* The signed host was
+  built from `config.bucket` verbatim, but DNS is case-insensitive and the
+  transport sends a lowercased `Host`, which then does not match the signature.
+  The hostname is lowercased; a path-style URI keeps the bucket exactly as typed,
+  because there it is part of the path and the path is case-sensitive.
+- *`region: "auto"` is the shipped default and is not an AWS region.* With no
+  endpoint configured it named `s3.auto.amazonaws.com`, which resolves nowhere.
+  The SDK did the same thing, so this is not a regression, but it is a dead
+  configuration: it now signs for `us-east-1`, which fails with a 400 that names
+  the bucket's real region. An endpoint that was configured keeps `auto`, which
+  is what R2 wants.
+- *`UNSIGNED-PAYLOAD` has no transport integrity behind it over plain HTTP.*
+  A MinIO on the LAN reached over `http://` now hashes the body after all. The
+  signer takes the body rather than a boolean so it can.
+- Header values are canonicalised the way SigV4 specifies - trimmed **and**
+  internal whitespace runs collapsed. Every value the adapter sends today is a
+  literal, so this changes nothing now; it stops the next caller from being the
+  one that finds out.
+
+**Listing, which was the weaker half.** Under-reporting a listing is read as
+"the remote does not have these", and that is the input to deciding what to
+delete and what to upload. Three ways it could under-report silently:
+
+- A body that is not a `ListBucketResult` at all - a proxy's HTML, a captive
+  portal - parsed to zero keys. It now throws.
+- `IsTruncated: true` with no continuation token returned a partial page as if
+  it were the whole listing. It now throws.
+- A backend repeating a continuation token would have looped forever. It now
+  throws rather than answering with what it collected so far.
+
+Also: keys are no longer under-read for a backend that qualifies its tags with a
+namespace prefix or hangs attributes on them (S3 uses neither, but an empty
+listing is the expensive way to find that out); numeric character references are
+decoded; a continuation token is trimmed, and a key is not - a key may
+legitimately begin or end with a space.
+
+**Absence.** A 404 whose body is neither an S3 error document nor empty is
+something between the plugin and the bucket answering. Treating it as absence
+would let a proxy outage read as an empty remote, and an empty remote read as
+the head republishes over the real one. Only a HEAD is allowed to be silent,
+because a HEAD carries no body - as it was under the SDK. `delete` now runs the
+same check instead of accepting any 404.
+
+Re-verified live against the same Oracle endpoint after the hardening: refresh
+522 ms, `get` of an absent key still `null`, `list("objects/")` still 290 keys.
+
+**Refuted, and agreed with.** Query-parameter names needing different sort order
+(all three are literals with nothing to encode), a `host` header supplied by a
+caller (none is), a signer whose config mutates underneath it
+(`core/session-factory.ts` rebuilds the adapter on any config change), and a key
+with a leading slash (`normalizeKeyPrefix` strips them and the rest are
+constants).
+
+### Left for later
+
+`packages/auth-worker/src/sigv4.ts` signs the same protocol a different way
+(presigned query string, so a share participant can talk to S3 without
+credentials). The two share the signing-key chain, the canonical request shape
+and the encoders. Merging them means a fourth workspace package and a change to
+how the Worker is bundled and deployed, which is a bigger blast radius than this
+phase; the duplication is about 60 lines and is recorded here so it is not
+forgotten.
+
+`qrcode` (23 KB) is still imported statically at
+`ui/modals/settings-transfer-modal.ts:2` and could be dynamic.
 
 ---
 
