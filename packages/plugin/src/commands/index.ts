@@ -7,6 +7,7 @@ import {
 	notifyError,
 	notifyInfo,
 	openDiffView,
+	openSourceControlDeleted,
 	openSourceControlHistory,
 	openSourceControlView,
 	resetRemoteStorage,
@@ -69,6 +70,17 @@ export function registerCommands(plugin: Plugin & PluginHost): void {
 			if (!file) return false;
 			if (checking) return true;
 			void openSourceControlHistory(plugin, file.path);
+			return true;
+		},
+	});
+
+	plugin.addCommand({
+		id: "restore-deleted-files",
+		name: "Restore deleted files",
+		checkCallback: (checking) => {
+			if (!plugin.settings.fileHistoryEnabled) return false;
+			if (checking) return true;
+			void openSourceControlDeleted(plugin);
 			return true;
 		},
 	});

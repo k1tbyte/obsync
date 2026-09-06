@@ -1,19 +1,35 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { sha256Hex } from "@/crypto";
 import {
 	bytesToText,
 	isLikelyText,
 	loadLocalBytes,
 	textToBytes,
+	writeRemoteObject,
 } from "@/sync/content";
-import type { EngineDependencies } from "@/sync/engine";
+import { compare, type EngineDependencies } from "@/sync/engine";
 import {
+	type DeletedFilesResult,
 	type FileVersion,
 	loadVersionBytes,
+	planVaultRestore,
+	listDeletedFiles as queryDeletedFiles,
 	getFileHistory as queryFileHistory,
+	listSnapshots as querySnapshots,
+	resolveSnapshotManifest,
+	type SnapshotListResult,
 	setSnapshotPinned as storeSetSnapshotPinned,
+	type VaultRestorePlan,
 } from "@/sync/history";
 import { applyHunks, computeHunks } from "@/sync/hunks";
-import { buildHistoryDiff, type FileDiffModel } from "@/sync/projection";
-import { writeBinary } from "@/vault/io";
+import {
+	buildHistoryDiff,
+	type FileDiffModel,
+	type HistoryDiffRequest,
+} from "@/sync/projection";
+import type { Manifest } from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
+import { deletePath, writeBinary } from "@/vault/io";
 
 const NO_SESSION = "Storage session unavailable";
 
@@ -35,30 +51,94 @@ export class HistoryService {
 			storage: session.storage,
 			key: session.key,
 			path,
-			concurrency: session.concurrency,
 		});
 	}
 
-	async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<void> {
+	async listDeletedFiles(): Promise<DeletedFilesResult> {
+		const session = await this.deps.openSession();
+		if (!session) return { files: [], lagging: false, truncated: false };
+		return queryDeletedFiles({ storage: session.storage, key: session.key });
+	}
+
+	async listSnapshots(): Promise<SnapshotListResult> {
+		const session = await this.deps.openSession();
+		if (!session) return { snapshots: [], lagging: false };
+		return querySnapshots({ storage: session.storage, key: session.key });
+	}
+
+	/** What a restore would change, computed against a fresh scan of the vault. */
+	async previewVaultRestore(snapshotId: string): Promise<VaultRestorePlan> {
+		const session = await this.requireSession();
+		return planVaultRestore(
+			await this.requireSnapshot(session, snapshotId),
+			(await compare(session)).snapshot,
+		);
+	}
+
+	/**
+	 * Makes the vault match a past snapshot. Local only - the remote is untouched
+	 * until the user pushes, so the whole thing stays reviewable and revertable.
+	 */
+	async restoreVault(snapshotId: string): Promise<VaultRestorePlan> {
+		return this.deps.enqueue(async () => {
+			const session = await this.requireSession();
+			const target = await this.requireSnapshot(session, snapshotId);
+			// Re-planned here, not taken from the preview: the vault may have moved
+			// while the user was reading the confirmation.
+			const plan = planVaultRestore(target, (await compare(session)).snapshot);
+			await runWithConcurrency(
+				plan.write,
+				session.concurrency ?? DEFAULT_CONCURRENCY,
+				async (item) => {
+					await writeRemoteObject(session, item.path, item.entry.hash);
+				},
+			);
+			for (const path of plan.remove) {
+				await deletePath(session.adapter, path);
+			}
+			await this.deps.refresh();
+			return plan;
+		});
+	}
+
+	private async requireSnapshot(
+		session: EngineDependencies,
+		snapshotId: string,
+	): Promise<Manifest> {
+		const target = await resolveSnapshotManifest(
+			session.storage,
+			session.key,
+			snapshotId,
+		);
+		if (!target) {
+			throw new Error(
+				"That snapshot can no longer be rebuilt from history, so the vault cannot be restored to it.",
+			);
+		}
+		return target;
+	}
+
+	async setSnapshotPinned(
+		snapshotId: string,
+		pinned: boolean,
+		label?: string,
+	): Promise<void> {
 		const session = await this.requireSession();
 		await storeSetSnapshotPinned(
 			session.storage,
 			session.key,
 			snapshotId,
 			pinned,
+			label,
 		);
 	}
 
 	async getHistoryDiff(
-		path: string,
-		hash: string,
-		label: string,
-		forceText = false,
-		versionSize?: number,
+		request: HistoryDiffRequest,
 	): Promise<FileDiffModel | null> {
 		const session = await this.deps.openSession();
 		if (!session) return null;
-		return buildHistoryDiff(session, path, hash, label, forceText, versionSize);
+		return buildHistoryDiff(session, request);
 	}
 
 	async restoreFileVersion(path: string, hash: string): Promise<void> {
@@ -74,6 +154,8 @@ export class HistoryService {
 		path: string,
 		hash: string,
 		selected: ReadonlySet<number>,
+		/** sha256 of the working copy the hunks were drawn against. */
+		expectedCurrentHash?: string,
 	): Promise<void> {
 		if (selected.size === 0) return;
 		await this.deps.enqueue(async () => {
@@ -92,8 +174,24 @@ export class HistoryService {
 				throw new Error("Per-hunk restore is only supported for text files");
 			}
 			const currentText = bytesToText(currentBytes);
-			const { hunks } = computeHunks(currentText, bytesToText(versionBytes));
-			const merged = applyHunks(currentText, hunks, selected);
+			if (
+				expectedCurrentHash &&
+				(await sha256Hex(textToBytes(currentText))) !== expectedCurrentHash
+			) {
+				throw new Error(
+					"This file changed since the diff was drawn, so the hunk numbers no longer line up. Reopen the diff and try again.",
+				);
+			}
+			// Same argument order as the projection: the view numbers its hunks from
+			// version-to-current, and an index only means anything against that patch.
+			const versionText = bytesToText(versionBytes);
+			const { hunks } = computeHunks(versionText, currentText);
+			// `applyHunks` takes the right side for selected hunks, so keeping the
+			// version's side for one hunk means selecting all the others.
+			const keepCurrent = new Set(
+				hunks.map((hunk) => hunk.index).filter((index) => !selected.has(index)),
+			);
+			const merged = applyHunks(versionText, hunks, keepCurrent);
 			await writeBinary(session.adapter, path, textToBytes(merged));
 			await this.deps.refresh();
 		});

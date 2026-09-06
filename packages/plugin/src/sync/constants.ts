@@ -4,9 +4,17 @@ export const REMOTE_MANIFEST_KEY = "manifest.json.enc";
 
 export const REMOTE_OBJECTS_PREFIX = "objects/";
 
-export const REMOTE_SNAPSHOTS_PREFIX = "snapshots/";
+/** Single change log: snapshot metadata plus one parent-relative delta per snapshot. */
+export const REMOTE_HISTORY_LOG_KEY = "history.json.enc";
 
-export const REMOTE_SNAPSHOT_INDEX_KEY = "snapshots/index.json.enc";
+/** Full manifests for pinned snapshots, so a pin survives its chain being evicted. */
+export const REMOTE_PINS_PREFIX = "pins/";
+
+/**
+ * Where history lived before the change log. Nothing reads it; reset and
+ * deep-clean sweep it so migrating off the old layout leaves no litter behind.
+ */
+export const REMOTE_LEGACY_SNAPSHOTS_PREFIX = "snapshots/";
 
 export const REMOTE_SALT_KEY = "salt.bin";
 

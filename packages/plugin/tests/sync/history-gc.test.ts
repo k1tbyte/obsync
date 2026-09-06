@@ -1,6 +1,7 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
 import { describe, expect, it } from "vitest";
-import { deriveKey, type EncryptionKey } from "@/crypto";
+import { deriveKey, type EncryptionKey, encryptJson } from "@/crypto";
+import { diffManifests } from "@/sync/history/changes";
 import {
 	clampMaxSnapshots,
 	collectGarbage,
@@ -8,14 +9,14 @@ import {
 	shouldRunGc,
 } from "@/sync/history/gc";
 import {
-	archiveManifest,
-	readSnapshotIndex,
+	pinKey,
+	readHistoryLog,
+	readPinManifest,
 	setSnapshotPinned,
-	snapshotKey,
-	writeSnapshotIndex,
+	writeHistoryLog,
 } from "@/sync/history/store";
-import type { SnapshotIndex } from "@/sync/history/types";
-import { objectKey } from "@/sync/manifest";
+import type { HistoryLog, SnapshotEntry } from "@/sync/history/types";
+import { objectKey, publishManifest } from "@/sync/manifest";
 import type { EFileKind, Manifest } from "@/sync/types";
 
 function manifest(
@@ -25,12 +26,7 @@ function manifest(
 ): Manifest {
 	const entries: Manifest["files"] = {};
 	for (const [path, hash] of Object.entries(files)) {
-		entries[path] = {
-			hash,
-			size: 1,
-			mtime: 1,
-			kind: "vault" as EFileKind,
-		};
+		entries[path] = { hash, size: 1, mtime: 1, kind: "vault" as EFileKind };
 	}
 	return {
 		version: 1,
@@ -43,8 +39,40 @@ function manifest(
 	};
 }
 
+/** Builds a log from an oldest-first manifest chain. */
+function logOf(
+	chain: readonly Manifest[],
+	pinnedIds: string[] = [],
+): HistoryLog {
+	const snapshots: SnapshotEntry[] = [];
+	const changes: HistoryLog["changes"] = {};
+	for (const [index, current] of chain.entries()) {
+		snapshots.unshift({
+			id: current.snapshotId,
+			parentId: current.parentSnapshotId,
+			createdAt: index + 1,
+			deviceId: "d",
+			pinned: pinnedIds.includes(current.snapshotId) || undefined,
+		});
+		changes[current.snapshotId] = diffManifests(
+			chain[index - 1] ?? null,
+			current,
+		);
+	}
+	return { version: 2, snapshots, changes };
+}
+
 async function key(): Promise<EncryptionKey> {
 	return deriveKey("pw", new Uint8Array(16));
+}
+
+async function seedObjects(
+	storage: FakeStorage,
+	hashes: readonly string[],
+): Promise<void> {
+	for (const hash of hashes) {
+		await storage.put(objectKey(hash), new Uint8Array([1]));
+	}
 }
 
 describe("file-history GC math", () => {
@@ -71,207 +99,365 @@ describe("file-history GC math", () => {
 	});
 });
 
-describe("collectGarbage (manifest-delta)", () => {
-	it("sweeps only objects unreachable from retained ∪ HEAD", async () => {
+describe("collectGarbage (change log)", () => {
+	it("sweeps only hashes unreachable from retained records and HEAD", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
 		// s1..s5 oldest→newest. file "a": A1,A1,A2,A2,A3
-		const snaps = [
+		const chain = [
 			manifest("s1", null, { a: "A1" }),
 			manifest("s2", "s1", { a: "A1" }),
 			manifest("s3", "s2", { a: "A2" }),
 			manifest("s4", "s3", { a: "A2" }),
 			manifest("s5", "s4", { a: "A3" }),
 		];
-		for (const m of snaps) await archiveManifest(storage, k, m);
-		for (const h of ["A1", "A2", "A3"]) {
-			await storage.put(objectKey(h), new Uint8Array([1]));
-		}
-		const index: SnapshotIndex = {
-			version: 1,
-			entries: ["s5", "s4", "s3", "s2", "s1"].map((id) => ({
-				snapshotId: id,
-				parentSnapshotId: null,
-				createdAt: 1,
-				deviceId: "d",
-			})),
-		};
-		await writeSnapshotIndex(storage, k, index);
+		const head = chain[4] as Manifest;
+		await publishManifest(storage, k, head);
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain);
+		await writeHistoryLog(storage, k, log);
 
 		const res = await collectGarbage({
 			storage,
 			key: k,
-			index,
+			log,
 			maxSnapshots: 2,
-			headManifest: snaps[4] as Manifest,
+			headManifest: head,
 		});
 
 		expect(res.skippedObjectSweep).toBe(false);
 		expect(res.deletedSnapshots).toBe(3);
 		expect(res.deletedObjects).toBe(1);
-		// A1 only referenced by evicted s1/s2 → swept. A2 kept (retained s4). A3 HEAD.
+		// A1 only lives in evicted records → swept. A2 is retained s4's `from`. A3 is HEAD.
 		expect(await storage.exists(objectKey("A1"))).toBe(false);
 		expect(await storage.exists(objectKey("A2"))).toBe(true);
 		expect(await storage.exists(objectKey("A3"))).toBe(true);
-		expect(await storage.exists(snapshotKey("s1"))).toBe(false);
-		expect(await storage.exists(snapshotKey("s3"))).toBe(false);
-		expect(await storage.exists(snapshotKey("s4"))).toBe(true);
-		const next = await readSnapshotIndex(storage, k);
-		expect(next.entries.map((e) => e.snapshotId)).toEqual(["s5", "s4"]);
+		const next = await readHistoryLog(storage, k);
+		expect(next.snapshots.map((e) => e.id)).toEqual(["s5", "s4"]);
+		expect(Object.keys(next.changes).sort()).toEqual(["s4", "s5"]);
 	});
 
-	it("skips object sweep when a retained manifest is unreadable", async () => {
+	it("skips the object sweep when a pinned manifest is unreadable", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
-		// Archive everything EXCEPT retained s4 (simulates pre-feature snapshot).
-		const archived = [
+		const chain = [
 			manifest("s1", null, { a: "A1" }),
 			manifest("s2", "s1", { a: "A2" }),
 			manifest("s3", "s2", { a: "A2" }),
+			manifest("s4", "s3", { a: "A2" }),
 			manifest("s5", "s4", { a: "A3" }),
 		];
-		for (const m of archived) await archiveManifest(storage, k, m);
-		for (const h of ["A1", "A2", "A3"]) {
-			await storage.put(objectKey(h), new Uint8Array([1]));
-		}
-		const index: SnapshotIndex = {
-			version: 1,
-			entries: ["s5", "s4", "s3", "s2", "s1"].map((id) => ({
-				snapshotId: id,
-				parentSnapshotId: null,
-				createdAt: 1,
-				deviceId: "d",
-			})),
-		};
-		await writeSnapshotIndex(storage, k, index);
+		const head = chain[4] as Manifest;
+		await publishManifest(storage, k, head);
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain, ["s1"]);
+		await writeHistoryLog(storage, k, log);
+		// s1 is pinned but its manifest was never stored.
 
 		const res = await collectGarbage({
 			storage,
 			key: k,
-			index,
+			log,
 			maxSnapshots: 2,
-			headManifest: manifest("s5", "s4", { a: "A3" }),
+			headManifest: head,
 		});
 
 		expect(res.skippedObjectSweep).toBe(true);
 		expect(res.deletedObjects).toBe(0);
-		// No objects swept (can't prove orphan), but pruning still happened.
 		expect(await storage.exists(objectKey("A1"))).toBe(true);
-		expect(res.deletedSnapshots).toBe(3);
-		const next = await readSnapshotIndex(storage, k);
-		expect(next.entries.map((e) => e.snapshotId)).toEqual(["s5", "s4"]);
+		// Log pruning still happens; only the sweep is withheld.
+		expect(res.deletedSnapshots).toBe(2);
+		const next = await readHistoryLog(storage, k);
+		expect(next.snapshots.map((e) => e.id)).toEqual(["s5", "s4", "s1"]);
+	});
+
+	it("withholds the sweep when a pin manifest exists without its flag", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		const head = chain[2] as Manifest;
+		await publishManifest(storage, k, head);
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain);
+		await writeHistoryLog(storage, k, log);
+		// Another device wrote the manifest but has not flagged it yet, and our own
+		// log rewrite would drop the flag anyway - so storage is the only signal.
+		await storage.put(pinKey("s1"), await encryptJson(k, chain[0] as Manifest));
+
+		const res = await collectGarbage({
+			storage,
+			key: k,
+			log,
+			maxSnapshots: 1,
+			headManifest: head,
+		});
+
+		expect(res.skippedObjectSweep).toBe(true);
+		expect(res.deletedObjects).toBe(0);
+		expect(await storage.exists(objectKey("A1"))).toBe(true);
+	});
+
+	it("withholds the sweep when another device publishes while pruning", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		await publishManifest(storage, k, chain[2] as Manifest);
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain);
+		await writeHistoryLog(storage, k, log);
+
+		const res = await collectGarbage({
+			storage,
+			key: k,
+			log,
+			maxSnapshots: 1,
+			// We began against s2, but s3 is what is published now.
+			headManifest: chain[1] as Manifest,
+		});
+
+		expect(res.skippedObjectSweep).toBe(true);
+		expect(res.deletedObjects).toBe(0);
 	});
 
 	it("is a no-op when within the retention limit", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
-		const index: SnapshotIndex = {
-			version: 1,
-			entries: [
-				{
-					snapshotId: "s1",
-					parentSnapshotId: null,
-					createdAt: 1,
-					deviceId: "d",
-				},
-			],
-		};
+		const log = logOf([manifest("s1", null, {})]);
 		const res = await collectGarbage({
 			storage,
 			key: k,
-			index,
+			log,
 			maxSnapshots: 50,
 			headManifest: manifest("s1", null, {}),
 		});
 		expect(res.deletedSnapshots).toBe(0);
 		expect(res.deletedObjects).toBe(0);
-		expect(res.index).toBe(index);
+		expect(res.log).toBe(log);
 	});
-});
 
-describe("collectGarbage with pinned snapshots", () => {
-	function indexOf(ids: string[], pinnedIds: string[] = []): SnapshotIndex {
-		return {
-			version: 1,
-			entries: ids.map((id) => ({
-				snapshotId: id,
-				parentSnapshotId: null,
-				createdAt: 1,
-				deviceId: "d",
-				pinned: pinnedIds.includes(id) || undefined,
-			})),
-		};
-	}
-
-	it("retains a pinned snapshot beyond the limit and keeps its objects", async () => {
+	it("keeps a pinned snapshot and every object its manifest references", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
-		const snaps = [
+		const chain = [
 			manifest("s1", null, { a: "A1" }),
 			manifest("s2", "s1", { a: "A2" }),
 			manifest("s3", "s2", { a: "A3" }),
 			manifest("s4", "s3", { a: "A4" }),
 			manifest("s5", "s4", { a: "A5" }),
 		];
-		for (const m of snaps) await archiveManifest(storage, k, m);
-		for (const h of ["A1", "A2", "A3", "A4", "A5"]) {
-			await storage.put(objectKey(h), new Uint8Array([1]));
-		}
-		// newest-first, oldest snapshot s1 is pinned.
-		const index = indexOf(["s5", "s4", "s3", "s2", "s1"], ["s1"]);
-		await writeSnapshotIndex(storage, k, index);
+		const head = chain[4] as Manifest;
+		await publishManifest(storage, k, head);
+		await seedObjects(storage, ["A1", "A2", "A3", "A4", "A5"]);
+		const log = logOf(chain, ["s1"]);
+		await writeHistoryLog(storage, k, log);
+		await storage.put(pinKey("s1"), await encryptJson(k, chain[0] as Manifest));
 
 		const res = await collectGarbage({
 			storage,
 			key: k,
-			index,
+			log,
 			maxSnapshots: 2,
-			headManifest: snaps[4] as Manifest,
+			headManifest: head,
 		});
 
 		expect(res.skippedObjectSweep).toBe(false);
 		// kept: s5, s4 (newest 2 non-pinned) + s1 (pinned). evicted: s3, s2.
-		expect(res.index.entries.map((e) => e.snapshotId)).toEqual([
-			"s5",
-			"s4",
-			"s1",
-		]);
+		expect(res.log.snapshots.map((e) => e.id)).toEqual(["s5", "s4", "s1"]);
 		expect(res.deletedSnapshots).toBe(2);
-		expect(await storage.exists(snapshotKey("s1"))).toBe(true);
-		expect(await storage.exists(snapshotKey("s2"))).toBe(false);
-		expect(await storage.exists(snapshotKey("s3"))).toBe(false);
-		// A1 is referenced only by the pinned snapshot → must survive.
+		// A1 survives only because the pinned manifest still names it.
 		expect(await storage.exists(objectKey("A1"))).toBe(true);
 		expect(await storage.exists(objectKey("A2"))).toBe(false);
-		expect(await storage.exists(objectKey("A3"))).toBe(false);
 		expect(await storage.exists(objectKey("A4"))).toBe(true);
 		expect(await storage.exists(objectKey("A5"))).toBe(true);
+	});
+
+	it("withholds the sweep when HEAD cannot be re-read", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		// HEAD is never published, so the pre-sweep re-read finds nothing.
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain);
+		await writeHistoryLog(storage, k, log);
+
+		const res = await collectGarbage({
+			storage,
+			key: k,
+			log,
+			maxSnapshots: 1,
+			headManifest: chain[2] as Manifest,
+		});
+
+		expect(res.skippedObjectSweep).toBe(true);
+		expect(res.deletedObjects).toBe(0);
+		expect(await storage.exists(objectKey("A1"))).toBe(true);
+	});
+
+	it("keeps a snapshot another device pinned mid-run, and skips the sweep", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		const head = chain[2] as Manifest;
+		await publishManifest(storage, k, head);
+		await seedObjects(storage, ["A1", "A2", "A3"]);
+		const log = logOf(chain);
+		// Stored log already carries the other device's pin on the snapshot we evict.
+		await writeHistoryLog(storage, k, logOf(chain, ["s1"]));
+
+		const res = await collectGarbage({
+			storage,
+			key: k,
+			log,
+			maxSnapshots: 1,
+			headManifest: head,
+		});
+
+		expect(res.skippedObjectSweep).toBe(true);
+		expect(res.deletedObjects).toBe(0);
+		expect(res.deletedSnapshots).toBe(1);
+		expect(await storage.exists(objectKey("A1"))).toBe(true);
+		const next = await readHistoryLog(storage, k);
+		expect(next.snapshots.map((e) => e.id)).toEqual(["s3", "s1"]);
+		// Its change record must survive with it, or the pin loses its history.
+		expect(next.changes.s1).toBeDefined();
 	});
 
 	it("is a no-op when only pinned snapshots exceed the limit", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
-		const index = indexOf(["s3", "s2", "s1"], ["s3", "s2"]);
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		const log = logOf(chain, ["s3", "s2"]);
 		const res = await collectGarbage({
 			storage,
 			key: k,
-			index,
+			log,
 			maxSnapshots: 2,
-			headManifest: manifest("s3", "s2", { a: "A3" }),
+			headManifest: chain[2] as Manifest,
 		});
 		expect(res.deletedSnapshots).toBe(0);
-		expect(res.index).toBe(index);
+		expect(res.log).toBe(log);
 	});
+});
 
-	it("setSnapshotPinned flips the flag in the stored index", async () => {
+describe("setSnapshotPinned", () => {
+	it("stores a full manifest for the pin and flips the flag", async () => {
 		const storage = new FakeStorage();
 		const k = await key();
-		await writeSnapshotIndex(storage, k, indexOf(["s2", "s1"]));
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2", b: "B1" }),
+		];
+		const head = chain[1] as Manifest;
+		await publishManifest(storage, k, head);
+		await writeHistoryLog(storage, k, logOf(chain));
+
 		await setSnapshotPinned(storage, k, "s1", true);
-		const after = await readSnapshotIndex(storage, k);
-		expect(after.entries.find((e) => e.snapshotId === "s1")?.pinned).toBe(true);
-		expect(after.entries.find((e) => e.snapshotId === "s2")?.pinned).toBe(
-			undefined,
+
+		const after = await readHistoryLog(storage, k);
+		expect(after.snapshots.find((e) => e.id === "s1")?.pinned).toBe(true);
+		expect(after.snapshots.find((e) => e.id === "s2")?.pinned).toBe(undefined);
+		expect(await storage.exists(pinKey("s1"))).toBe(true);
+	});
+
+	it("removes the pin manifest on unpin", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+		];
+		await publishManifest(storage, k, chain[1] as Manifest);
+		await writeHistoryLog(storage, k, logOf(chain));
+
+		await setSnapshotPinned(storage, k, "s1", true);
+		await setSnapshotPinned(storage, k, "s1", false);
+
+		const after = await readHistoryLog(storage, k);
+		expect(after.snapshots.find((e) => e.id === "s1")?.pinned).toBe(false);
+		expect(await storage.exists(pinKey("s1"))).toBe(false);
+	});
+
+	it("re-pins an already pinned snapshot without needing a replay", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+			manifest("s3", "s2", { a: "A3" }),
+		];
+		await publishManifest(storage, k, chain[2] as Manifest);
+		await writeHistoryLog(storage, k, logOf(chain));
+		await setSnapshotPinned(storage, k, "s1", true);
+
+		// GC later evicts the middle, so s1 is no longer reachable by replay.
+		const truncated = logOf(chain, ["s1"]);
+		await writeHistoryLog(storage, k, {
+			...truncated,
+			snapshots: truncated.snapshots.filter((e) => e.id !== "s2"),
+		});
+
+		await expect(
+			setSnapshotPinned(storage, k, "s1", true),
+		).resolves.toBeUndefined();
+		expect(await storage.exists(pinKey("s1"))).toBe(true);
+	});
+
+	it("rewrites a pin whose stored manifest is unreadable", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+		];
+		await publishManifest(storage, k, chain[1] as Manifest);
+		await writeHistoryLog(storage, k, logOf(chain));
+		// Garbage at the pin key must not be mistaken for a valid pin.
+		await storage.put(pinKey("s1"), new Uint8Array([1, 2, 3]));
+
+		await setSnapshotPinned(storage, k, "s1", true);
+
+		const stored = await readPinManifest(storage, k, "s1");
+		expect(stored?.snapshotId).toBe("s1");
+	});
+
+	it("refuses to pin a snapshot the chain can no longer reach", async () => {
+		const storage = new FakeStorage();
+		const k = await key();
+		const chain = [
+			manifest("s1", null, { a: "A1" }),
+			manifest("s2", "s1", { a: "A2" }),
+		];
+		await publishManifest(storage, k, chain[1] as Manifest);
+		const log = logOf(chain);
+		// Drop the middle of the chain, as GC would after eviction.
+		await writeHistoryLog(storage, k, {
+			...log,
+			snapshots: log.snapshots.filter((e) => e.id !== "s1"),
+		});
+
+		await expect(setSnapshotPinned(storage, k, "s1", true)).rejects.toThrow(
+			/can no longer be rebuilt/,
 		);
+		expect(await storage.exists(pinKey("s1"))).toBe(false);
 	});
 });

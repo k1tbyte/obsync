@@ -1,9 +1,9 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey } from "@/crypto";
-import { REMOTE_OBJECTS_PREFIX } from "@/sync/constants";
-import { archiveManifest, writeSnapshotIndex } from "@/sync/history/store";
-import type { SnapshotIndex } from "@/sync/history/types";
+import { REMOTE_OBJECTS_PREFIX, REMOTE_PINS_PREFIX } from "@/sync/constants";
+import { diffManifests } from "@/sync/history/changes";
+import { writeHistoryLog } from "@/sync/history/store";
 import { deepCleanOrphans, verifyRemote } from "@/sync/maintenance";
 import { objectKey, publishManifest } from "@/sync/manifest";
 import type { EFileKind, Manifest } from "@/sync/types";
@@ -47,38 +47,75 @@ describe("verifyRemote", () => {
 });
 
 describe("deepCleanOrphans", () => {
-	it("removes unreachable blobs and snapshots, keeps reachable ones", async () => {
+	it("removes unreachable blobs, keeps reachable ones", async () => {
 		const storage = new FakeStorage();
 		const head = manifest("s1", { "a.md": "H1" });
 		await publishManifest(storage, key, head);
 		await storage.put(objectKey("H1"), new Uint8Array([1]));
-		await archiveManifest(storage, key, head);
-		const index: SnapshotIndex = {
-			version: 1,
-			entries: [
-				{
-					snapshotId: "s1",
-					parentSnapshotId: null,
-					createdAt: 1,
-					deviceId: "d",
-				},
-			],
-		};
-		await writeSnapshotIndex(storage, key, index);
+		await writeHistoryLog(storage, key, {
+			version: 2,
+			snapshots: [{ id: "s1", parentId: null, createdAt: 1, deviceId: "d" }],
+			changes: { s1: diffManifests(null, head) },
+		});
 
 		await storage.put(objectKey("ORPHAN"), new Uint8Array([9]));
 		await storage.put(`${REMOTE_OBJECTS_PREFIX}stray`, new Uint8Array([9]));
 
 		const res = await deepCleanOrphans(storage, key);
 		expect(res.deletedObjects).toBe(2);
-		expect(res.deletedSnapshots).toBe(0);
+		expect(res.deletedPins).toBe(0);
+		expect(res.deletedLegacy).toBe(0);
 		expect(await storage.exists(objectKey("H1"))).toBe(true);
 		expect(await storage.exists(objectKey("ORPHAN"))).toBe(false);
-		expect((await storage.list("snapshots/")).length).toBe(2);
+		expect((await storage.list(REMOTE_PINS_PREFIX)).length).toBe(0);
 
 		// A second pass is a no-op.
 		const again = await deepCleanOrphans(storage, key);
 		expect(again.deletedObjects).toBe(0);
-		expect(again.deletedSnapshots).toBe(0);
+		expect(again.deletedPins).toBe(0);
+	});
+});
+
+describe("deepCleanOrphans concurrency", () => {
+	it("bails when another device pins a snapshot while it lists", async () => {
+		// Pinning does not move HEAD, so only a log re-read can catch it.
+		class PinRacingStorage extends FakeStorage {
+			raceOnce: (() => Promise<void>) | null = null;
+			override async list(prefix: string): Promise<string[]> {
+				const keys = await super.list(prefix);
+				const race = this.raceOnce;
+				this.raceOnce = null;
+				if (race) await race();
+				return keys;
+			}
+		}
+
+		const storage = new PinRacingStorage();
+		const head = manifest("s2", { "a.md": "H2" });
+		await publishManifest(storage, key, head);
+		await storage.put(objectKey("H2"), new Uint8Array([1]));
+		const snapshots = [
+			{ id: "s2", parentId: "s1", createdAt: 2, deviceId: "d" },
+			{ id: "s1", parentId: null, createdAt: 1, deviceId: "d" },
+		];
+		const changes = {
+			s2: diffManifests(manifest("s1", { "a.md": "H1" }), head),
+			s1: diffManifests(null, manifest("s1", { "a.md": "H1" })),
+		};
+		await writeHistoryLog(storage, key, { version: 2, snapshots, changes });
+
+		storage.raceOnce = async () => {
+			await writeHistoryLog(storage, key, {
+				version: 2,
+				snapshots: snapshots.map((entry) =>
+					entry.id === "s1" ? { ...entry, pinned: true } : entry,
+				),
+				changes,
+			});
+		};
+
+		await expect(deepCleanOrphans(storage, key)).rejects.toThrow(
+			/pinned snapshot while cleaning/,
+		);
 	});
 });

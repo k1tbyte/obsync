@@ -4,14 +4,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey } from "@/crypto";
 import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
 import { advanceSessionAfterPush } from "@/sync/baseline";
-import { REMOTE_MANIFEST_KEY, REMOTE_SNAPSHOTS_PREFIX } from "@/sync/constants";
+import { REMOTE_MANIFEST_KEY } from "@/sync/constants";
 import {
 	compare,
 	type EngineDependencies,
 	pullPaths,
 	pushPaths,
 } from "@/sync/engine";
-import { readSnapshotIndex } from "@/sync/history/store";
+import { readHistoryLog } from "@/sync/history/store";
 import { EChangeType, type SessionState } from "@/sync/types";
 import { createScopePolicy } from "@/vault/scope";
 
@@ -255,7 +255,7 @@ describe("engine round-trip", () => {
 		expect(cmpA.diff.conflicts.map((c) => c.path)).toEqual(["note.md"]);
 	});
 
-	it("history archives snapshots and GC bounds the index", async () => {
+	it("history records every push and GC bounds the log", async () => {
 		const storage = new FakeStorage();
 		const adapter = new InMemoryAdapter();
 		const history = { maxSnapshots: 2 };
@@ -268,15 +268,18 @@ describe("engine round-trip", () => {
 			]);
 			state = advanceSessionAfterPush(state, cmp, m);
 		}
-		const index = await readSnapshotIndex(storage, key);
+		const log = await readHistoryLog(storage, key);
 		// buffer floor is 10 → GC fires once count exceeds max(2)+10, prunes to 2.
-		expect(index.entries.length).toBeLessThanOrEqual(12);
-		expect(index.entries.length).toBeGreaterThanOrEqual(2);
-		const snapshotBlobs = [...storage.map.keys()].filter((k) =>
-			k.startsWith(REMOTE_SNAPSHOTS_PREFIX),
+		expect(log.snapshots.length).toBeLessThanOrEqual(12);
+		expect(log.snapshots.length).toBeGreaterThanOrEqual(2);
+		// Change records are pruned with their snapshots, never left dangling.
+		expect(Object.keys(log.changes).sort()).toEqual(
+			log.snapshots.map((s) => s.id).sort(),
 		);
-		// index.json.enc + one blob per retained entry.
-		expect(snapshotBlobs.length).toBe(index.entries.length + 1);
+		// The whole history is one object, however many snapshots it holds.
+		expect(
+			[...storage.map.keys()].filter((k) => k.startsWith("snapshots/")),
+		).toEqual([]);
 	});
 	it("skips the existence probe for objects the remote already references", async () => {
 		const adapter = new InMemoryAdapter();

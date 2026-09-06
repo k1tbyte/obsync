@@ -460,14 +460,18 @@
 	white-space: pre;
 }
 
+/*
+ * Tint from the theme's own hue, never `--background-modifier-error/success`:
+ * those are solid danger/confirm fills, and same-hue text on them is invisible.
+ */
 .obsync-unified-line.is-add {
-	background-color: var(--background-modifier-success);
-	color: var(--color-green);
+	background-color: rgba(var(--color-green-rgb), 0.15);
+	color: var(--text-normal);
 }
 
 .obsync-unified-line.is-del {
-	background-color: var(--background-modifier-error);
-	color: var(--color-red);
+	background-color: rgba(var(--color-red-rgb), 0.15);
+	color: var(--text-normal);
 }
 
 .obsync-transfer-url {
@@ -991,12 +995,12 @@
 }
 
 .obsync-hunk-popup-line-removed {
-	background: var(--background-modifier-error);
+	background: rgba(var(--color-red-rgb), 0.15);
 	color: var(--text-normal);
 }
 
 .obsync-hunk-popup-line-added {
-	background: var(--background-modifier-success);
+	background: rgba(var(--color-green-rgb), 0.15);
 	color: var(--text-normal);
 }
 
@@ -1100,4 +1104,75 @@
 	font-size: var(--font-ui-smaller);
 	word-break: break-all;
 	margin-top: var(--size-4-2);
+}
+
+.obsync-prompt-input {
+	width: 100%;
+	margin-bottom: var(--size-4-2);
+}
+
+.obsync-history-row-head {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.obsync-history-row-head .obsync-history-row-title {
+	flex: 1 1 auto;
+}
+
+.obsync-history-row-more {
+	flex: 0 0 auto;
+	padding: 0 var(--size-4-2);
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-weight: 700;
+}
+
+.obsync-history-row-more:hover {
+	background-color: var(--interactive-hover);
+	color: var(--text-normal);
+}
+
+.obsync-restore-summary {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-restore-diff {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	max-height: 50vh;
+	overflow-y: auto;
+	margin-bottom: var(--size-4-3);
+}
+
+.obsync-timeline-files {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	margin-top: var(--size-4-2);
+	padding-left: var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+	max-height: 40vh;
+	overflow-y: auto;
+}
+
+.obsync-timeline-file {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-settings-error {
+	color: var(--text-error);
+}
+
+.obsync-status-bar.is-offline {
+	color: var(--text-muted);
 }

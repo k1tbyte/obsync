@@ -19,11 +19,36 @@ Obsync writes only inside the configured bucket and prefix:
 
 ```text
 <prefix>/manifest.json.enc
+<prefix>/history.json.enc
 <prefix>/salt.bin
 <prefix>/objects/<sha256>.enc
+<prefix>/pins/<snapshotId>.json.enc
 ```
 
+`history.json.enc` is a single encrypted change log: one entry per push, each recording
+only what that push added, modified or deleted relative to its parent. Reading a file's
+history therefore costs one download regardless of how many snapshots are kept. Pinning a
+snapshot additionally stores a full manifest under `pins/`, so a pin survives after the
+snapshots between it and the current state have been pruned.
+
 The manifest and object contents are encrypted with a key derived from your passphrase. The passphrase is not uploaded.
+
+### History, deleted files and the timeline
+
+The source control view has four tabs. **Changes** is the usual push/pull list,
+with a path filter above it. **History** lists the open file's past versions -
+click one to diff it against the working copy, or use its `⋯` menu to restore it,
+compare it with the version before, or pin it under a name you choose. Restoring
+always shows the exact diff first. **Timeline** lists every push to the vault with
+what it changed, and can put the whole vault back to any of them.
+
+### Restoring a deleted file
+
+The source control view has a **Deleted** tab (also **Obsync: Restore deleted files**)
+listing every file that is gone from the vault but still held by history, with when it
+went, which device removed it, and how many more pushes the record survives. Restore puts
+it back where it was, recreating any folders it needs; **Restore to…** writes it somewhere
+else. Deletions age out with their snapshot, so pin a snapshot to keep one for good.
 
 ## Setup
 
@@ -73,7 +98,7 @@ Changing `syncignore.md` or the ignore settings marks the current compare result
 
 ## Remote reset
 
-Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc`, everything under `objects/`, and the whole version history under `snapshots/` for the configured bucket prefix. It keeps `salt.bin` and `keys.json`, so the same passphrase-derived key remains valid.
+Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc`, everything under `objects/`, the change log `history.json.enc`, every pinned snapshot under `pins/`, and anything left under the abandoned `snapshots/` prefix for the configured bucket prefix. It keeps `salt.bin` and `keys.json`, so the same passphrase-derived key remains valid.
 
 After reset, local vault files are preserved, the local baseline is cleared, and the next source control view shows local files as additions ready to push.
 

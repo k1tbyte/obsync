@@ -7,7 +7,12 @@ import { autoMergeOp } from "./auto-merge";
 import { textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
 import type { EngineDependencies } from "./engine";
-import type { FileVersion } from "./history";
+import type {
+	DeletedFilesResult,
+	FileVersion,
+	SnapshotListResult,
+	VaultRestorePlan,
+} from "./history";
 import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
@@ -23,7 +28,7 @@ import {
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
 } from "./operations";
-import type { FileDiffModel } from "./projection";
+import type { FileDiffModel, HistoryDiffRequest } from "./projection";
 import {
 	SyncControllerRuntimeState,
 	type SyncStatusListener,
@@ -203,8 +208,28 @@ export class SyncController {
 		return this.history.getFileHistory(path);
 	}
 
-	async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<void> {
-		await this.history.setSnapshotPinned(snapshotId, pinned);
+	async listDeletedFiles(): Promise<DeletedFilesResult> {
+		return this.history.listDeletedFiles();
+	}
+
+	async listSnapshots(): Promise<SnapshotListResult> {
+		return this.history.listSnapshots();
+	}
+
+	async previewVaultRestore(snapshotId: string): Promise<VaultRestorePlan> {
+		return this.history.previewVaultRestore(snapshotId);
+	}
+
+	async restoreVault(snapshotId: string): Promise<VaultRestorePlan> {
+		return this.history.restoreVault(snapshotId);
+	}
+
+	async setSnapshotPinned(
+		snapshotId: string,
+		pinned: boolean,
+		label?: string,
+	): Promise<void> {
+		await this.history.setSnapshotPinned(snapshotId, pinned, label);
 	}
 
 	async verifyRemote(deep: boolean): Promise<VerifyResult | null> {
@@ -220,27 +245,23 @@ export class SyncController {
 	}
 
 	async getHistoryDiff(
-		path: string,
-		hash: string,
-		label: string,
-		forceText = false,
-		versionSize?: number,
+		request: HistoryDiffRequest,
 	): Promise<FileDiffModel | null> {
-		return this.history.getHistoryDiff(
-			path,
-			hash,
-			label,
-			forceText,
-			versionSize,
-		);
+		return this.history.getHistoryDiff(request);
 	}
 
 	async restoreHistoryHunks(
 		path: string,
 		hash: string,
 		selected: ReadonlySet<number>,
+		expectedCurrentHash?: string,
 	): Promise<void> {
-		await this.history.restoreHistoryHunks(path, hash, selected);
+		await this.history.restoreHistoryHunks(
+			path,
+			hash,
+			selected,
+			expectedCurrentHash,
+		);
 	}
 
 	async pushPaths(paths: ReadonlyArray<string>): Promise<void> {

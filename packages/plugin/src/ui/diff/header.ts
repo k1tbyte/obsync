@@ -10,6 +10,8 @@ export interface DiffHeaderState {
 	modeButtonLabel: string | null;
 	canGoPrevFile: boolean;
 	canGoNextFile: boolean;
+	/** Names the side a history restore would take, when that is ambiguous. */
+	restoreLabel?: string;
 }
 
 export interface DiffHeaderActions {
@@ -46,7 +48,11 @@ export function renderDiffHeader(
 	}
 
 	if (state.direction === EDiffDirection.History) {
-		appendButton(parent, "Restore this version", actions.restoreVersion);
+		appendButton(
+			parent,
+			state.restoreLabel ?? "Restore this version",
+			actions.restoreVersion,
+		);
 		appendHunkNavigation(parent, state, actions);
 		appendModeToggle(parent, state, actions);
 		return;
@@ -99,7 +105,8 @@ function appendModeToggle(
 	state: DiffHeaderState,
 	actions: DiffHeaderActions,
 ): void {
-	if (!state.modeButtonLabel) return;
+	// Both modes render a binary diff the same way, so the toggle would do nothing.
+	if (state.isBinary || !state.modeButtonLabel) return;
 	appendButton(parent, state.modeButtonLabel, actions.toggleMode);
 }
 

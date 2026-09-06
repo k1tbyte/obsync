@@ -3,25 +3,25 @@ import { reportWarning } from "@/shared/diagnostics";
 import type { ObjectStorage } from "@/storage/types";
 import { publishManifestWithGuard } from "@/sync/manifest";
 import type { Manifest } from "@/sync/types";
+import { diffManifests } from "./changes";
 import { collectGarbage, shouldRunGc } from "./gc";
-import {
-	archiveManifest,
-	prependIndexEntry,
-	updateSnapshotIndex,
-} from "./store";
-import type { HistoryConfig } from "./types";
+import { prependSnapshot, updateHistoryLog } from "./store";
+import type { HistoryConfig, SnapshotEntry } from "./types";
 
 /**
- * Publishes via concurrency guard, then - only on winner - archives snapshot and updates index.
- * History is best-effort: failures log but don't fail push.
- * GC here is safe: guard serializes publishers, and GC never deletes objects reachable from HEAD.
- * Subsequent pushes compare against new HEAD and won't reference swept objects.
+ * Publishes via the concurrency guard, then - only on the winner - records the
+ * parent-relative change set. The guard has already proven remote head equals
+ * `parent`, so the diff is the snapshot's true delta.
+ *
+ * History is best-effort: failures log but never fail the push.
+ * GC here is safe: the guard serialises publishers, and GC never deletes objects
+ * reachable from HEAD.
  */
 export async function publishManifestWithHistory(
 	storage: ObjectStorage,
 	key: EncryptionKey,
 	manifest: Manifest,
-	expectedParentSnapshotId: string | null,
+	parent: Manifest | null,
 	history: HistoryConfig | undefined,
 	baseline: Manifest | null = null,
 ): Promise<void> {
@@ -29,32 +29,31 @@ export async function publishManifestWithHistory(
 		storage,
 		key,
 		manifest,
-		expectedParentSnapshotId,
+		parent?.snapshotId ?? null,
 		baseline,
 	);
 	if (!history) return;
 	try {
-		await archiveManifest(storage, key, manifest);
-		const entry = {
-			snapshotId: manifest.snapshotId,
-			parentSnapshotId: manifest.parentSnapshotId,
+		const entry: SnapshotEntry = {
+			id: manifest.snapshotId,
+			parentId: manifest.parentSnapshotId,
 			createdAt: manifest.createdAt,
 			deviceId: manifest.deviceId,
 			deviceName: manifest.deviceName,
 		};
-		const index = await updateSnapshotIndex(
+		const changes = diffManifests(parent, manifest);
+		const log = await updateHistoryLog(
 			storage,
 			key,
-			(current) => prependIndexEntry(current, entry),
-			(current) =>
-				current.entries.some((e) => e.snapshotId === entry.snapshotId),
+			(current) => prependSnapshot(current, entry, changes),
+			(current) => current.snapshots.some((s) => s.id === entry.id),
 		);
-		const nonPinned = index.entries.filter((e) => !e.pinned).length;
+		const nonPinned = log.snapshots.filter((s) => !s.pinned).length;
 		if (shouldRunGc(nonPinned, history.maxSnapshots)) {
 			await collectGarbage({
 				storage,
 				key,
-				index,
+				log,
 				maxSnapshots: history.maxSnapshots,
 				headManifest: manifest,
 			});

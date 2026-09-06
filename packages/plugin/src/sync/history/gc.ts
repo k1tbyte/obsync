@@ -3,12 +3,9 @@ import { reportWarning } from "@/shared/diagnostics";
 import type { ObjectStorage } from "@/storage/types";
 import { fetchRemoteManifest, objectKey } from "@/sync/manifest";
 import type { Manifest } from "@/sync/types";
-import {
-	fetchArchivedManifest,
-	snapshotKey,
-	updateSnapshotIndex,
-} from "./store";
-import type { SnapshotIndex } from "./types";
+import { collectChangeHashes } from "./changes";
+import { pinKey, readPinManifest, updateHistoryLog } from "./store";
+import type { HistoryLog, SnapshotEntry } from "./types";
 
 export const FILE_HISTORY_MIN_SNAPSHOTS = 1;
 
@@ -48,86 +45,99 @@ export function shouldRunGc(entryCount: number, maxSnapshots: number): boolean {
 export interface GcInput {
 	storage: ObjectStorage;
 	key: EncryptionKey;
-	index: SnapshotIndex;
+	log: HistoryLog;
 	maxSnapshots: number;
 	headManifest: Manifest;
 }
 
 export interface GcResult {
-	index: SnapshotIndex;
+	log: HistoryLog;
 	deletedObjects: number;
 	deletedSnapshots: number;
 	skippedObjectSweep: boolean;
 }
 
 /**
- * Manifest-delta GC. Orphans are derived purely from difference between evicted manifests
- * and reachable set (retained + HEAD). If retained manifest is unreadable, object sweep
- * is skipped this round (index pruning proceeds - bounded blob leak is acceptable, dangling references are not).
+ * Change-log GC. Orphans are the hashes an evicted record mentions that nothing
+ * retained still references. If a pinned snapshot's manifest is unreadable the
+ * object sweep is skipped for the round - a bounded blob leak is acceptable,
+ * a dangling reference is not.
  */
 export async function collectGarbage(input: GcInput): Promise<GcResult> {
-	const { storage, key } = input;
+	const { storage, key, log } = input;
 	const max = clampMaxSnapshots(input.maxSnapshots);
-	const entries = input.index.entries;
-	const pinned = entries.filter((e) => e.pinned);
-	const nonPinned = entries.filter((e) => !e.pinned);
+	const pinned = log.snapshots.filter((entry) => entry.pinned);
+	const nonPinned = log.snapshots.filter((entry) => !entry.pinned);
 	if (nonPinned.length <= max) {
 		return {
-			index: input.index,
+			log,
 			deletedObjects: 0,
 			deletedSnapshots: 0,
 			skippedObjectSweep: false,
 		};
 	}
 
-	const retainedNonPinned = nonPinned.slice(0, max);
 	const evicted = nonPinned.slice(max);
 	const keptIds = new Set(
-		[...pinned, ...retainedNonPinned].map((e) => e.snapshotId),
+		[...pinned, ...nonPinned.slice(0, max)].map((entry) => entry.id),
 	);
-	// Preserve original (newest-first) order; pinned + newest `max` survive.
-	const nextEntries = entries.filter((e) => keptIds.has(e.snapshotId));
 
 	const liveHashes = new Set<string>();
 	collectHashes(input.headManifest, liveHashes);
 	let retainedComplete = true;
-	for (const entry of nextEntries) {
-		if (entry.snapshotId === input.headManifest.snapshotId) continue;
-		const manifest = await fetchArchivedManifest(
-			storage,
-			key,
-			entry.snapshotId,
-		);
-		if (!manifest) {
+	for (const entry of log.snapshots) {
+		if (!keptIds.has(entry.id)) continue;
+		const changes = log.changes[entry.id];
+		// A kept record we cannot read leaves its hashes unaccounted for.
+		if (!changes) {
 			retainedComplete = false;
 			continue;
 		}
-		collectHashes(manifest, liveHashes);
+		collectChangeHashes(changes, liveHashes);
 	}
+	retainedComplete =
+		(await addPinnedHashes(storage, key, pinned, liveHashes)) &&
+		retainedComplete;
 
 	const evictedHashes = new Set<string>();
-	let deletedSnapshots = 0;
 	for (const entry of evicted) {
-		const manifest = await fetchArchivedManifest(
-			storage,
-			key,
-			entry.snapshotId,
-		);
-		if (manifest) collectHashes(manifest, evictedHashes);
-		await safeDelete(storage, snapshotKey(entry.snapshotId));
-		deletedSnapshots++;
+		const changes = log.changes[entry.id];
+		if (changes) collectChangeHashes(changes, evictedHashes);
 	}
 
-	let deletedObjects = 0;
-	// Re-read head to catch devices publishing during GC; their objects must not be collected.
+	// Prune before sweeping. A crash in between then leaves orphan blobs, which
+	// deep-clean collects; the other order leaves the log offering versions whose
+	// content is already gone.
+	const evictedIds = new Set(evicted.map((entry) => entry.id));
+	const nextLog = await updateHistoryLog(
+		storage,
+		key,
+		(current) => pruneLog(current, evictedIds),
+		(current) =>
+			current.snapshots.every(
+				(entry) => !evictedIds.has(entry.id) || entry.pinned === true,
+			),
+	);
+
+	// Re-read head as late as possible: a device that published while we pruned
+	// may reference, by content hash, a blob we were about to sweep.
 	const headNow = await readHead(storage, key);
 	if (headNow.manifest) collectHashes(headNow.manifest, liveHashes);
-	// Unreadable head might have moved; sweeping now risks deleting objects it references.
+	// A head we cannot read, or one that has vanished, might have moved; sweeping
+	// now risks deleting what it references.
 	const headUnchanged =
 		headNow.read &&
-		(headNow.manifest === null ||
-			headNow.manifest.snapshotId === input.headManifest.snapshotId);
-	const skippedObjectSweep = !retainedComplete || !headUnchanged;
+		headNow.manifest !== null &&
+		headNow.manifest.snapshotId === input.headManifest.snapshotId;
+
+	// A device pinning one of these keeps it, and its objects must survive too.
+	// Their hashes are not in liveHashes, so withhold the sweep and let the next
+	// round account for them properly.
+	const rescued = await pinnedAmong(storage, evictedIds, nextLog);
+	const skippedObjectSweep =
+		!retainedComplete || !headUnchanged || rescued.size > 0;
+
+	let deletedObjects = 0;
 	if (!skippedObjectSweep) {
 		for (const hash of evictedHashes) {
 			if (liveHashes.has(hash)) continue;
@@ -136,27 +146,73 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 		}
 	}
 
-	// Replay eviction to preserve pins from concurrent devices.
-	const evictedIds = new Set(evicted.map((entry) => entry.snapshotId));
-	const nextIndex = await updateSnapshotIndex(
-		storage,
-		key,
-		(index) => ({
-			...index,
-			entries: index.entries.filter(
-				(entry) => !evictedIds.has(entry.snapshotId),
-			),
-		}),
-		(index) =>
-			index.entries.every((entry) => !evictedIds.has(entry.snapshotId)),
-	);
-
+	const stillPresent = nextLog.snapshots.filter((entry) =>
+		evictedIds.has(entry.id),
+	).length;
 	return {
-		index: nextIndex,
+		log: nextLog,
 		deletedObjects,
-		deletedSnapshots,
+		deletedSnapshots: evicted.length - stillPresent,
 		skippedObjectSweep,
 	};
+}
+
+/**
+ * Which of these snapshots something is pinning. A pin manifest is written
+ * before its flag, so storage - not the log - is the reliable signal: a racing
+ * writer's flag can still be lost to our own log rewrite.
+ */
+async function pinnedAmong(
+	storage: ObjectStorage,
+	ids: ReadonlySet<string>,
+	log: HistoryLog,
+): Promise<Set<string>> {
+	const flagged = new Set(
+		log.snapshots.filter((entry) => entry.pinned).map((entry) => entry.id),
+	);
+	const found = new Set<string>();
+	for (const id of ids) {
+		if (flagged.has(id) || (await storage.exists(pinKey(id)))) found.add(id);
+	}
+	return found;
+}
+
+/** Drops evicted snapshots, except any a concurrent device has pinned meanwhile. */
+function pruneLog(
+	log: HistoryLog,
+	evictedIds: ReadonlySet<string>,
+): HistoryLog {
+	const snapshots = log.snapshots.filter(
+		(entry) => !evictedIds.has(entry.id) || entry.pinned === true,
+	);
+	const keptIds = new Set(snapshots.map((entry) => entry.id));
+	const changes: HistoryLog["changes"] = {};
+	for (const [id, record] of Object.entries(log.changes)) {
+		if (keptIds.has(id)) changes[id] = record;
+	}
+	return { ...log, snapshots, changes };
+}
+
+/** Returns false when a pin's manifest could not be read. */
+async function addPinnedHashes(
+	storage: ObjectStorage,
+	key: EncryptionKey,
+	pinned: readonly SnapshotEntry[],
+	into: Set<string>,
+): Promise<boolean> {
+	let complete = true;
+	for (const entry of pinned) {
+		const manifest = await readPinManifest(storage, key, entry.id);
+		if (!manifest) {
+			reportWarning(
+				`Pinned snapshot "${entry.id}" has no stored manifest, so old file contents cannot be cleaned up. Unpin and pin it again to repair it.`,
+			);
+			complete = false;
+			continue;
+		}
+		collectHashes(manifest, into);
+	}
+	return complete;
 }
 
 export function collectHashes(manifest: Manifest, into: Set<string>): void {

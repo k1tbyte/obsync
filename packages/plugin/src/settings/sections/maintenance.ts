@@ -32,14 +32,14 @@ const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
 	},
 	{
 		name: "Deep-clean orphaned objects",
-		desc: "List storage and delete blobs/snapshots unreachable from the manifest or history.",
+		desc: "List storage and delete file contents and pins unreachable from the manifest or history.",
 		buttonText: "Deep-clean",
 		warning: true,
 		run: deepCleanOrphanedObjects,
 	},
 	{
 		name: "Reset remote storage",
-		desc: "Delete the remote Obsync manifest and objects on the configured backend.",
+		desc: "Delete the remote Obsync manifest, file contents, version history and pins on the configured backend.",
 		buttonText: "Reset remote",
 		warning: true,
 		run: resetRemoteStorage,
