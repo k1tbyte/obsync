@@ -18,7 +18,7 @@
 		"noUncheckedIndexedAccess": true,
 		"isolatedModules": true,
 		"allowSyntheticDefaultImports": true,
-		"lib": ["DOM", "ES2018"]
+		"lib": ["DOM", "ES2018", "ES2022.Object"]
 	},
 	"include": ["src/**/*.ts", "tests/**/*.ts"]
 }

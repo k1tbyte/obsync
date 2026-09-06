@@ -29,15 +29,26 @@ export function registerStatusBar(
 	const text = root.createSpan();
 
 	const render = (snapshot: SyncStatusSnapshot): void => {
-		spinner.toggleClass("obsync-hidden", !snapshot.busy);
-		root.toggleClass("is-error", Boolean(snapshot.error));
-		text.setText(formatStatus(snapshot));
-		root.setAttr("aria-label", buildTooltip(snapshot));
+		const offline = !navigator.onLine;
+		spinner.toggleClass("obsync-hidden", !snapshot.busy || offline);
+		root.toggleClass("is-error", Boolean(snapshot.error) && !offline);
+		root.toggleClass("is-offline", offline);
+		text.setText(offline ? "Obsync: offline" : formatStatus(snapshot));
+		root.setAttr(
+			"aria-label",
+			offline
+				? "No network connection. Obsync will sync once it is back."
+				: buildTooltip(snapshot),
+		);
 	};
 
 	render(controller.getSnapshot());
 	const unsubscribe = controller.subscribe(render);
 	plugin.register(unsubscribe);
+	// An error caused by a dropped connection should not read as a broken remote.
+	const renderCurrent = (): void => render(controller.getSnapshot());
+	plugin.registerDomEvent(window, "online", renderCurrent);
+	plugin.registerDomEvent(window, "offline", renderCurrent);
 }
 
 function formatStatus(snapshot: SyncStatusSnapshot): string {

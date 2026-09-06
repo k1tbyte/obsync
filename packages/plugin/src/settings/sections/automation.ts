@@ -60,7 +60,7 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Toggle,
 		name: "File version history",
-		desc: "Keep past versions of files so you can view or restore them. Adds a small encrypted snapshot per push; old versions are pruned automatically.",
+		desc: "Keep past versions of files so you can view or restore them. Each push appends what it changed to one small encrypted log; old versions are pruned automatically.",
 		get: (s) => s.fileHistoryEnabled,
 		set: (v) => ({ fileHistoryEnabled: v }),
 		rerender: true,

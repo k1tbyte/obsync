@@ -3,6 +3,7 @@ import { LOG_PATH_LIMIT } from "@/sync/constants";
 import type { EngineDependencies } from "@/sync/engine";
 import {
 	type CleanResult,
+	cleanSummary,
 	deepCleanOrphans,
 	type VerifyResult,
 	verifyRemote,
@@ -38,7 +39,7 @@ export class MaintenanceService {
 		const result = await deepCleanOrphans(session.storage, session.key);
 		await this.deps.logInfo(
 			ESyncLogOperation.Reset,
-			`Deep-clean removed ${result.deletedObjects} object(s) and ${result.deletedSnapshots} snapshot(s).`,
+			`Deep-clean ${cleanSummary(result)}`,
 		);
 		return result;
 	}

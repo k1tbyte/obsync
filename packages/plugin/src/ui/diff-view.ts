@@ -13,7 +13,11 @@ import type { PluginHost } from "@/plugin/host";
 import { errorMessage } from "@/shared/errors";
 import { formatBytes } from "@/shared/format";
 import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
-import type { FileDiffModel } from "@/sync/projection";
+import {
+	EDiffDirection,
+	type FileDiffModel,
+	type HistoryVersionRef,
+} from "@/sync/projection";
 import {
 	type DiffHeaderActions,
 	type HunkCardCallbacks,
@@ -29,6 +33,10 @@ interface DiffViewState {
 	historyHash?: string;
 	historyLabel?: string;
 	historySize?: number;
+	/** Set to diff two stored versions instead of a version against the vault. */
+	againstHash?: string;
+	againstLabel?: string;
+	againstSize?: number;
 }
 
 const EDiffMode = {
@@ -51,6 +59,7 @@ export class DiffView extends ItemView {
 	private historyHash: string | null = null;
 	private historyLabel = "Version";
 	private historySize: number | undefined;
+	private against: HistoryVersionRef | null = null;
 	private model: FileDiffModel | null = null;
 	private mode: EDiffMode = EDiffMode.Unified;
 	private merge: MergeView | null = null;
@@ -89,18 +98,32 @@ export class DiffView extends ItemView {
 			historyHash: this.historyHash ?? undefined,
 			historyLabel: this.historyHash ? this.historyLabel : undefined,
 			historySize: this.historySize,
+			againstHash: this.against?.hash,
+			againstLabel: this.against?.label,
+			againstSize: this.against?.size,
 		};
 	}
 
 	async setState(state: DiffViewState, result: ViewStateResult): Promise<void> {
 		const changed =
 			(state.path && state.path !== this.path) ||
-			(state.historyHash ?? null) !== this.historyHash;
+			(state.historyHash ?? null) !== this.historyHash ||
+			(state.againstHash ?? null) !== (this.against?.hash ?? null) ||
+			// A pin rename changes the label alone, and the header reads it.
+			(state.historyHash !== undefined &&
+				(state.historyLabel ?? "Version") !== this.historyLabel);
 		if (changed) {
 			this.path = state.path ?? this.path;
 			this.historyHash = state.historyHash ?? null;
 			this.historyLabel = state.historyLabel ?? "Version";
 			this.historySize = state.historySize;
+			this.against = state.againstHash
+				? {
+						hash: state.againstHash,
+						label: state.againstLabel ?? "Other version",
+						size: state.againstSize,
+					}
+				: null;
 			this.currentHunkIndex = -1;
 			this.mergePanel.reset();
 			this.forceText = false;
@@ -156,13 +179,18 @@ export class DiffView extends ItemView {
 		try {
 			this.renderLoading();
 			if (this.historyHash) {
-				this.model = await this.plugin.controller.getHistoryDiff(
-					this.path,
-					this.historyHash,
-					this.historyLabel,
-					this.forceText,
-					this.historySize,
-				);
+				this.model = await this.plugin.controller.getHistoryDiff({
+					path: this.path,
+					left: {
+						version: {
+							hash: this.historyHash,
+							label: this.historyLabel,
+							size: this.historySize,
+						},
+					},
+					right: this.against ? { version: this.against } : { current: true },
+					forceText: this.forceText,
+				});
 				if (!this.model) {
 					this.renderError("This version is no longer available.");
 					return;
@@ -259,6 +287,9 @@ export class DiffView extends ItemView {
 						: "Side-by-side",
 				canGoPrevFile: this.getAdjacentPath(-1) !== null,
 				canGoNextFile: this.getAdjacentPath(1) !== null,
+				restoreLabel: this.against
+					? `Restore ${this.historyLabel}`
+					: "Restore this version",
 			},
 			actions,
 		);
@@ -361,9 +392,17 @@ export class DiffView extends ItemView {
 			onSelectHunk: (i) => this.setCurrentHunk(i),
 		};
 		// Disable hunk ops above HUNK_TEXT_MAX_BYTES to prevent guaranteed failures.
-		const actionable =
-			model.leftSize <= HUNK_TEXT_MAX_BYTES &&
-			model.rightSize <= HUNK_TEXT_MAX_BYTES;
+		const tooLarge =
+			model.leftSize > HUNK_TEXT_MAX_BYTES ||
+			model.rightSize > HUNK_TEXT_MAX_BYTES;
+		// Per-hunk restore rebuilds the patch against the file on disk, which is not
+		// one of the sides here, so its indices would not be the ones on screen.
+		const comparingVersions = this.against !== null;
+		// The working copy is what a hunk restore edits; there is nothing to edit
+		// when the file is gone, which is exactly the case for a deleted file.
+		const missingWorkingCopy =
+			model.direction === EDiffDirection.History && !model.rightPresent;
+		const actionable = !tooLarge && !comparingVersions && !missingWorkingCopy;
 		for (const hunk of hunks) {
 			this.hunkCards.push(
 				renderHunkCard(list, hunk, model.direction, callbacks, actionable),
@@ -372,7 +411,7 @@ export class DiffView extends ItemView {
 		if (!actionable) {
 			list.createDiv({
 				cls: "obsync-diff-hint",
-				text: "This file is too large for per-hunk actions; use the whole-file buttons above.",
+				text: hunkHintText(tooLarge, comparingVersions),
 			});
 		}
 		if (
@@ -445,6 +484,7 @@ export class DiffView extends ItemView {
 					path,
 					historyHash,
 					new Set([index]),
+					this.model?.rightHash,
 				),
 			"Restored hunk. Review and push when ready.",
 			"Restore hunk failed",
@@ -560,6 +600,12 @@ export class DiffView extends ItemView {
 	 * Resetting forceText is load-bearing: diff-view must never load binary content. */
 	private showFile(path: string): void {
 		this.path = path;
+		// A version hash belongs to one file; carrying it over would diff the new
+		// path against the old file's stored content.
+		this.historyHash = null;
+		this.historyLabel = "Version";
+		this.historySize = undefined;
+		this.against = null;
 		this.currentHunkIndex = -1;
 		this.forceText = false;
 		this.mergePanel.reset();
@@ -575,4 +621,15 @@ export class DiffView extends ItemView {
 		}
 		this.mergePanel.destroy();
 	}
+}
+
+/** Says why hunk actions are off, since the buttons simply vanish otherwise. */
+function hunkHintText(tooLarge: boolean, comparingVersions: boolean): string {
+	if (tooLarge) {
+		return "This file is too large for per-hunk actions; use the whole-file buttons above.";
+	}
+	if (comparingVersions) {
+		return "Comparing two stored versions. Use the restore button above to bring the left side back.";
+	}
+	return "This file is not in the vault, so there is nothing to merge into. Restore the whole version instead.";
 }

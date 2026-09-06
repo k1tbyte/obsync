@@ -1,6 +1,7 @@
 import type { PluginHost } from "@/plugin/host";
 import { activeStorage } from "@/settings/model";
 import { describeStorageTarget } from "@/storage";
+import { cleanSummary } from "@/sync/maintenance";
 
 import { confirmRemoteReset } from "./modals";
 import { notifyError, notifyInfo, reportError } from "./notices";
@@ -36,7 +37,7 @@ export async function deepCleanOrphanedObjects(
 		app: plugin.app,
 		title: "Deep-clean orphaned objects?",
 		body: [
-			"Lists remote storage and permanently deletes object blobs and archived snapshots not reachable from the current manifest or snapshot history.",
+			"Lists remote storage and permanently deletes file contents and pinned snapshots that nothing in the current vault or its history still refers to.",
 			"Safe in normal operation, but cannot be undone.",
 		],
 		confirmLabel: "Deep-clean",
@@ -49,9 +50,7 @@ export async function deepCleanOrphanedObjects(
 			notifyError(NO_STORAGE);
 			return;
 		}
-		notifyInfo(
-			`Deep-clean removed ${result.deletedObjects} object(s), ${result.deletedSnapshots} snapshot(s).`,
-		);
+		notifyInfo(`Deep-clean ${cleanSummary(result)}`);
 	} catch (err) {
 		reportError(err);
 	}

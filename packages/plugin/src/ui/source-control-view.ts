@@ -13,6 +13,8 @@ import {
 	SectionStateManager,
 	SourceControlActions,
 	showIgnoredFiles,
+	TimelineTab,
+	TrashTab,
 	type TreeNode,
 } from "./source-control";
 
@@ -21,6 +23,8 @@ type SectionActionKind = "push" | "pull" | "none";
 const ESourceTab = {
 	Changes: "changes",
 	History: "history",
+	Deleted: "deleted",
+	Timeline: "timeline",
 } as const;
 type ESourceTab = (typeof ESourceTab)[keyof typeof ESourceTab];
 
@@ -53,6 +57,17 @@ export async function openSourceControlHistory(
 	if (view instanceof SourceControlView) view.showHistory(path ?? null);
 }
 
+export async function openSourceControlDeleted(
+	plugin: PluginHost,
+): Promise<void> {
+	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+	const leaf = plugin.app.workspace.getLeavesOfType(
+		SOURCE_CONTROL_VIEW_TYPE,
+	)[0];
+	const view = leaf?.view;
+	if (view instanceof SourceControlView) view.showDeleted();
+}
+
 export async function openSourceControlView(
 	app: App,
 	viewType: string,
@@ -83,7 +98,11 @@ export class SourceControlView extends ItemView {
 	private unsubscribe: (() => void) | null = null;
 	private lastSignature = "";
 	private tab: ESourceTab = ESourceTab.Changes;
+	/** Case-insensitive substring over paths. Survives re-renders, not reloads. */
+	private filter = "";
 	private historyTab!: HistoryTab;
+	private trashTab!: TrashTab;
+	private timelineTab!: TimelineTab;
 
 	constructor(leaf: WorkspaceLeaf, plugin: PluginHost) {
 		super(leaf);
@@ -118,11 +137,23 @@ export class SourceControlView extends ItemView {
 			this.plugin,
 			() => this.render(this.plugin.controller.getSnapshot(), true),
 			(path, history) => openDiffView(this.plugin, path, history),
+			() => this.showDeleted(),
+		);
+		this.trashTab = new TrashTab(
+			this.plugin,
+			() => this.render(this.plugin.controller.getSnapshot(), true),
+			(path, history) => openDiffView(this.plugin, path, history),
+		);
+		this.timelineTab = new TimelineTab(this.plugin, () =>
+			this.render(this.plugin.controller.getSnapshot(), true),
 		);
 		this.registerEvent(
-			this.app.workspace.on("file-open", () => {
+			this.app.workspace.on("file-open", (file) => {
 				if (this.tab !== ESourceTab.History) return;
 				if (!this.historyTab.isFollowingCurrentFile()) return;
+				// Opening the diff itself fires this with no file; that is not a
+				// reason to throw away the history the user just clicked into.
+				if (!file) return;
 				this.historyTab.clearVersions();
 				this.render(this.plugin.controller.getSnapshot(), true);
 			}),
@@ -142,6 +173,8 @@ export class SourceControlView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		// A load still in flight will call back; without this it rebuilds a dead view.
+		this.root = null;
 		this.contentEl.empty();
 	}
 
@@ -151,22 +184,40 @@ export class SourceControlView extends ItemView {
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
-	/** Reload history after a push only if the History tab shows a file. */
+	showDeleted(): void {
+		this.tab = ESourceTab.Deleted;
+		this.render(this.plugin.controller.getSnapshot(), true);
+	}
+
+	private renderActiveTab(root: HTMLElement): void {
+		if (this.tab === ESourceTab.History) this.historyTab.render(root);
+		else if (this.tab === ESourceTab.Deleted) this.trashTab.render(root);
+		else this.timelineTab.render(root);
+	}
+
+	/** A push adds a snapshot, so every history-backed tab is stale afterwards. */
 	refreshHistoryAfterPush(): void {
-		if (this.tab !== ESourceTab.History || !this.historyTab.hasPath) return;
-		this.historyTab.clearVersions();
+		if (this.tab === ESourceTab.Deleted) {
+			this.trashTab.clear();
+		} else if (this.tab === ESourceTab.Timeline) {
+			this.timelineTab.clear();
+		} else if (this.tab === ESourceTab.History && this.historyTab.hasPath) {
+			this.historyTab.clearVersions();
+		} else {
+			return;
+		}
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
 	private render(snapshot: SyncStatusSnapshot, force = false): void {
 		if (!this.root) return;
-		if (this.tab === ESourceTab.History) {
+		if (this.tab !== ESourceTab.Changes) {
 			if (!force) return;
 			this.lastSignature = "";
-			const historyRoot = this.root;
-			historyRoot.empty();
-			this.renderTabBar(historyRoot);
-			this.historyTab.render(historyRoot);
+			const tabRoot = this.root;
+			tabRoot.empty();
+			this.renderTabBar(tabRoot);
+			this.renderActiveTab(tabRoot);
 			return;
 		}
 		const signature = this.signatureOf(snapshot);
@@ -187,6 +238,7 @@ export class SourceControlView extends ItemView {
 		this.renderTabBar(root);
 		this.renderToolbar(root, snapshot);
 		this.renderStatusLine(root, snapshot);
+		this.renderFilter(root);
 
 		const diff = snapshot.result?.diff;
 		if (!diff) {
@@ -213,7 +265,7 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Conflicts,
 			"Conflicts",
-			diff.conflicts.map(rowFromConflict),
+			this.applyFilter(diff.conflicts.map(rowFromConflict)),
 			snapshot,
 			"none",
 		);
@@ -221,7 +273,7 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Local,
 			"Local changes (will push)",
-			diff.localChanges.map(rowFromChange),
+			this.applyFilter(diff.localChanges.map(rowFromChange)),
 			snapshot,
 			"push",
 		);
@@ -229,11 +281,44 @@ export class SourceControlView extends ItemView {
 			root,
 			ESection.Remote,
 			"Remote changes (will pull)",
-			diff.remoteChanges.map(rowFromChange),
+			this.applyFilter(diff.remoteChanges.map(rowFromChange)),
 			snapshot,
 			"pull",
 		);
 		root.scrollTop = scrollTop;
+	}
+
+	private applyFilter(rows: ReadonlyArray<FileRow>): FileRow[] {
+		const needle = this.filter.trim().toLowerCase();
+		if (!needle) return [...rows];
+		return rows.filter((row) => row.path.toLowerCase().includes(needle));
+	}
+
+	/**
+	 * Narrows the lists without touching selection: a path filtered out of view
+	 * stays selected, so a filter can never silently shrink what an action does.
+	 */
+	private renderFilter(parent: HTMLElement): void {
+		const input = parent.createEl("input", {
+			type: "search",
+			cls: "obsync-history-search",
+		});
+		input.placeholder = "Filter by path…";
+		input.value = this.filter;
+		input.setAttr("aria-label", "Filter changed files by path");
+		input.addEventListener("input", () => {
+			this.filter = input.value;
+			const caret = input.selectionStart ?? input.value.length;
+			this.lastSignature = "";
+			this.render(this.plugin.controller.getSnapshot(), true);
+			// The re-render replaced this node; carry focus and caret to the new one.
+			const next = parent.querySelector<HTMLInputElement>(
+				".obsync-history-search",
+			);
+			if (!next) return;
+			next.focus();
+			next.setSelectionRange(caret, caret);
+		});
 	}
 
 	/** Re-renders only the parts that track sync progress. */
@@ -321,10 +406,11 @@ export class SourceControlView extends ItemView {
 			});
 			btn.type = "button";
 			if (tab === this.tab) btn.addClass("is-active");
+			// Re-renders even on the active tab, so a settings change can be picked up.
 			btn.addEventListener("click", () => {
-				if (this.tab === tab) return;
+				// Only an actual switch invalidates the change tree and its previews.
+				if (this.tab !== tab) this.lastSignature = "";
 				this.tab = tab;
-				this.lastSignature = "";
 				if (tab === ESourceTab.History && !this.historyTab.hasPath) {
 					const active = this.plugin.app.workspace.getActiveFile();
 					if (active) this.historyTab.setPath(active.path);
@@ -334,6 +420,8 @@ export class SourceControlView extends ItemView {
 		};
 		make(ESourceTab.Changes, "Changes");
 		make(ESourceTab.History, "History");
+		make(ESourceTab.Deleted, "Deleted");
+		make(ESourceTab.Timeline, "Timeline");
 	}
 
 	private renderStatusLine(
@@ -352,15 +440,23 @@ export class SourceControlView extends ItemView {
 			line.addClass("is-error");
 			line.setText(`Error: ${snapshot.error}`);
 			if (snapshot.error.includes("Remote vault id does not match local")) {
-				const retryBtn = line.createEl("button", {
+				const resolveBtn = line.createEl("button", {
 					text: "Resolve vault mismatch",
 					cls: ["mod-warning", "obsync-adopt-new-vault-btn"],
 				});
-				retryBtn.addEventListener(
+				resolveBtn.addEventListener(
 					"click",
 					() => void this.actions.adoptNewVault(),
 				);
+				return;
 			}
+			// Most errors here are transient - a dropped connection, a locked file.
+			const retryBtn = line.createEl("button", { text: "Retry" });
+			retryBtn.disabled = snapshot.busy;
+			retryBtn.addEventListener(
+				"click",
+				() => void this.plugin.controller.refresh(),
+			);
 			return;
 		}
 		if (snapshot.busy) {
@@ -630,10 +726,18 @@ export class SourceControlView extends ItemView {
 	}
 }
 
+export interface HistoryDiffTarget {
+	hash: string;
+	label: string;
+	size?: number;
+	/** Right side. Without it the version is diffed against the file on disk. */
+	against?: { hash: string; label: string; size?: number };
+}
+
 export async function openDiffView(
 	plugin: PluginHost,
 	path: string,
-	history?: { hash: string; label: string; size?: number },
+	history?: HistoryDiffTarget,
 ): Promise<void> {
 	const existing = plugin.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE);
 	const leaf = existing[0] ?? plugin.app.workspace.getLeaf(true);
@@ -645,6 +749,9 @@ export async function openDiffView(
 			historyHash: history?.hash,
 			historyLabel: history?.label,
 			historySize: history?.size,
+			againstHash: history?.against?.hash,
+			againstLabel: history?.against?.label,
+			againstSize: history?.against?.size,
 		},
 	});
 	await plugin.app.workspace.revealLeaf(leaf);

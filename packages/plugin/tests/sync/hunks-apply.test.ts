@@ -39,3 +39,45 @@ describe("history per-hunk restore semantics", () => {
 		);
 	});
 });
+
+/**
+ * The history view numbers its hunks from version-to-current, so a per-hunk
+ * restore must use that same patch. Keeping one hunk on the version's side means
+ * selecting every other hunk, which is easy to get backwards.
+ */
+describe("restoring one hunk from an older version", () => {
+	const version = ["one", ...pad, "two", ...pad, "three"].join("\n");
+	const current = ["ONE", ...pad, "TWO", ...pad, "THREE"].join("\n");
+
+	function restore(selected: ReadonlySet<number>): string {
+		const { hunks } = computeHunks(version, current);
+		const keepCurrent = new Set(
+			hunks.map((hunk) => hunk.index).filter((index) => !selected.has(index)),
+		);
+		return applyHunks(version, hunks, keepCurrent);
+	}
+
+	it("splits into one hunk per region", () => {
+		expect(computeHunks(version, current).hunks).toHaveLength(3);
+	});
+
+	it("brings back only the selected hunk", () => {
+		expect(restore(new Set([0]))).toBe(
+			["one", ...pad, "TWO", ...pad, "THREE"].join("\n"),
+		);
+	});
+
+	it("brings back the last hunk without disturbing the others", () => {
+		expect(restore(new Set([2]))).toBe(
+			["ONE", ...pad, "TWO", ...pad, "three"].join("\n"),
+		);
+	});
+
+	it("selecting every hunk reproduces the version exactly", () => {
+		expect(restore(new Set([0, 1, 2]))).toBe(version);
+	});
+
+	it("selecting none leaves the working copy untouched", () => {
+		expect(restore(new Set())).toBe(current);
+	});
+});

@@ -283,7 +283,7 @@ export async function publishFileMap(
 		deps.storage,
 		deps.key,
 		manifest,
-		compareResult.remote?.snapshotId ?? null,
+		compareResult.remote,
 		deps.history,
 		deps.state.baseline,
 	);

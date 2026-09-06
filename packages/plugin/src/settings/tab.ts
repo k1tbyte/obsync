@@ -148,6 +148,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		}
 
 		renderBackendSection(containerEl, this.plugin, () => this.display());
+		// Passphrase sits with the backend: together they are what a new device needs.
+		renderSecuritySection(containerEl, this.plugin, () => this.display());
 		this.renderTransferSection(containerEl);
 		this.renderSettingsSyncSection(containerEl);
 		const sharesUnsub = renderSharesSection(containerEl, this.plugin, () =>
@@ -163,8 +165,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		if (automationUnsub) this.sectionUnsubs.push(automationUnsub);
 		this.renderUiSection(containerEl);
 		this.renderAdvancedSection(containerEl);
+		// Last: everything here is destructive or diagnostic.
 		renderMaintenanceSection(containerEl, this.plugin);
-		renderSecuritySection(containerEl, this.plugin, () => this.display());
 	}
 
 	private fieldContext(): FieldContext {

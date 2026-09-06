@@ -2,11 +2,12 @@ import { FakeStorage } from "@tests/helpers/fake-storage";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey } from "@/crypto";
 import {
+	REMOTE_HISTORY_LOG_KEY,
 	REMOTE_KEYFILE_KEY,
+	REMOTE_LEGACY_SNAPSHOTS_PREFIX,
 	REMOTE_MANIFEST_KEY,
+	REMOTE_PINS_PREFIX,
 	REMOTE_SALT_KEY,
-	REMOTE_SNAPSHOT_INDEX_KEY,
-	REMOTE_SNAPSHOTS_PREFIX,
 } from "@/sync/constants";
 import { objectKey } from "@/sync/manifest";
 import { resetRemoteStorage } from "@/sync/reset";
@@ -22,8 +23,9 @@ function seed(): FakeStorage {
 	storage.map.set(REMOTE_MANIFEST_KEY, bytes);
 	storage.map.set(objectKey("aaa"), bytes);
 	storage.map.set(objectKey("bbb"), bytes);
-	storage.map.set(`${REMOTE_SNAPSHOTS_PREFIX}snap1.json.enc`, bytes);
-	storage.map.set(REMOTE_SNAPSHOT_INDEX_KEY, bytes);
+	storage.map.set(`${REMOTE_PINS_PREFIX}snap1.json.enc`, bytes);
+	storage.map.set(`${REMOTE_LEGACY_SNAPSHOTS_PREFIX}old.json.enc`, bytes);
+	storage.map.set(REMOTE_HISTORY_LOG_KEY, bytes);
 	storage.map.set(REMOTE_SALT_KEY, bytes);
 	storage.map.set(REMOTE_KEYFILE_KEY, bytes);
 	return storage;
@@ -37,10 +39,12 @@ describe("resetRemoteStorage", () => {
 		expect(storage.map.has(REMOTE_MANIFEST_KEY)).toBe(false);
 		expect(storage.map.has(objectKey("aaa"))).toBe(false);
 		expect(storage.map.has(objectKey("bbb"))).toBe(false);
-		expect(storage.map.has(`${REMOTE_SNAPSHOTS_PREFIX}snap1.json.enc`)).toBe(
-			false,
-		);
-		expect(storage.map.has(REMOTE_SNAPSHOT_INDEX_KEY)).toBe(false);
+		expect(storage.map.has(`${REMOTE_PINS_PREFIX}snap1.json.enc`)).toBe(false);
+		expect(storage.map.has(REMOTE_HISTORY_LOG_KEY)).toBe(false);
+		// The pre-change-log layout goes too, so migrating leaves no litter.
+		expect(
+			storage.map.has(`${REMOTE_LEGACY_SNAPSHOTS_PREFIX}old.json.enc`),
+		).toBe(false);
 		expect(result.deletedKeys).toContain(REMOTE_MANIFEST_KEY);
 	});
 
@@ -58,7 +62,7 @@ describe("resetRemoteStorage", () => {
 		const second = await resetRemoteStorage(storage, 2);
 		expect(second.deletedKeys).toEqual([
 			REMOTE_MANIFEST_KEY,
-			REMOTE_SNAPSHOT_INDEX_KEY,
+			REMOTE_HISTORY_LOG_KEY,
 		]);
 	});
 

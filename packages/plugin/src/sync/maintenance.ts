@@ -2,18 +2,19 @@ import { DEFAULT_CONCURRENCY } from "@/constants";
 import { decryptBytes, type EncryptionKey, sha256Hex } from "@/crypto";
 import type { StorageAdapter } from "@/storage/types";
 import {
+	REMOTE_LEGACY_SNAPSHOTS_PREFIX,
 	REMOTE_OBJECTS_PREFIX,
-	REMOTE_SNAPSHOT_INDEX_KEY,
-	REMOTE_SNAPSHOTS_PREFIX,
+	REMOTE_PINS_PREFIX,
 } from "@/sync/constants";
 import { runWithConcurrency } from "@/utils/concurrency";
-import { collectHashes } from "./history/gc";
 import {
-	fetchArchivedManifest,
-	readSnapshotIndex,
-	snapshotKey,
-} from "./history/store";
-import type { SnapshotIndex } from "./history/types";
+	collectChangeHashes,
+	collectHashes,
+	type HistoryLog,
+	pinKey,
+	readHistoryLog,
+	readPinManifest,
+} from "./history";
 import { fetchRemoteManifest, objectKey } from "./manifest";
 import type { Manifest } from "./types";
 
@@ -30,39 +31,49 @@ export interface VerifyResult {
 
 export interface CleanResult {
 	deletedObjects: number;
-	deletedSnapshots: number;
+	deletedPins: number;
+	/** Leftovers from the pre-change-log layout. */
+	deletedLegacy: number;
 }
 
-interface ReachableManifests {
-	manifests: Manifest[];
+interface ReachableSet {
+	hashes: Set<string>;
 	head: Manifest | null;
-	index: SnapshotIndex;
-	/** False when a snapshot could not be read, so live set is unknown. */
+	log: HistoryLog;
+	/** False when a pinned manifest could not be read, so the live set is unknown. */
 	complete: boolean;
 }
 
-/** Loads HEAD + every archived snapshot manifest reachable from the index. */
-async function reachableManifests(
+/** Every hash reachable from HEAD, the retained change records, and the pins. */
+async function reachableHashes(
 	storage: StorageAdapter,
 	key: EncryptionKey,
-	concurrency: number,
-): Promise<ReachableManifests> {
-	const manifests: Manifest[] = [];
-	const [head, index] = await Promise.all([
+): Promise<ReachableSet> {
+	const [head, log] = await Promise.all([
 		fetchRemoteManifest(storage, key),
-		readSnapshotIndex(storage, key),
+		readHistoryLog(storage, key),
 	]);
-	if (head) manifests.push(head);
+	const hashes = new Set<string>();
+	if (head) collectHashes(head, hashes);
 	let complete = true;
-	await runWithConcurrency(index.entries, concurrency, async (entry) => {
-		const m = await fetchArchivedManifest(storage, key, entry.snapshotId);
-		if (m) {
-			manifests.push(m);
-			return;
+	for (const entry of log.snapshots) {
+		const changes = log.changes[entry.id];
+		if (!changes) {
+			complete = false;
+			continue;
 		}
-		complete = false;
-	});
-	return { manifests, head, index, complete };
+		collectChangeHashes(changes, hashes);
+	}
+	for (const entry of log.snapshots) {
+		if (!entry.pinned) continue;
+		const manifest = await readPinManifest(storage, key, entry.id);
+		if (!manifest) {
+			complete = false;
+			continue;
+		}
+		collectHashes(manifest, hashes);
+	}
+	return { hashes, head, log, complete };
 }
 
 /**
@@ -76,16 +87,14 @@ export async function verifyRemote(
 	options: MaintenanceOptions = {},
 ): Promise<VerifyResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const reachable = await reachableManifests(storage, key, concurrency);
+	const reachable = await reachableHashes(storage, key);
 	if (!reachable.complete) {
 		throw new Error(
-			"Some snapshots could not be read, so the check would be incomplete. Try again later.",
+			"Some history records could not be read, so the check would be incomplete. Try again later.",
 		);
 	}
-	const hashes = new Set<string>();
-	for (const m of reachable.manifests) collectHashes(m, hashes);
 
-	const list = [...hashes];
+	const list = [...reachable.hashes];
 	const missing: string[] = [];
 	const corrupt: string[] = [];
 	let done = 0;
@@ -107,7 +116,7 @@ export async function verifyRemote(
 }
 
 /**
- * Removes objects and archived snapshots not reachable from HEAD or the index.
+ * Removes objects and pin manifests not reachable from HEAD or the history log.
  * Requires a backend that can list.
  */
 export async function deepCleanOrphans(
@@ -116,11 +125,11 @@ export async function deepCleanOrphans(
 	options: MaintenanceOptions = {},
 ): Promise<CleanResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const reachable = await reachableManifests(storage, key, concurrency);
-	// An unreadable snapshot means live set is unknown, so we cannot safely delete.
+	const reachable = await reachableHashes(storage, key);
+	// An unreadable record means the live set is unknown, so we cannot safely delete.
 	if (!reachable.complete) {
 		throw new Error(
-			"Some snapshots could not be read, so orphans cannot be identified safely. Try again later.",
+			"Some history records could not be read, so orphans cannot be identified safely. Try again later.",
 		);
 	}
 	// Without head, objects from an in-progress upload would look like orphans.
@@ -129,17 +138,17 @@ export async function deepCleanOrphans(
 			"No manifest is published on this remote, so nothing can be identified as an orphan.",
 		);
 	}
-	const liveHashes = new Set<string>();
-	for (const m of reachable.manifests) collectHashes(m, liveHashes);
 
-	const liveSnapshotKeys = new Set<string>([
-		REMOTE_SNAPSHOT_INDEX_KEY,
-		...reachable.index.entries.map((e) => snapshotKey(e.snapshotId)),
-	]);
+	const livePinKeys = new Set(
+		reachable.log.snapshots
+			.filter((entry) => entry.pinned)
+			.map((entry) => pinKey(entry.id)),
+	);
 
-	const [objectKeys, snapshotKeys] = await Promise.all([
+	const [objectKeys, pinKeys, legacyKeys] = await Promise.all([
 		storage.list(REMOTE_OBJECTS_PREFIX),
-		storage.list(REMOTE_SNAPSHOTS_PREFIX),
+		storage.list(REMOTE_PINS_PREFIX),
+		storage.list(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
 	]);
 
 	// If another device published during listing, its new objects appear as orphans. Bail.
@@ -149,17 +158,34 @@ export async function deepCleanOrphans(
 			"Another device pushed while cleaning; nothing was deleted. Try again.",
 		);
 	}
+	// Pinning does not move HEAD, so the head check alone would let a pin created
+	// during the listing look like an orphan.
+	const logNow = await readHistoryLog(storage, key);
+	if (pinnedSignature(logNow) !== pinnedSignature(reachable.log)) {
+		throw new Error(
+			"Another device changed a pinned snapshot while cleaning; nothing was deleted. Try again.",
+		);
+	}
 
-	const liveObjectKeys = new Set([...liveHashes].map((h) => objectKey(h)));
+	const liveObjectKeys = new Set(
+		[...reachable.hashes].map((hash) => objectKey(hash)),
+	);
 	const orphanObjects = objectKeys.filter(
-		(k) => k.startsWith(REMOTE_OBJECTS_PREFIX) && !liveObjectKeys.has(k),
+		(storageKey) =>
+			storageKey.startsWith(REMOTE_OBJECTS_PREFIX) &&
+			!liveObjectKeys.has(storageKey),
+	);
+	const orphanPins = pinKeys.filter(
+		(storageKey) =>
+			storageKey.startsWith(REMOTE_PINS_PREFIX) && !livePinKeys.has(storageKey),
 	);
 
-	const orphanSnapshots = snapshotKeys.filter(
-		(k) => k.startsWith(REMOTE_SNAPSHOTS_PREFIX) && !liveSnapshotKeys.has(k),
+	// Nothing reads the pre-change-log layout, so all of it is orphaned.
+	const legacy = legacyKeys.filter((storageKey) =>
+		storageKey.startsWith(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
 	);
 
-	const targets = [...orphanObjects, ...orphanSnapshots];
+	const targets = [...orphanObjects, ...orphanPins, ...legacy];
 	let done = 0;
 	await runWithConcurrency(targets, concurrency, async (storageKey) => {
 		await storage.delete(storageKey);
@@ -167,6 +193,27 @@ export async function deepCleanOrphans(
 	});
 	return {
 		deletedObjects: orphanObjects.length,
-		deletedSnapshots: orphanSnapshots.length,
+		deletedPins: orphanPins.length,
+		deletedLegacy: legacy.length,
 	};
+}
+
+function pinnedSignature(log: HistoryLog): string {
+	return log.snapshots
+		.filter((entry) => entry.pinned)
+		.map((entry) => entry.id)
+		.sort()
+		.join(",");
+}
+
+/** One sentence for the log and the notice, so both stay in step. */
+export function cleanSummary(result: CleanResult): string {
+	const parts = [
+		`${result.deletedObjects} object(s)`,
+		`${result.deletedPins} pinned snapshot(s)`,
+	];
+	if (result.deletedLegacy > 0) {
+		parts.push(`${result.deletedLegacy} leftover(s) from the old layout`);
+	}
+	return `removed ${parts.join(", ")}.`;
 }
