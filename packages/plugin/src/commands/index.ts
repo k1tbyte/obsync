@@ -1,8 +1,9 @@
-import { MarkdownView } from "obsidian";
+import { MarkdownView, type Plugin } from "obsidian";
 import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	deepCleanOrphanedObjects,
+	JoinShareModal,
 	notifyError,
 	notifyInfo,
 	openDiffView,
@@ -11,9 +12,8 @@ import {
 	resetRemoteStorage,
 	verifyRemoteIntegrity,
 } from "@/ui";
-import { JoinShareModal } from "@/ui/modals/share-modals";
 
-export function registerCommands(plugin: ObsyncPlugin): void {
+export function registerCommands(plugin: Plugin & PluginHost): void {
 	plugin.addCommand({
 		id: "compare",
 		name: "Compare with remote",
@@ -55,7 +55,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		id: "forget-passphrase",
 		name: "Forget cached passphrase",
 		callback: async () => {
-			await plugin.forgetPassphrase();
+			await plugin.passphrase.forget();
 			notifyInfo("Passphrase forgotten.");
 		},
 	});
@@ -105,7 +105,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 				.then(() => {
 					// syncAll swallows per-share failures into their statuses.
 					const failed = plugin.settings.sharedFolders.filter(
-						(share) => plugin.shares?.getStatus(share.id).error,
+						(share) => plugin.shares.getStatus(share.id).error,
 					).length;
 					if (failed > 0) {
 						notifyError(
@@ -139,7 +139,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	});
 }
 
-async function runCompare(plugin: ObsyncPlugin): Promise<void> {
+async function runCompare(plugin: Plugin & PluginHost): Promise<void> {
 	try {
 		await plugin.controller.refresh();
 		await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
@@ -148,7 +148,7 @@ async function runCompare(plugin: ObsyncPlugin): Promise<void> {
 	}
 }
 
-async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
+async function runPushAll(plugin: Plugin & PluginHost): Promise<void> {
 	try {
 		// Always re-compare first: acting on a stale diff can push a file another
 		// device has since changed, and can miss conflicts entirely.
@@ -174,7 +174,7 @@ async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
 	}
 }
 
-async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
+async function runPullAll(plugin: Plugin & PluginHost): Promise<void> {
 	try {
 		await plugin.controller.refresh();
 		const diff = plugin.controller.getSnapshot().result?.diff;
@@ -193,7 +193,7 @@ async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
 
 /** Push and pull must never choose a side silently; conflicts go to the user. */
 async function announceConflicts(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	count: number,
 ): Promise<boolean> {
 	if (count === 0) return false;
@@ -202,7 +202,9 @@ async function announceConflicts(
 	return true;
 }
 
-async function resetRemoteStorageCommand(plugin: ObsyncPlugin): Promise<void> {
+async function resetRemoteStorageCommand(
+	plugin: Plugin & PluginHost,
+): Promise<void> {
 	if (!(await resetRemoteStorage(plugin))) return;
 	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 }

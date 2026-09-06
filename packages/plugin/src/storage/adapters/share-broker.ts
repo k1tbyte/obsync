@@ -1,14 +1,17 @@
 import { requestUrl } from "obsidian";
 
-import { DEFAULT_CONCURRENCY } from "../../constants";
-import { toArrayBuffer } from "../../utils/bytes";
-import { EStorageBackend, type ShareBrokerStorageConfig } from "../config";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import {
+	EStorageBackend,
+	type ShareBrokerStorageConfig,
+} from "@/storage/config";
 import {
 	CONCURRENCY_FIELD,
 	EFieldKind,
 	type SettingsFieldSpec,
-} from "../field-spec";
-import type { StorageAdapter } from "../types";
+} from "@/storage/field-spec";
+import type { StorageAdapter } from "@/storage/types";
+import { toArrayBuffer } from "@/utils/bytes";
 import {
 	assertOk,
 	isRetryableStatus,
@@ -19,12 +22,8 @@ import {
 } from "./util";
 
 /**
- * Storage for a shared folder joined from an invite.
- *
- * Holds no credentials. Each operation asks the owner's broker to presign a
- * single S3 URL for one key, then performs the transfer directly against S3 —
- * object bytes never pass through the broker. Requests go through Obsidian's
- * `requestUrl` so neither the broker nor the bucket needs CORS configured.
+ * Storage for shared folder joined from invite.
+ * Holds no credentials. Operations ask broker to presign S3 URL for one key, then transfer directly against S3 - object bytes never pass through broker. Uses requestUrl so neither needs CORS.
  */
 
 const EOp = {
@@ -74,7 +73,7 @@ export function shareBrokerIdentity(config: ShareBrokerStorageConfig): string {
 	return `share-broker|${normalizeUrl(config.brokerUrl)}|${fingerprint(config.shareToken)}`;
 }
 
-/** Short, stable, non-reversible stand-in for a secret used as a map key. */
+/** Hash of secret for map key usage. */
 function fingerprint(secret: string): string {
 	let hash = 0x811c9dc5;
 	for (let i = 0; i < secret.length; i++) {
@@ -176,7 +175,6 @@ interface TransferOptions {
 	headers?: Record<string, string>;
 }
 
-/** Presign one key, then run the transfer straight against storage. */
 async function signedRequest(
 	config: ShareBrokerStorageConfig,
 	body: { op: EOp; key?: string },
@@ -214,11 +212,7 @@ async function transfer(
 	});
 }
 
-/**
- * The broker is the owner's server, but the URL it hands back is followed
- * blind, so it must at least be an ordinary https endpoint rather than a
- * loopback or file address.
- */
+/** Enforces HTTPS on broker-supplied URLs to prevent following links to loopback/file addresses. */
 function assertSignedUrl(url: string): void {
 	let parsed: URL;
 	try {
@@ -236,11 +230,7 @@ function assertSignedUrl(url: string): void {
 	}
 }
 
-/**
- * A broker is meant to hand back a public object-store URL. One pointing at
- * loopback, a link-local address or an RFC1918 range would turn every object
- * transfer into a request against something inside the user's own network.
- */
+/** Prevents broker-supplied URLs from targeting private networks (loopback, link-local, RFC1918). */
 function isPrivateHost(hostname: string): boolean {
 	const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
 	if (host === "localhost" || host.endsWith(".localhost")) return true;
@@ -292,8 +282,7 @@ async function sign(
 
 type BrokerResponse = Awaited<ReturnType<typeof requestUrl>>;
 
-/** `res.json` parses lazily and throws on an HTML error page, which would mask
- * the status that actually explains the failure. */
+/** Extracts JSON error without throwing on HTML error pages which would mask HTTP status. */
 function brokerError(res: BrokerResponse): string {
 	try {
 		const body = res.json as { message?: string; error?: string } | undefined;
@@ -305,7 +294,6 @@ function brokerError(res: BrokerResponse): string {
 	return `HTTP ${res.status}`;
 }
 
-/** Extracts keys and the continuation cursor from a ListObjectsV2 response. */
 function parseListObjectsV2(xml: string): { keys: string[]; cursor?: string } {
 	const keys = [...xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((match) =>
 		decodeXml(match[1] ?? ""),

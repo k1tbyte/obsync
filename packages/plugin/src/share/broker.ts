@@ -1,10 +1,10 @@
 import { requestUrl } from "obsidian";
 
-import { DEFAULT_CONCURRENCY } from "../constants";
+import { DEFAULT_CONCURRENCY } from "@/constants";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
-} from "../storage/config";
+} from "@/storage/config";
 
 /**
  * Admin client for the owner's self-hosted broker.
@@ -26,7 +26,6 @@ export function isBrokerConfigured(admin: BrokerAdmin): boolean {
 	return Boolean(admin.url.trim() && admin.adminSecret.trim());
 }
 
-/** Mints a token for one participant and wraps it as joinable storage. */
 export async function issueShareToken(
 	admin: BrokerAdmin,
 	shareId: string,
@@ -70,8 +69,7 @@ export async function listShareParticipants(
 	return body.participants ?? [];
 }
 
-/** Revokes every outstanding invite for a share. Used when the owner stops
- * sharing, so no token outlives the share it was issued for. */
+/** Used when the owner stops sharing, so no token outlives the share. */
 export async function revokeAllShareTokens(
 	admin: BrokerAdmin,
 	shareId: string,

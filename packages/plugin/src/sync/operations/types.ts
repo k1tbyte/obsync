@@ -1,15 +1,13 @@
-import type { ESyncLogOperation } from "../../logs/store";
-import type { Manifest, ManifestEntry, SessionState } from "../../types";
-import type { CompareResult, EngineDependencies } from "../engine";
+import type { ESyncLogOperation } from "@/logs/store";
+import type { CompareResult, EngineDependencies } from "@/sync/engine";
+import type { Manifest, ManifestEntry, SessionState } from "@/sync/types";
 
 export interface OperationOutcome {
 	newRemote: Manifest | null;
 	touchedPaths: ReadonlySet<string>;
 	/**
-	 * What the touched paths now actually look like on disk. Without it
-	 * `recomputeAfterWrite` assumes a touched path equals baseline (or remote),
-	 * which is false after a partial hunk apply and makes the file vanish from
-	 * the source control view.
+	 * Actual on-disk state of touched paths. Prevents `recomputeAfterWrite` from incorrectly
+	 * assuming baseline/remote state after partial hunk apply.
 	 */
 	localEntries?: ReadonlyMap<string, ManifestEntry | null>;
 }

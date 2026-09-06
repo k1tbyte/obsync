@@ -7,15 +7,15 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 
-import { DEFAULT_CONCURRENCY } from "../../constants";
-import { normalizeKeyPrefix } from "../../shared/path";
-import { EStorageBackend, type S3StorageConfig } from "../config";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { normalizeKeyPrefix } from "@/shared/path";
+import { EStorageBackend, type S3StorageConfig } from "@/storage/config";
 import {
 	CONCURRENCY_FIELD,
 	EFieldKind,
 	type SettingsFieldSpec,
-} from "../field-spec";
-import type { StorageAdapter } from "../types";
+} from "@/storage/field-spec";
+import type { StorageAdapter } from "@/storage/types";
 import { STORAGE_TIMEOUT_MS, withRetry, withTimeout } from "./util";
 
 export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
@@ -81,8 +81,7 @@ export function describeS3Target(config: S3StorageConfig): string {
 export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	assertConfig(config);
 	const client = new S3Client({
-		// One retry policy for every backend lives in withRetry; leaving the SDK
-		// default on top of it would multiply out to a dozen attempts per call.
+		// SDK retries disabled to avoid compounding with shared retry policy.
 		maxAttempts: 1,
 		region: config.region || "auto",
 		endpoint: config.endpoint || undefined,
@@ -220,12 +219,10 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	};
 }
 
-/** Every S3 call gets the same deadline. */
 function s3Timeout<T>(promise: Promise<T>): Promise<T> {
 	return withTimeout(promise, STORAGE_TIMEOUT_MS);
 }
 
-/** The conditional write lost the race: another device wrote the key first. */
 function isPreconditionFailed(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
@@ -248,7 +245,7 @@ function isNotFound(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
 	// NoSuchBucket is also a 404, but it means the configuration is wrong, not
-	// that the vault is empty — reporting it as absence would re-upload
+	// that the vault is empty - reporting it as absence would re-upload
 	// everything into nowhere.
 	if (e.name === "NoSuchBucket") return false;
 	return (

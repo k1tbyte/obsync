@@ -3,7 +3,7 @@ import {
 	IV_BYTES,
 	KDF_ITERATIONS,
 	KDF_SALT_LABEL,
-} from "../constants";
+} from "@/crypto/constants";
 
 const subtle = window.crypto.subtle;
 const encoder = new TextEncoder();

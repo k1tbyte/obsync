@@ -2,11 +2,7 @@ import type { Modal } from "obsidian";
 
 /**
  * Opens a modal that answers with a value.
- *
- * The promise always settles: Escape and a click outside close the modal
- * without touching its buttons, and a caller awaiting the answer would
- * otherwise wait forever — which is how a dismissed passphrase prompt used to
- * stall the whole sync.
+ * The promise always settles so callers do not wait forever - which used to stall sync.
  */
 export function openPromiseModal<T>(
 	create: (answer: (value: T) => void) => Modal,

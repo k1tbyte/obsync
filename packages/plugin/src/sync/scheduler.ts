@@ -1,16 +1,22 @@
 import { debounce, type Plugin, type TAbstractFile } from "obsidian";
 
-import {
-	AUTO_PULL_BUSY_COOLDOWN_MS,
-	AUTO_PULL_STARTUP_DELAY_MS,
-	SCHEDULER_BACKOFF_BASE_MS,
-	SCHEDULER_BACKOFF_MAX_MS,
-	SCHEDULER_BACKOFF_THRESHOLD,
-	SCHEDULER_HEARTBEAT_MS,
-	VAULT_EVENT_DEBOUNCE_MS,
-} from "../constants";
-import { isStorageConfigured, type ObsyncSettings } from "../settings/model";
+import { isStorageConfigured, type ObsyncSettings } from "@/settings/model";
 import type { SyncController } from "./controller";
+
+const AUTO_PULL_STARTUP_DELAY_MS = 3_000;
+
+const AUTO_PULL_BUSY_COOLDOWN_MS = 30_000;
+
+const VAULT_EVENT_DEBOUNCE_MS = 1_500;
+
+/** How often the auto-pull timer wakes up to check whether it is due. */
+const SCHEDULER_HEARTBEAT_MS = 30_000;
+
+const SCHEDULER_BACKOFF_THRESHOLD = 3;
+
+const SCHEDULER_BACKOFF_BASE_MS = 2 * 60_000;
+
+const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
 
 export interface SchedulerHost extends Plugin {
 	settings: ObsyncSettings;
@@ -33,8 +39,7 @@ export function registerScheduler(
 		if (now - lastRun < AUTO_PULL_BUSY_COOLDOWN_MS) return;
 		if (now < backoffUntil) return;
 		lastRun = now;
-		// refreshAndAutoPull reports failures through the controller's error state
-		// rather than by throwing, so the backoff reads that instead of catching.
+		// refreshAndAutoPull reports failures via error state, not throws. Read state for backoff.
 		await controller.refreshAndAutoPull();
 		if (!controller.getSnapshot().error) {
 			consecutiveFailures = 0;
@@ -60,8 +65,7 @@ export function registerScheduler(
 		host.register(() => window.clearTimeout(timer));
 	}
 
-	// The interval is read on every wake-up, not captured at startup: changing
-	// it in settings used to do nothing until Obsidian was restarted.
+	// Read interval on every wake-up so setting changes apply without restart.
 	let minutesInEffect = host.settings.autoPullIntervalMinutes;
 	let nextDue = dueAfter(minutesInEffect);
 	host.registerInterval(
@@ -72,14 +76,14 @@ export function registerScheduler(
 				minutesInEffect = 0;
 				return;
 			}
-			// A shortened interval must not wait out the old one.
+			// Do not wait out old interval if shortened.
 			if (nextDue === 0 || minutes !== minutesInEffect) {
 				nextDue = dueAfter(minutes);
 				minutesInEffect = minutes;
 			}
 			if (Date.now() < nextDue) return;
 			nextDue = dueAfter(minutes);
-			// Realtime replaces polling only while it is actually connected.
+			// Realtime replaces polling only while connected.
 			if (host.settings.realtimeSync && host.isRealtimeConnected?.()) return;
 			void tick();
 		}, SCHEDULER_HEARTBEAT_MS),

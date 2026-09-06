@@ -14,6 +14,7 @@ export {
 	joinedSharedFolderConfig,
 	participantIdFromName,
 	shareNameToFolder,
+	withCurrentCredentials,
 } from "./create";
 export {
 	createShareInviteUrl,
@@ -28,9 +29,12 @@ export {
 	type ShareIndicatorState,
 	shareIndicatorState,
 } from "./presentation";
+export { ShareRealtimeManager } from "./realtime-manager";
 export { createShareScopePolicy } from "./scope";
 export { ScopedVaultAdapter } from "./scoped-adapter";
 export { type ShareServiceHost, ShareSyncService } from "./service";
+export { ShareSessionStore } from "./session-store";
+export { ShareStatusStore } from "./status-store";
 export {
 	conflictCopyPath,
 	runShareSyncCycle,

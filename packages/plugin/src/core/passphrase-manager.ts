@@ -6,11 +6,19 @@ import {
 	loadCachedPassphrase,
 	saveCachedPassphrase,
 } from "@/crypto/passphrase-cache";
-import { activeStorage, type ObsyncSettings } from "@/settings/model";
+import {
+	activeStorage,
+	isStorageConfigured,
+	type ObsyncSettings,
+} from "@/settings/model";
 import { reportWarning } from "@/shared/diagnostics";
-import { type ObjectStorage, storageIdentity } from "@/storage";
-import { resolveContentKey } from "@/sync/keyfile";
-import { askPassphrase } from "@/ui";
+import {
+	createStorageAdapter,
+	type ObjectStorage,
+	storageIdentity,
+} from "@/storage";
+import { resolveContentKey, rotatePassphrase } from "@/sync/keyfile";
+import { askPassphrase, notifyError } from "@/ui";
 
 interface CachedKey {
 	key: EncryptionKey;
@@ -82,6 +90,23 @@ export class PassphraseManager {
 		this.cachedKey = null;
 		await this.persistIfEnabled();
 		return true;
+	}
+
+	/**
+	 * Rotates the vault passphrase by re-wrapping the data key. No content is
+	 * re-encrypted. Returns the new key epoch, or null if it could not run.
+	 */
+	async rotate(next: string): Promise<number | null> {
+		if (!isStorageConfigured(this.settings)) {
+			notifyError("Configure a storage backend first.");
+			return null;
+		}
+		if (!(await this.prompt(false))) return null;
+		if (!this.passphrase) return null;
+		const storage = createStorageAdapter(activeStorage(this.settings));
+		const epoch = await rotatePassphrase(storage, this.passphrase, next);
+		await this.replacePassphrase(next);
+		return epoch;
 	}
 
 	/** Adopts a new passphrase after a successful remote rotation. */

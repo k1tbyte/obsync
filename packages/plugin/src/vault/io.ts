@@ -1,6 +1,6 @@
 import type { DataAdapter } from "obsidian";
 
-import { toArrayBuffer } from "../utils/bytes";
+import { toArrayBuffer } from "@/utils/bytes";
 
 export async function readBinary(
 	adapter: DataAdapter,
@@ -27,12 +27,10 @@ export async function deletePath(
 	try {
 		await adapter.remove(path);
 	} catch {
-		// The file can disappear between the check and the call; that is the
-		// outcome the caller asked for anyway.
+		// Ignore if the file disappears before removal since the outcome is achieved.
 	}
 }
 
-/** Creates `path` and every missing ancestor of it. */
 export async function ensureDir(
 	adapter: DataAdapter,
 	path: string,
@@ -53,7 +51,7 @@ export async function removeEmptyDir(
 	try {
 		await adapter.rmdir(path, false);
 	} catch {
-		// Not empty or already gone — ignore
+		// Ignore if not empty or already gone.
 	}
 }
 

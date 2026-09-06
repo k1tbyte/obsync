@@ -1,16 +1,16 @@
 import { beforeAll } from "vitest";
-import { deriveKey, type EncryptionKey } from "../../src/crypto";
-import { DEFAULT_SETTINGS_SYNC } from "../../src/settings/model";
-import { compare, type EngineDependencies } from "../../src/sync/engine";
-import type { OperationContext } from "../../src/sync/operations";
-import type { SessionState } from "../../src/types";
-import { createScopePolicy } from "../../src/vault/scope";
+import { deriveKey, type EncryptionKey } from "@/crypto";
+import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
+import { compare, type EngineDependencies } from "@/sync/engine";
+import type { OperationContext } from "@/sync/operations";
+import type { SessionState } from "@/sync/types";
+import { createScopePolicy } from "@/vault/scope";
 import { FakeStorage } from "./fake-storage";
 import { InMemoryAdapter } from "./in-memory-adapter";
 
 let sharedKey: EncryptionKey;
 
-/** Call once per test file; derives the AES key every session shares. */
+/** Derives the shared AES key. */
 export function useEncryptionKey(): void {
 	beforeAll(async () => {
 		sharedKey = await deriveKey("pw", new Uint8Array(16));
@@ -22,11 +22,7 @@ const scope = createScopePolicy({
 	configDir: ".obsidian",
 });
 
-/**
- * One device: an in-memory vault, a fake remote, and the mutable session state
- * the operations layer reads and writes. `deps()` and `context()` hand back
- * exactly what an `Operation` expects, so a test can call one directly.
- */
+/** One device: an in-memory vault, a fake remote, and mutable session state. */
 export class TestSession {
 	readonly adapter = new InMemoryAdapter();
 	readonly logged: string[] = [];
@@ -79,8 +75,7 @@ export class TestSession {
 		return this.adapter.readText(path);
 	}
 
-	/** Adopts the current remote head as this device's baseline, the state a
-	 * device is in right after a clean pull. */
+	/** Adopts the remote head as the baseline. */
 	async adoptRemote(): Promise<void> {
 		const result = await this.compare();
 		this.state = {
@@ -92,7 +87,7 @@ export class TestSession {
 	}
 }
 
-/** A second device sharing one remote, for concurrency scenarios. */
+/** A second device sharing one remote. */
 export function pairedSessions(): [TestSession, TestSession] {
 	const storage = new FakeStorage();
 	return [

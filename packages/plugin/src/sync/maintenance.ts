@@ -1,13 +1,12 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { decryptBytes, type EncryptionKey, sha256Hex } from "@/crypto";
+import type { StorageAdapter } from "@/storage/types";
 import {
-	DEFAULT_CONCURRENCY,
 	REMOTE_OBJECTS_PREFIX,
 	REMOTE_SNAPSHOT_INDEX_KEY,
 	REMOTE_SNAPSHOTS_PREFIX,
-} from "../constants";
-import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
-import type { StorageAdapter } from "../storage/types";
-import type { Manifest } from "../types";
-import { runWithConcurrency } from "../utils/concurrency";
+} from "@/sync/constants";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { collectHashes } from "./history/gc";
 import {
 	fetchArchivedManifest,
@@ -16,6 +15,7 @@ import {
 } from "./history/store";
 import type { SnapshotIndex } from "./history/types";
 import { fetchRemoteManifest, objectKey } from "./manifest";
+import type { Manifest } from "./types";
 
 export interface MaintenanceOptions {
 	concurrency?: number;
@@ -37,7 +37,7 @@ interface ReachableManifests {
 	manifests: Manifest[];
 	head: Manifest | null;
 	index: SnapshotIndex;
-	/** False when a snapshot could not be read, so the live set is unknown. */
+	/** False when a snapshot could not be read, so live set is unknown. */
 	complete: boolean;
 }
 
@@ -66,9 +66,8 @@ async function reachableManifests(
 }
 
 /**
- * Checks every content object referenced by HEAD or any archived snapshot is
- * present (and, when `deep`, decrypts and re-hashes it). Catches silent backend
- * corruption / missing objects.
+ * Checks referenced content objects are present (and optionally decrypts/hashes via `deep`).
+ * Catches missing objects or silent backend corruption.
  */
 export async function verifyRemote(
 	storage: StorageAdapter,
@@ -108,9 +107,8 @@ export async function verifyRemote(
 }
 
 /**
- * Full list-sweep counterpart to the manifest-delta GC: removes object blobs
- * and archived snapshots not reachable from HEAD ∪ the snapshot index. Requires
- * a backend that can list (same constraint as reset).
+ * Removes objects and archived snapshots not reachable from HEAD or the index.
+ * Requires a backend that can list.
  */
 export async function deepCleanOrphans(
 	storage: StorageAdapter,
@@ -119,15 +117,13 @@ export async function deepCleanOrphans(
 ): Promise<CleanResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
 	const reachable = await reachableManifests(storage, key, concurrency);
-	// An unreadable snapshot means the live set is unknown, and an object that
-	// cannot be proven unreachable must not be deleted.
+	// An unreadable snapshot means live set is unknown, so we cannot safely delete.
 	if (!reachable.complete) {
 		throw new Error(
 			"Some snapshots could not be read, so orphans cannot be identified safely. Try again later.",
 		);
 	}
-	// With no head there is nothing to be reachable from, and every object a
-	// device is midway through uploading would read as an orphan.
+	// Without head, objects from an in-progress upload would look like orphans.
 	if (!reachable.head) {
 		throw new Error(
 			"No manifest is published on this remote, so nothing can be identified as an orphan.",
@@ -146,8 +142,7 @@ export async function deepCleanOrphans(
 		storage.list(REMOTE_SNAPSHOTS_PREFIX),
 	]);
 
-	// Listing takes time, and another device may have published in the meantime;
-	// its new objects would look like orphans. Bail out instead of deleting them.
+	// If another device published during listing, its new objects appear as orphans. Bail.
 	const headNow = await fetchRemoteManifest(storage, key);
 	if ((headNow?.snapshotId ?? null) !== (reachable.head?.snapshotId ?? null)) {
 		throw new Error(

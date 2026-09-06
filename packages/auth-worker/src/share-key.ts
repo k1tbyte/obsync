@@ -1,11 +1,10 @@
 /**
  * Key confinement for shared folders.
  *
- * This is the entire security boundary of the broker: a participant names an
- * object key, and these functions decide which bucket key it may become. Every
- * resolved key must land under `<prefix>shares/<shareId>/` — anything that
- * could escape (traversal, absolute paths, pre-encoded separators) is rejected
- * outright rather than sanitised, so a bypass fails closed.
+ * Security boundary: a participant names an object key, and these functions decide
+ * the bucket key. Every resolved key must land under `<prefix>shares/<shareId>/` -
+ * escapes (traversal, absolute paths, pre-encoded separators) are rejected
+ * rather than sanitised, so a bypass fails closed.
  */
 
 const SHARE_ROOT = "shares";
@@ -21,7 +20,7 @@ export class InvalidShareKeyError extends Error {
 	}
 }
 
-/** `<prefix>shares/<shareId>/` — the only region a participant may touch. */
+/** `<prefix>shares/<shareId>/` - the only region a participant may touch. */
 export function shareBasePrefix(prefix: string, shareId: string): string {
 	if (!SHARE_ID_PATTERN.test(shareId)) {
 		throw new InvalidShareKeyError("Invalid share id");
@@ -29,7 +28,6 @@ export function shareBasePrefix(prefix: string, shareId: string): string {
 	return `${normalizePrefix(prefix)}${SHARE_ROOT}/${shareId}/`;
 }
 
-/** Resolves a participant-supplied object key to a full bucket key. */
 export function shareObjectKey(
 	prefix: string,
 	shareId: string,
@@ -38,15 +36,14 @@ export function shareObjectKey(
 	const base = shareBasePrefix(prefix, shareId);
 	assertSafeKey(key, { allowEmpty: false });
 	const resolved = `${base}${key}`;
-	// Belt and braces: even if assertSafeKey ever misses a case, the resolved
-	// key must still sit inside the share.
+	// Fallback: the resolved key must still sit inside the share.
 	if (!resolved.startsWith(base)) {
 		throw new InvalidShareKeyError("Key escapes the share");
 	}
 	return resolved;
 }
 
-/** Resolves a listing prefix; an empty sub-prefix lists the whole share. */
+/** Resolves a listing prefix; empty sub-prefix lists the whole share. */
 export function shareListPrefix(
 	prefix: string,
 	shareId: string,

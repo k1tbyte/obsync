@@ -1,21 +1,26 @@
-import { CONFLICT_COPY_LIMIT, SHARE_LOG_PATH_LIMIT } from "../constants";
-import { isTextMergeCandidate } from "../sync/auto-merge";
+import { isTextMergeCandidate } from "@/sync/auto-merge";
 import {
 	advanceSessionAfterPush,
 	buildSessionState,
 	mergeWrittenIntoCache,
-} from "../sync/baseline";
-import { tryAutoMergeConflict } from "../sync/conflict-merge";
-import { loadRemoteBytes, textToBytes } from "../sync/content";
+} from "@/sync/baseline";
+import { tryAutoMergeConflict } from "@/sync/conflict-merge";
+import { loadRemoteBytes, textToBytes } from "@/sync/content";
 import {
 	type CompareResult,
 	compare,
 	type EngineDependencies,
 	pullPaths,
 	pushPaths,
-} from "../sync/engine";
-import type { HashCacheEntry, Manifest, SessionState } from "../types";
-import { writeBinary } from "../vault/io";
+} from "@/sync/engine";
+import type { HashCacheEntry, Manifest, SessionState } from "@/sync/types";
+import { writeBinary } from "@/vault/io";
+
+/** Shares log more often (every cycle), so they attach fewer paths. */
+/** Guard against an endless "(conflict from X) N" chain on one file. */
+const CONFLICT_COPY_LIMIT = 100;
+
+const SHARE_LOG_PATH_LIMIT = 25;
 
 export interface ShareCycleHooks {
 	/** Persist the share's session state (baseline + hash cache). */
@@ -36,13 +41,10 @@ export interface ShareCycleOutcome {
 }
 
 /**
- * One full bidirectional sync of a share: compare, auto-resolve conflicts
- * (three-way merge or conflict copies — never losing either side's data),
- * pull remote changes, push local ones. Paths are share-root-relative;
- * `deps.adapter` must be the share's {@link ScopedVaultAdapter}.
- *
- * Throws {@link ConcurrentPushError} if another participant published while
- * we were syncing — callers re-run the cycle.
+ * Bidirectional sync: compare, auto-resolve conflicts (three-way merge or
+ * conflict copies - never losing data), pull, push. Paths are share-root-relative;
+ * deps.adapter must be the share's ScopedVaultAdapter.
+ * Throws ConcurrentPushError if someone published while syncing - callers re-run.
  */
 export async function runShareSyncCycle(
 	shareName: string,
@@ -74,7 +76,7 @@ export async function runShareSyncCycle(
 		if (resolution.baseline) {
 			session = { ...session, baseline: resolution.baseline };
 			await hooks.persist(session);
-			// Resolution wrote files, so the folder has to be re-scanned — but the
+			// Resolution wrote files, so the folder has to be re-scanned - but the
 			// remote head has not moved, so it is not fetched again.
 			result = await compare(current(), result.remote);
 		}
@@ -122,13 +124,8 @@ export async function runShareSyncCycle(
 }
 
 /**
- * Auto-resolves conflicts without ever losing data:
- * - delete vs edit → the edit wins (the deletion is dropped),
- * - both edited, clean three-way text merge → merged content,
- * - anything else → local wins, and the remote version is preserved next to
- *   the file as a "(conflict from …)" copy that syncs like any other file.
- * Returns the rewritten baseline (null when nothing was resolved) so the next
- * compare sees ordinary local/remote changes instead of conflicts.
+ * Auto-resolves conflicts without losing data: delete-vs-edit resolves to edit; clean three-way merge; else local wins + remote conflict copy.
+ * Returns rewritten baseline so next compare sees ordinary changes.
  */
 async function resolveConflicts(
 	deps: EngineDependencies,
@@ -213,8 +210,7 @@ async function writeConflictCopy(
 	return copyPath;
 }
 
-/** First unused conflict-copy name, so a second conflict the same day on the
- * same file does not overwrite the first copy. */
+/** First unused conflict-copy name to prevent overwriting. */
 async function freeConflictCopyPath(
 	deps: EngineDependencies,
 	path: string,

@@ -13,17 +13,11 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.slice().buffer as ArrayBuffer;
 }
 
-/**
- * Minimal in-memory {@link DataAdapter} covering exactly what the sync engine
- * (scanner + vault/io + pull) touches: list/stat/exists/read(Binary)/
- * write(Binary)/mkdir/rmdir/remove/rename. Unused DataAdapter members are not
- * implemented (cast through `unknown`).
- */
+/** Minimal in-memory DataAdapter. */
 export class InMemoryAdapter {
 	private readonly files = new Map<string, FileEntry>();
 	private readonly dirs = new Set<string>();
-	// Monotonic, non-racy mtime so each write is distinct (real FS mtime
-	// changes per write; Date.now() collides within a test tick).
+	// Monotonic mtime so each write is distinct.
 	private mtimeSeq = 1;
 
 	private nextMtime(): number {

@@ -1,12 +1,11 @@
 import { diff3Merge, mergeDiff3 } from "node-diff3";
 import type { DataAdapter } from "obsidian";
-
-import type { Conflict } from "../types";
 import {
 	loadLocalText,
 	loadRemoteText,
 	type RemoteFetchOptions,
 } from "./content";
+import type { Conflict } from "./types";
 
 const LOCAL_LABEL = "Local";
 const BASE_LABEL = "Base";
@@ -23,10 +22,8 @@ export interface MergedConflict {
 }
 
 /**
- * Produces an editable three-way merge buffer. Non-conflicting changes from
- * both sides are merged automatically; genuine conflicts are wrapped in
- * `<<<<<<< Local / ||||||| Base / ======= / >>>>>>> Remote` markers for the
- * user to resolve by hand.
+ * Produces an editable three-way merge buffer. Genuine conflicts are wrapped in
+ * `<<<<<<< Local / ||||||| Base / ======= / >>>>>>> Remote` markers.
  */
 export function buildMergedConflict(
 	base: string,
@@ -51,14 +48,10 @@ export function hasUnresolvedMarkers(text: string): boolean {
 }
 
 /**
- * Attempts a clean three-way merge of one conflict and returns the merged text.
- * Returns null — meaning the caller must leave the file untouched — when a side
- * is binary, missing, or has no common ancestor, or when any region is a real
- * conflict that a human has to resolve. Writing is left to the caller so it can
- * record what actually landed on disk.
- *
- * Callers should gate on `isTextMergeCandidate` first so an oversized or
- * known-binary path is rejected before anything is downloaded.
+ * Attempts clean three-way merge, returning text or null. Returns null - leaving
+ * file untouched - when a side is binary, missing, has no ancestor, or has a
+ * real conflict. Caller must write result.
+ * Callers should gate on `isTextMergeCandidate` to avoid unnecessary downloads.
  */
 export async function tryAutoMergeConflict(
 	deps: RemoteFetchOptions & { adapter: DataAdapter },
@@ -86,8 +79,9 @@ export async function tryAutoMergeConflict(
 		.join("\n");
 }
 
-/** Splits text into lines after normalising CRLF so a mixed-EOL pair does not
- * produce a spurious whole-file diff in the three-way merge. */
+/**
+ * Splits text into lines after normalising CRLF to prevent spurious mixed-EOL diffs.
+ */
 function toLines(value: string): string[] {
 	return value.replace(/\r\n/g, "\n").split("\n");
 }

@@ -1,10 +1,8 @@
 import type { App } from "obsidian";
 
-import { STATUS_EVENT } from "../constants";
-import { ESyncLogOperation } from "../logs/store";
-import type { ObsyncSettings } from "../settings/model";
-import type { EChangeType, LocalState } from "../types";
-import { writeBinary } from "../vault/io";
+import { ESyncLogOperation } from "@/logs/store";
+import type { ObsyncSettings } from "@/settings/model";
+import { writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
 import { textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
@@ -39,6 +37,9 @@ import {
 import { HistoryService } from "./runtime/history-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
 import { OperationRunner } from "./runtime/operation-runner";
+import type { EChangeType, LocalState } from "./types";
+
+const STATUS_EVENT = "obsync:status-changed";
 
 export const EConflictStrategy = {
 	KeepLocal: "keep-local",
@@ -326,9 +327,8 @@ export class SyncController {
 	}
 
 	/**
-	 * Loads the base/local/remote text of a conflicted file for a manual
-	 * three-way merge. Returns null if the file is missing or binary, or has
-	 * no common ancestor (nothing to merge against).
+	 * Loads base/local/remote text of a conflicted file for manual three-way merge.
+	 * Returns null if missing, binary, or has no common ancestor.
 	 */
 	async getConflictThreeWay(
 		path: string,
@@ -337,9 +337,9 @@ export class SyncController {
 	}
 
 	/**
-	 * Resolves a conflict with user-merged content: writes it locally, then keeps
-	 * the local side — which uploads the merged file and publishes a manifest.
-	 * Unlike auto-merge, which leaves the merge as an unpushed local change.
+	 * Resolves conflict with user-merged content: writes locally, then keeps
+	 * local side - uploading the file and publishing a manifest.
+	 * Unlike auto-merge, this pushes immediately.
 	 */
 	async resolveConflictMerged(path: string, content: string): Promise<void> {
 		await this.operations.runOperation(

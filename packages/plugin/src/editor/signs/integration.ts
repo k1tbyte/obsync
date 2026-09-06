@@ -1,8 +1,8 @@
 import type { Extension } from "@codemirror/state";
-import type { TAbstractFile } from "obsidian";
+import type { Plugin, TAbstractFile } from "obsidian";
 import { TFile } from "obsidian";
 
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 
 import { buildSignsExtensions } from "./extension";
 import { dismissPopup } from "./hunk-popup";
@@ -18,7 +18,7 @@ interface ActiveSignsRuntime {
 	dispose(): void;
 }
 
-export function registerEditorSigns(plugin: ObsyncPlugin): SignsHandle {
+export function registerEditorSigns(plugin: Plugin & PluginHost): SignsHandle {
 	const mutable: Extension[] = [];
 	let runtime: ActiveSignsRuntime | null = null;
 	plugin.registerEditorExtension(mutable);
@@ -52,7 +52,7 @@ export function registerEditorSigns(plugin: ObsyncPlugin): SignsHandle {
 	};
 }
 
-function createActiveRuntime(plugin: ObsyncPlugin): ActiveSignsRuntime {
+function createActiveRuntime(plugin: Plugin & PluginHost): ActiveSignsRuntime {
 	const provider = new SignsProvider(plugin.controller);
 	const unsubControllerStatus = plugin.controller.subscribe(() => {
 		provider.invalidateAll();
@@ -76,7 +76,7 @@ function createActiveRuntime(plugin: ObsyncPlugin): ActiveSignsRuntime {
 }
 
 function onRename(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	handler: (oldPath: string, newPath: string) => void,
 ): () => void {
 	const ref = plugin.app.vault.on(
@@ -86,8 +86,7 @@ function onRename(
 				handler(oldPath, file.path);
 				return;
 			}
-			// A folder rename moves every open file under it; without this their
-			// views keep pointing at paths that no longer exist.
+			// A folder rename moves all its open files; updating their paths prevents views from pointing to non-existent paths.
 			for (const open of plugin.app.vault.getFiles()) {
 				if (!open.path.startsWith(`${file.path}/`)) continue;
 				const tail = open.path.slice(file.path.length);
@@ -98,7 +97,10 @@ function onRename(
 	return () => plugin.app.vault.offref(ref);
 }
 
-function onFileOpen(plugin: ObsyncPlugin, handler: () => void): () => void {
+function onFileOpen(
+	plugin: Plugin & PluginHost,
+	handler: () => void,
+): () => void {
 	const ref = plugin.app.workspace.on("file-open", () => handler());
 	return () => plugin.app.workspace.offref(ref);
 }

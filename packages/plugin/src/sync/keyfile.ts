@@ -1,20 +1,20 @@
 import {
-	DATA_KEY_BYTES,
-	KEYFILE_VERSION,
-	REMOTE_KEYFILE_KEY,
-} from "../constants";
-import {
 	decryptBytes,
 	deriveKey,
 	type EncryptionKey,
 	encryptBytes,
 	importAesKey,
 	randomBytes,
-} from "../crypto";
-import { errorMessage } from "../shared/errors";
-import type { ObjectStorage } from "../storage/types";
-import { base64ToBytes, bytesToBase64 } from "../utils/base64";
+} from "@/crypto";
+import { errorMessage } from "@/shared/errors";
+import type { ObjectStorage } from "@/storage/types";
+import { REMOTE_KEYFILE_KEY } from "@/sync/constants";
+import { base64ToBytes, bytesToBase64 } from "@/utils/base64";
 import { loadOrCreateSalt } from "./session";
+
+const KEYFILE_VERSION = 1;
+
+const DATA_KEY_BYTES = 32;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -23,12 +23,11 @@ const INITIAL_EPOCH = 1;
 
 /**
  * Envelope keyfile stored plaintext at {@link REMOTE_KEYFILE_KEY}. `wrapped`
- * is itself ciphertext (the random data key encrypted under the
- * passphrase-derived KEK), so the file leaks nothing without the passphrase.
+ * is ciphertext, so it leaks nothing without the passphrase.
  */
 export interface Keyfile {
 	version: number;
-	/** Bumped on every rotation; serves as the remote rotation marker. */
+	/** Bumped on every rotation. */
 	epoch: number;
 	/** base64 of `encryptBytes(KEK, rawDataKey)`. */
 	wrapped: string;
@@ -41,7 +40,6 @@ export interface ResolvedContentKey {
 	epoch: number;
 }
 
-/** Thrown when the passphrase cannot unwrap the data key (wrong or rotated). */
 export class PassphraseRotatedError extends Error {
 	constructor() {
 		super(
@@ -59,14 +57,12 @@ export async function readKeyfile(
 	try {
 		const parsed = JSON.parse(decoder.decode(bytes)) as unknown;
 		if (!isKeyfile(parsed)) {
-			// A malformed keyfile reported as "wrong passphrase" sends the user
-			// hunting for a rotation that never happened.
+			// Malformed keyfile avoids a false rotation hunt.
 			throw new Error("unexpected shape");
 		}
 		return parsed;
 	} catch (err) {
-		// Present but unparseable. Returning null would make the caller mint a
-		// fresh data key and orphan every encrypted object — fail loudly.
+		// Present but unparseable. Returning null would orphan encrypted objects - fail loudly.
 		throw new Error(
 			`Keyfile present but unreadable; refusing to treat it as absent: ${errorMessage(err)}`,
 		);
@@ -95,7 +91,7 @@ export async function writeKeyfile(
 	);
 }
 
-/** First writer wins; returns false when the keyfile already existed. */
+/** Returns false when the keyfile already existed. */
 async function createKeyfile(
 	storage: ObjectStorage,
 	keyfile: Keyfile,
@@ -108,9 +104,8 @@ async function createKeyfile(
 }
 
 /**
- * Resolves the content (data) key for the vault. Creates the keyfile with a
- * fresh random data key on first use. The data key is constant for the life
- * of the vault; only its passphrase wrapping changes on rotation.
+ * Resolves the content key, creating it on first use. The data key is constant;
+ * only its passphrase wrapping changes on rotation.
  */
 export async function resolveContentKey(
 	storage: ObjectStorage,
@@ -135,10 +130,8 @@ export async function resolveContentKey(
 		createdAt: now,
 		rotatedAt: now,
 	});
-	// Never trust the conditional write's own verdict: a backend that ignores
-	// the condition reports success after overwriting. Whatever is on the remote
-	// now is the vault's data key, and ours is discarded if it lost - minting a
-	// second key would orphan everything the winner already wrote.
+	// A backend ignoring the condition might report success after overwriting.
+	// We read back the winner - minting a second key would orphan existing data.
 	const winner = await readKeyfile(storage);
 	if (!winner) {
 		throw new Error("Keyfile vanished while it was being created.");
@@ -148,8 +141,8 @@ export async function resolveContentKey(
 }
 
 /**
- * Re-wraps the existing data key under a new passphrase. O(1): no content is
- * re-encrypted because the data key is unchanged. Returns the new epoch.
+ * Re-wraps data key under a new passphrase without re-encrypting content.
+ * Returns the new epoch.
  */
 export async function rotatePassphrase(
 	storage: ObjectStorage,
@@ -173,9 +166,7 @@ export async function rotatePassphrase(
 		createdAt: keyfile.createdAt,
 		rotatedAt: Date.now(),
 	});
-	// Two devices rotating at once would each overwrite the other; the one whose
-	// wrapping did not survive has to say so rather than report a new passphrase
-	// that does not open the vault.
+	// Throws if another device's concurrent rotation won.
 	const landed = await readKeyfile(storage);
 	if (landed?.wrapped !== wrapped) {
 		throw new Error(

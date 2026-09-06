@@ -1,7 +1,4 @@
-// Minimal "obsidian" runtime stub for vitest. The real package ships no usable
-// entry outside Obsidian, so engine/import chains that transitively touch it
-// (settings/model → storage/registry → ui/notices) need value exports to load.
-// Only runtime shape is provided; types collapse to `any`.
+// Minimal obsidian runtime stub for vitest. The real package ships no usable entry outside Obsidian.
 
 export const Platform = {
 	isDesktop: true,

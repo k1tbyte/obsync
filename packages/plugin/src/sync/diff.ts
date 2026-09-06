@@ -5,7 +5,7 @@ import {
 	type FileChange,
 	type LocalSnapshot,
 	type Manifest,
-} from "../types";
+} from "./types";
 
 export interface DiffInput {
 	local: LocalSnapshot;
@@ -15,9 +15,8 @@ export interface DiffInput {
 
 export function diff(input: DiffInput): DiffResult {
 	const localFiles = input.local.files;
-	// A file the scan could not read is absent from `files`, and treating that
-	// absence as a deletion would push it away on the next sync. It stays out of
-	// the diff entirely until a scan can see it again.
+	// Unreadable is not absent: unreadable files are skipped, not treated as
+	// deleted, avoiding accidental pushes.
 	const unreadable = new Set(input.local.skipped.map((entry) => entry.path));
 	const unreadableDirs = input.local.unreadableDirs;
 	const remoteFiles = input.remote?.files ?? {};
@@ -95,7 +94,7 @@ function classify(
 	return remote ? EChangeType.RemoteModify : EChangeType.LocalModify;
 }
 
-/** An empty entry is the vault root: nothing was listed, so nothing is known. */
+/** Empty entry means vault root: nothing is known. */
 function isUnderUnreadableDir(
 	path: string,
 	dirs: ReadonlyArray<string>,

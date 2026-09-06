@@ -20,8 +20,7 @@ export class StatusBroadcaster<T> {
 	}
 
 	subscribe(listener: SnapshotListener<T>): () => void {
-		// After dispose the broadcaster never emits again, so keeping the listener
-		// would only pin whatever it closes over.
+		// Keeping listener after dispose would pin closures unnecessarily.
 		if (this.disposed) return () => undefined;
 		this.listeners.add(listener);
 		listener(this.getSnapshot());

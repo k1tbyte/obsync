@@ -14,7 +14,7 @@ import {
 	projectSession,
 	recomputeAfterWrite,
 } from "@/sync/session-state";
-import type { SessionState } from "@/types";
+import type { SessionState } from "@/sync/types";
 import type { SyncControllerRuntimeState } from "./controller-state";
 
 interface OperationRunnerDeps {
@@ -53,8 +53,7 @@ export class OperationRunner {
 			const identity = session.storage.identity();
 			const nextSessionState: SessionState = {
 				...session.state,
-				// Both sides reached the same content on their own; adopt it so the
-				// next edit is an ordinary change instead of a phantom conflict.
+				// Both sides reached same content; adopt baseline to prevent phantom conflicts.
 				baseline:
 					result.remote && result.diff.converged.length > 0
 						? advanceBaselineForPaths(

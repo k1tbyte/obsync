@@ -11,9 +11,7 @@ interface LeafWithOpenFile {
 
 export async function openInEditor(app: App, path: string): Promise<void> {
 	const file = app.vault.getAbstractFileByPath(path);
-	// Only a file can be opened, and only in a main editor pane: getLeaf(false)
-	// hands back whatever is focused, which for the source control view is the
-	// sidebar the user is clicking in.
+	// Files must open in a main editor pane; getLeaf(false) would hijack the sidebar.
 	if (!(file instanceof TFile)) {
 		notifyInfo(`Cannot open ${path}: it is not a file in this vault.`);
 		return;

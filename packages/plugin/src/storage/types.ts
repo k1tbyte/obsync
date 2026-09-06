@@ -1,15 +1,10 @@
 export interface ObjectStorage {
 	exists(key: string): Promise<boolean>;
-	/** Bytes, or null only when the object is genuinely absent. Any other
-	 * failure throws, so a caller can never mistake an outage for an empty
-	 * remote. */
+	/** Bytes, or null only when genuinely absent. Any other failure throws, preventing mistaking outage for empty remote. */
 	get(key: string): Promise<Uint8Array | null>;
 	put(key: string, body: Uint8Array, contentType?: string): Promise<void>;
 	/**
-	 * Writes only if the key does not exist yet; returns false when it does.
-	 * The salt and the keyfile go through this: a plain put lets two devices
-	 * onboarding at once overwrite each other's data key and orphan every
-	 * object the loser already uploaded.
+	 * Writes only if absent; returns false if present. Prevents concurrent onboarding devices from overwriting each other's data key.
 	 */
 	putIfAbsent(
 		key: string,
@@ -22,4 +17,11 @@ export interface ObjectStorage {
 
 export interface StorageAdapter extends ObjectStorage {
 	identity(): string;
+}
+
+/** Result of an obsidian:// auth callback, for the caller to surface. */
+export interface StorageAuthOutcome {
+	ok: boolean;
+	message: string;
+	detail?: string;
 }

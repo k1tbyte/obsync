@@ -1,11 +1,11 @@
+import type { Plugin } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import { ObsyncSettingTab } from "@/settings/tab";
 import type { SyncController } from "@/sync/controller";
 import {
 	DiffView,
 	type IndicatorHandle,
-	type RealtimeStatusHandle,
 	registerFileContextIndicators,
 	registerFileExplorerIndicators,
 	registerRibbon,
@@ -19,7 +19,7 @@ interface RegisteredPluginUi {
 }
 
 export function registerPluginUi(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	controller: SyncController,
 ): RegisteredPluginUi {
 	const settingsTab = new ObsyncSettingTab(plugin.app, plugin);
@@ -35,11 +35,7 @@ export function registerPluginUi(
 		registerStatusBar(plugin, controller);
 	}
 	if (plugin.settings.showRibbonIcon) {
-		const realtimeHandle: RealtimeStatusHandle = {
-			isConnected: () => plugin.isRealtimeConnected(),
-			subscribe: (fn) => plugin.subscribeRealtimeStatus(fn),
-		};
-		registerRibbon(plugin, controller, realtimeHandle);
+		registerRibbon(plugin, controller, plugin.realtime);
 	}
 	const explorerIndicators = registerFileExplorerIndicators(plugin, controller);
 	const contextIndicators = registerFileContextIndicators(plugin);
@@ -54,7 +50,9 @@ export function registerPluginUi(
 	return { settingsTab, fileIndicators };
 }
 
-export function refreshOpenHistoryViewsAfterPush(plugin: ObsyncPlugin): void {
+export function refreshOpenHistoryViewsAfterPush(
+	plugin: Plugin & PluginHost,
+): void {
 	if (!plugin.settings.historyAutoRefresh) return;
 	for (const leaf of plugin.app.workspace.getLeavesOfType(
 		SOURCE_CONTROL_VIEW_TYPE,

@@ -1,11 +1,11 @@
 import { history, historyKeymap } from "@codemirror/commands";
 import { EditorView, keymap } from "@codemirror/view";
-import type ObsyncPlugin from "../../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	buildMergedConflict,
 	hasUnresolvedMarkers,
-} from "../../sync/conflict-merge";
-import { notifyError, notifyInfo } from "../notices";
+} from "@/sync/conflict-merge";
+import { notifyError, notifyInfo } from "@/ui/notices";
 
 export class MergeEditorPanel {
 	private text = "";
@@ -21,7 +21,7 @@ export class MergeEditorPanel {
 	}
 
 	async enter(
-		plugin: ObsyncPlugin,
+		plugin: PluginHost,
 		path: string,
 		onEntered: () => void,
 	): Promise<void> {
@@ -63,7 +63,7 @@ export class MergeEditorPanel {
 	}
 
 	async save(
-		plugin: ObsyncPlugin,
+		plugin: PluginHost,
 		path: string,
 		onSaved: (resolvedPath: string) => Promise<void>,
 	): Promise<void> {

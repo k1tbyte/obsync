@@ -1,8 +1,8 @@
-import type { EncryptionKey } from "../../crypto";
-import { reportWarning } from "../../shared/diagnostics";
-import type { ObjectStorage } from "../../storage/types";
-import type { Manifest } from "../../types";
-import { publishManifestWithGuard } from "../manifest";
+import type { EncryptionKey } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import type { ObjectStorage } from "@/storage/types";
+import { publishManifestWithGuard } from "@/sync/manifest";
+import type { Manifest } from "@/sync/types";
 import { collectGarbage, shouldRunGc } from "./gc";
 import {
 	archiveManifest,
@@ -12,15 +12,10 @@ import {
 import type { HistoryConfig } from "./types";
 
 /**
- * Publishes the manifest through the normal optimistic-concurrency guard, then
- * — only on the writer that won the guard — archives the snapshot and updates
- * the index. History work is best-effort: a failure here is logged but never
- * fails the push (the manifest is already published and the sync is correct).
- *
- * Running GC here is safe against concurrent writers: the guard serialises
- * publishers, and GC never deletes objects reachable from HEAD or any retained
- * snapshot, so a device that starts a push afterwards (which compares against
- * the new HEAD) can never reference a swept object.
+ * Publishes via concurrency guard, then - only on winner - archives snapshot and updates index.
+ * History is best-effort: failures log but don't fail push.
+ * GC here is safe: guard serializes publishers, and GC never deletes objects reachable from HEAD.
+ * Subsequent pushes compare against new HEAD and won't reference swept objects.
  */
 export async function publishManifestWithHistory(
 	storage: ObjectStorage,

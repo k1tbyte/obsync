@@ -1,19 +1,19 @@
 import { Setting } from "obsidian";
 
-import type ObsyncPlugin from "../../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	deepCleanOrphanedObjects,
 	resetLocalState,
 	resetRemoteStorage,
 	verifyRemoteIntegrity,
-} from "../../ui/maintenance-actions";
+} from "@/ui";
 
 interface MaintenanceAction {
 	name: string;
 	desc: string;
 	buttonText: string;
 	warning?: boolean;
-	run: (plugin: ObsyncPlugin) => Promise<unknown>;
+	run: (plugin: PluginHost) => Promise<unknown>;
 }
 
 const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
@@ -48,7 +48,7 @@ const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
 
 export function renderMaintenanceSection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 ): void {
 	new Setting(parent).setName("Maintenance").setHeading();
 

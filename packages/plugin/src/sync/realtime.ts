@@ -1,18 +1,9 @@
 /**
- * Realtime sync signalling client.
- *
- * Connects to a PartyKit server via WebSocket.
+ * Realtime sync signalling client via PartyKit WebSocket.
  * - On push: sends "sync" to notify other devices.
- * - On receiving "sync": triggers an auto-pull via the scheduler callback.
- *
- * The channel ID is derived from the storage identity so each vault+storage
- * combo gets its own isolated PartyKit room. The room is entered with a token
- * derived from the deployment token and the room id, so holding the deployment
- * token for one share does not open anyone else's room.
- *
- * PartyKit URL format:
- *   WebSocket: wss://<project>.<user>.partykit.dev/party/<roomId>
- *   HTTP:      https://<project>.<user>.partykit.dev/party/<roomId>
+ * - On receiving "sync": triggers auto-pull via scheduler.
+ * Room token is derived from deployment token and room id, ensuring room
+ * tokens never carry storage credentials or deployment secrets.
  */
 
 import { requestUrl } from "obsidian";
@@ -20,7 +11,7 @@ import { requestUrl } from "obsidian";
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 const PING_INTERVAL_MS = 30_000;
-/** A link with no traffic for this long is treated as dead and reopened. */
+/** Treats link with no traffic for this long as dead and reopens it. */
 const SILENCE_TIMEOUT_MS = 90_000;
 const UNAUTHORIZED_CLOSE_CODE = 4001;
 
@@ -45,8 +36,7 @@ export interface RealtimeClientOptions {
 	channelId: string;
 	/** Relay deployment secret. The room token is derived from it. */
 	token?: string;
-	/** A room token derived elsewhere, for a participant who was handed one
-	 * instead of the deployment secret. */
+	/** Room token derived elsewhere for a participant handed one instead of the deployment secret. */
 	roomToken?: string;
 	deviceId?: string;
 	deviceName?: string;
@@ -129,8 +119,7 @@ export class RealtimeClient {
 			this.stopPing();
 			this.options.onPresenceChange?.([]);
 			this.options.onConnectionChange?.(false);
-			// A rejected token is terminal: reconnecting would hammer the relay
-			// forever with the same credentials.
+			// A rejected token is terminal; avoids hammering relay with bad credentials.
 			if (event.code === UNAUTHORIZED_CLOSE_CODE) return;
 			if (!this.disposed) this.scheduleReconnect();
 		});
@@ -140,7 +129,6 @@ export class RealtimeClient {
 		});
 	}
 
-	/** Notify other devices that we just pushed changes. */
 	notifySync(): void {
 		if (this.disposed) return;
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -234,9 +222,7 @@ export class RealtimeClient {
 		this.stopPing();
 		this.pingTimer = window.setInterval(() => {
 			if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-			// A TCP link can die without a close event; if nothing has arrived for
-			// a while, drop it so the reconnect path runs instead of pinging into
-			// a socket that will never answer.
+			// Drops silently dead TCP links to trigger reconnect path.
 			if (Date.now() - this.lastMessageAt > SILENCE_TIMEOUT_MS) {
 				this.ws.close();
 				return;
@@ -274,9 +260,8 @@ export function normalizePresenceDevices(
 }
 
 /**
- * HMAC-SHA256(deployment token, room id) as lowercase hex. Must stay identical
- * to `deriveRoomToken` in packages/relay: it is what the relay compares
- * against, and a mismatch simply refuses the connection.
+ * HMAC-SHA256(deployment token, room id) as lowercase hex. Must match relay's
+ * deriveRoomToken.
  */
 export async function deriveRoomToken(
 	secret: string,

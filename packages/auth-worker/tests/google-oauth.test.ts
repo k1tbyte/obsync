@@ -29,7 +29,6 @@ function callback(query: string, cookie?: string): Promise<Response> {
 	return handleAuthCallback(authUrl(query), env, authRequest(query, cookie));
 }
 
-/** Runs the consent leg and returns the state, both minted and as a cookie. */
 async function mintState(): Promise<{ state: string; cookie: string }> {
 	const response = await callback("");
 	const consent = new URL(response.headers.get("Location") ?? "");
@@ -51,8 +50,7 @@ describe("consent redirect", () => {
 		);
 		expect(consent.searchParams.get("access_type")).toBe("offline");
 		expect(consent.searchParams.get("state")).toMatch(/^\d+\.[0-9a-f]{64}$/);
-		// The signature alone proves only that this worker minted it; the cookie
-		// is what ties the round trip to one browser.
+		// Signature proves worker minted it; cookie ties it to one browser.
 		expect(response.headers.get("Set-Cookie")).toContain("obsync_oauth_state=");
 		expect(response.headers.get("Set-Cookie")).toContain("HttpOnly");
 	});

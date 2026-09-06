@@ -81,8 +81,7 @@ function buildPopup(
 	path: string | null,
 	syncHunk: SyncHunk | null,
 ): HTMLElement {
-	// Show exactly what "Push hunk" would send: the sync hunk when one exists,
-	// the finer CodeMirror chunk only when there is nothing to push.
+	// Show the sync hunk when one exists, or finer CodeMirror chunk if there is nothing to push.
 	const presentation = syncHunk
 		? presentSyncHunk(syncHunk)
 		: presentChunk(chunk, baseline, view.state.doc);
@@ -141,8 +140,7 @@ function buildPopup(
 	});
 	revertBtn.type = "button";
 	revertBtn.addEventListener("click", () => {
-		// The popup presents the sync hunk when there is one, so reverting the
-		// finer CodeMirror chunk would undo less than the user was shown.
+		// Reverting a finer CodeMirror chunk undoes less than the presented sync hunk.
 		if (syncHunk) {
 			revertSyncHunk(view, syncHunk, baseline);
 		} else {
@@ -153,7 +151,6 @@ function buildPopup(
 	return popup;
 }
 
-/** Splits a sync hunk's unified lines into the popup's removed/added lists. */
 function presentSyncHunk(hunk: SyncHunk): {
 	removedLines: string[];
 	addedLines: string[];
@@ -187,8 +184,7 @@ function renderLines(
 	}
 }
 
-/** Replaces the hunk's new-side lines with its old-side lines, addressed by
- * line number the way `computeHunks` reports them. */
+/** Replaces new-side lines with old-side lines using computeHunks numbering. */
 function revertSyncHunk(
 	view: EditorView,
 	hunk: SyncHunk,
@@ -199,9 +195,7 @@ function revertSyncHunk(
 	const insertFrom = lineStart(baseline, hunk.oldStart);
 	const insertTo = lineStart(baseline, hunk.oldStart + hunk.oldLines);
 	let insert = baseline.sliceString(insertFrom, insertTo);
-	// Slicing to the start of the following line carries its newline, but the
-	// last line of a document has none: without this the replaced range would
-	// swallow the separator and merge two lines into one.
+	// Slicing to the next line carries its newline, but the last line has none. Explicitly adding it prevents merging lines.
 	if (to > from && insertTo === baseline.length && !insert.endsWith("\n")) {
 		insert += "\n";
 	}

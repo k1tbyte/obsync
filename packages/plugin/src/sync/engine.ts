@@ -1,22 +1,12 @@
 import type { DataAdapter } from "obsidian";
-import { DEFAULT_CONCURRENCY } from "../constants";
-import { type EncryptionKey, encryptBytes, sha256Hex } from "../crypto";
-import { reportWarning } from "../shared/diagnostics";
-import type { StorageAdapter } from "../storage/types";
-import {
-	type DiffResult,
-	EChangeType,
-	type EFileKind,
-	type HashCacheEntry,
-	type LocalSnapshot,
-	type Manifest,
-	type ManifestEntry,
-	type SessionState,
-} from "../types";
-import { runWithConcurrency } from "../utils/concurrency";
-import { deletePath, ensureDir, readBinary, removeEmptyDir } from "../vault/io";
-import { scanVault } from "../vault/scanner";
-import type { ScopePolicy } from "../vault/scope";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { type EncryptionKey, encryptBytes, sha256Hex } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import type { StorageAdapter } from "@/storage/types";
+import { runWithConcurrency } from "@/utils/concurrency";
+import { deletePath, ensureDir, readBinary, removeEmptyDir } from "@/vault/io";
+import { scanVault } from "@/vault/scanner";
+import type { ScopePolicy } from "@/vault/scope";
 import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
 import { writeRemoteObject } from "./content";
 import { diff } from "./diff";
@@ -27,6 +17,16 @@ import {
 	objectKey,
 	reconcileRemoteAgainstBaseline,
 } from "./manifest";
+import {
+	type DiffResult,
+	EChangeType,
+	type EFileKind,
+	type HashCacheEntry,
+	type LocalSnapshot,
+	type Manifest,
+	type ManifestEntry,
+	type SessionState,
+} from "./types";
 
 export interface EngineDependencies {
 	adapter: DataAdapter;
@@ -49,8 +49,7 @@ export interface CompareResult {
 
 export async function compare(
 	deps: EngineDependencies,
-	/** A manifest the caller just fetched. Re-comparing after a local write
-	 * still needs a fresh scan, but not a second download of the same head. */
+	/** Avoids re-downloading a freshly fetched remote head. */
 	knownRemote?: Manifest | null,
 ): Promise<CompareResult> {
 	const [{ snapshot, updatedCache }, fetched] = await Promise.all([
@@ -99,8 +98,7 @@ export function filterManifestForDiff(
 	for (const [path, entry] of Object.entries(manifest.files)) {
 		if (scope.includesInDiff(path)) files[path] = entry;
 	}
-	// Folders come from the manifest as well, and pull acts on them with mkdir
-	// and rmdir. Unfiltered, a participant could name a folder outside the share.
+	// Unfiltered folders could allow a participant to create folders outside the share.
 	const folders = (manifest.folders ?? []).filter((dir) =>
 		scope.canDescend(dir),
 	);
@@ -121,7 +119,7 @@ export async function pushPaths(
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
 	// Only the current remote head proves an object is stored. The baseline used
-	// to count too, but history GC deletes objects no live manifest references —
+	// to count too, but history GC deletes objects no live manifest references -
 	// trusting a stale baseline would skip the upload and publish a manifest
 	// pointing at a blob that is already gone.
 	const knownHashes = knownRemoteHashes(compareResult);
@@ -190,9 +188,8 @@ export async function pullPaths(
 		onProgress?.(++done, total);
 	}
 
-	// pullPaths acts on these with mkdir and rmdir, and `remote` here is the
-	// raw manifest: a share participant could otherwise name a folder outside
-	// the share root and have every other client create or delete it.
+	// pullPaths acts on these with mkdir and rmdir. Unfiltered folders could
+	// allow a participant to create folders outside the share root.
 	const remoteFolders = (remote.folders ?? []).filter((dir) =>
 		deps.scope.canDescend(dir),
 	);
@@ -257,10 +254,8 @@ export async function pushSingleFile(
 }
 
 /**
- * Builds the next manifest from a complete file map and publishes it (with a
- * history snapshot when enabled). Every write path funnels through here so the
- * folder merge, vault-id fallback, and optimistic-concurrency parent are
- * decided in exactly one place.
+ * Builds and publishes the next manifest. Centralizes folder merge, vault-id
+ * fallback, and parent selection.
  */
 export async function publishFileMap(
 	deps: EngineDependencies,
@@ -312,7 +307,7 @@ function buildPartialFileMap(input: {
 	return next;
 }
 
-/** Hashes the current remote head references, and therefore still stores. */
+/** Hashes the current remote head references. */
 function knownRemoteHashes(compareResult: CompareResult): Set<string> {
 	const hashes = new Set<string>();
 	for (const entry of Object.values(compareResult.remote?.files ?? {})) {
@@ -321,7 +316,6 @@ function knownRemoteHashes(compareResult: CompareResult): Set<string> {
 	return hashes;
 }
 
-/** Reads, verifies against the scanned hash, encrypts, and stores one object. */
 async function uploadObject(
 	deps: EngineDependencies,
 	entry: { path: string; hash: string },

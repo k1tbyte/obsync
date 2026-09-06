@@ -1,5 +1,5 @@
-import type { Conflict, FileChange } from "../../types";
-import { type ChangeAction, changeActionOf } from "../change-action";
+import type { Conflict, FileChange } from "@/sync/types";
+import { type ChangeAction, changeActionOf } from "@/ui/change-action";
 import type { FileRow } from "./types";
 
 const STATUS_LETTERS: Record<ChangeAction, string> = {

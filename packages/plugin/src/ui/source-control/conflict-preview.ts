@@ -1,4 +1,4 @@
-import type { FileDiffModel } from "../../sync/projection";
+import type { FileDiffModel } from "@/sync/projection";
 
 const CONFLICT_PREVIEW_LINES = 10;
 

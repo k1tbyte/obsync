@@ -1,4 +1,4 @@
-import type { EFileKind } from "../../types";
+import type { EFileKind } from "@/sync/types";
 
 export interface HistoryConfig {
 	maxSnapshots: number;

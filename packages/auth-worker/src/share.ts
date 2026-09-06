@@ -1,14 +1,11 @@
 /**
  * Shared-folder broker.
  *
- * Participants never hold storage credentials. They hold a share token; the
- * broker exchanges it for a short-lived presigned S3 URL scoped to a single
- * key inside `shares/<shareId>/`. Object bytes go straight between the
- * participant and S3 — the broker only signs.
+ * Participants never hold storage credentials. They hold a share token; the broker
+ * exchanges it for a short-lived presigned S3 URL scoped to a single key inside
+ * `shares/<shareId>/`. Object bytes go between the participant and S3 - the broker only signs.
  *
- * Deploy this alongside your own storage: the S3 credentials below should be
- * an IAM key restricted to `<prefix>shares/*`, so a broker compromise still
- * cannot reach the main vault.
+ * Deploy with IAM restricted to `<prefix>shares/*`, so a broker compromise cannot reach the main vault.
  */
 
 import {
@@ -95,8 +92,7 @@ async function signObject(request: Request, env: ShareEnv): Promise<Response> {
 		return jsonError(400, "bad_request", "Invalid JSON body");
 	}
 
-	// Every field is participant-controlled: a number here would reach
-	// assertSafeKey and throw a TypeError, answering 500 instead of 400.
+	// Fields are participant-controlled: a number reaching assertSafeKey would throw TypeError (500 instead of 400).
 	if (!isOptionalString(body.key) || !isOptionalString(body.prefix)) {
 		return jsonError(400, "bad_request", "key and prefix must be strings");
 	}
@@ -214,9 +210,7 @@ async function issueToken(request: Request, env: ShareEnv): Promise<Response> {
 		createdAt: Date.now(),
 	};
 	const pointer = `pt:${record.shareId}:${record.participantId}`;
-	// Re-inviting replaces this person's token, which means the previous one has
-	// to be destroyed: it is invisible to listTokens and revokeToken only ever
-	// follows the current pointer, so leaving it behind makes it unrevocable.
+	// Re-inviting replaces a person's token, so the previous one must be destroyed to avoid leaving unrevocable tokens.
 	const previous = await env.SHARE_TOKENS.get(pointer);
 	await env.SHARE_TOKENS.put(`tok:${token}`, JSON.stringify(record));
 	await env.SHARE_TOKENS.put(pointer, token);
@@ -246,8 +240,7 @@ async function listTokens(
 	const prefix = `pt:${shareId}:`;
 	const participants: { participantId: string }[] = [];
 	let cursor: string | undefined;
-	// KV lists at most 1000 keys per call; a share with more participants would
-	// otherwise show a silently truncated list.
+	// KV lists max 1000 keys per call; must paginate to avoid silent truncation.
 	do {
 		const listed = await env.SHARE_TOKENS.list({ prefix, cursor });
 		for (const entry of listed.keys) {
@@ -308,10 +301,7 @@ async function isAdmin(request: Request, env: ShareEnv): Promise<boolean> {
 	return timingSafeEqual(supplied, env.SHARE_ADMIN_SECRET);
 }
 
-/**
- * Compares in time independent of the inputs, including their length: an early
- * return on a length mismatch leaks how long the admin secret is.
- */
+/** Compares in constant time, independent of input length, to avoid leaking the secret's length. */
 async function timingSafeEqual(left: string, right: string): Promise<boolean> {
 	const [a, b] = await Promise.all([digest(left), digest(right)]);
 	let diff = 0;

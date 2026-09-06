@@ -1,5 +1,3 @@
-import { DIFF_CACHE_MAX_BYTES } from "../constants";
-import type { Conflict, FileChange } from "../types";
 import type { EngineDependencies } from "./engine";
 import {
 	buildConflictDiff,
@@ -8,6 +6,10 @@ import {
 	type FileDiffModel,
 	type ProjectionDeps,
 } from "./projection";
+import type { Conflict, FileChange } from "./types";
+
+/** Total text bytes the in-memory diff model cache may retain. */
+const DIFF_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface PathStatusInput {
 	change?: FileChange;
@@ -38,7 +40,7 @@ export class DiffCache {
 		const cacheKey = keyFor(input.path, input.status, forceText);
 		const hit = this.entries.get(cacheKey);
 		if (hit) {
-			// Move to most-recent so eviction is LRU rather than FIFO.
+			// Moves to most-recent for LRU eviction.
 			this.entries.delete(cacheKey);
 			this.entries.set(cacheKey, hit);
 			return hit;
@@ -59,9 +61,10 @@ export class DiffCache {
 		return model;
 	}
 
-	/** Evicts LRU entries once either the entry count or the total retained
-	 * text bytes exceed the budget — a handful of forced 16 MB diffs must not
-	 * pin hundreds of megabytes of strings. */
+	/**
+	 * Evicts LRU entries when count or retained bytes exceed budget - avoids
+	 * pinning megabytes of strings from forced diffs.
+	 */
 	private evict(): void {
 		for (const [key, model] of this.entries) {
 			if (
@@ -106,8 +109,7 @@ function keyFor(
 	status: PathStatusInput,
 	forceText: boolean,
 ): string {
-	// A conflict and a change can carry the same pair of hashes but project to
-	// different models, so the kind has to be part of the key.
+	// Kind must be in key because conflicts and changes can share hashes but differ in model.
 	const kind = status.conflict ? "c" : (status.change?.type ?? "none");
 	const local = status.change?.localHash ?? status.conflict?.localHash ?? "";
 	const remote = status.change?.remoteHash ?? status.conflict?.remoteHash ?? "";

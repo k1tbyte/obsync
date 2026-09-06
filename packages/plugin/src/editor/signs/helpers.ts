@@ -12,9 +12,7 @@ export interface PresentedChunk {
 }
 
 /**
- * A CodeMirror document keeps the empty last line a trailing newline implies,
- * so the baseline must too - dropping it made every file that ends in a
- * newline show a phantom "added line" at the end, forever.
+ * Baseline must keep the empty last line a trailing newline implies to prevent phantom "added line" diffs at the end.
  */
 export function toCmText(raw: string): Text {
 	return Text.of(raw.replace(/\r\n?/g, "\n").split("\n"));
@@ -78,7 +76,7 @@ export function presentChunk(
 /**
  * The sync hunk a gutter line belongs to. CodeMirror chunks are finer-grained
  * than `computeHunks` hunks, so the popup must show (and the push must apply)
- * this one — otherwise a nearby edit rides along unannounced.
+ * this one, otherwise a nearby edit rides along unannounced.
  */
 export function findSyncHunkForLine(
 	lineNumber: number,

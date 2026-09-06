@@ -1,24 +1,24 @@
-import { LOG_PATH_LIMIT } from "../../constants";
-import { encryptBytes, sha256Hex } from "../../crypto";
-import { ESyncLogOperation } from "../../logs/store";
-import { formatBytes, sumBytes } from "../../shared/format";
-import type { Manifest, ManifestEntry } from "../../types";
+import { encryptBytes, sha256Hex } from "@/crypto";
+import { ESyncLogOperation } from "@/logs/store";
+import { formatBytes, sumBytes } from "@/shared/format";
 import {
 	advanceBaselineForPaths,
 	advanceSessionAfterPush,
 	baselineForPath,
 	buildSessionState,
-} from "../baseline";
-import { loadLocalBytes, textToBytes } from "../content";
+} from "@/sync/baseline";
+import { LOG_PATH_LIMIT } from "@/sync/constants";
+import { loadLocalBytes, textToBytes } from "@/sync/content";
 import {
 	type CompareResult,
 	type EngineDependencies,
 	publishFileMap,
 	pushPaths,
 	pushSingleFile,
-} from "../engine";
-import { applyHunks, computeHunks } from "../hunks";
-import { objectKey } from "../manifest";
+} from "@/sync/engine";
+import { applyHunks, computeHunks } from "@/sync/hunks";
+import { objectKey } from "@/sync/manifest";
+import type { Manifest, ManifestEntry } from "@/sync/types";
 import {
 	assertSidesUnchanged,
 	EHunkPair,
@@ -75,8 +75,7 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 ) => {
 	const { path, selected } = args;
 	if (selected.size === 0) throw new Error("No hunks selected");
-	// Same preflight as pushPathsOp: a hunk push publishes a manifest too, and
-	// must not silently overwrite a concurrent remote edit.
+	// Like pushPathsOp, hunk push publishes manifest and must not overwrite remote edit.
 	if (result.diff.conflicts.some((c) => c.path === path)) {
 		throw new Error("Cannot push: resolve the conflict on this file first");
 	}
@@ -88,8 +87,7 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 	await assertSidesUnchanged(sides, args.expected);
 	const { hunks } = computeHunks(sides.left, sides.right);
 	const merged = applyHunks(sides.left, hunks, selected);
-	// An empty result means the file is gone locally, not that it became a
-	// zero-byte file: publishing one would leave the deletion pending forever.
+	// Empty result means local deletion, not zero-byte file. Publish without path.
 	const deleted = merged === "" && !(await deps.adapter.exists(path));
 	const { manifest, entry } = deleted
 		? { manifest: await publishWithoutPath(deps, result, path), entry: null }
@@ -98,8 +96,7 @@ export const pushHunksOp: Operation<PushHunksArgs> = async (
 				bytes: textToBytes(merged),
 			});
 	const baseline = baselineForPath(deps.state.baseline, manifest, path, entry);
-	// The local file is untouched by a hunk push, so neither the hash cache nor
-	// the snapshot may adopt the merged entry.
+	// Local file untouched by hunk push; hash cache and snapshot retain original entry.
 	await ctx.persistState(
 		buildSessionState(deps.state, baseline, result.updatedCache),
 	);

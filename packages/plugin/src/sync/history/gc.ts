@@ -1,20 +1,24 @@
-import {
-	FILE_HISTORY_GC_EXCESS_RATIO,
-	FILE_HISTORY_GC_MIN_EXCESS,
-	FILE_HISTORY_MAX_SNAPSHOTS,
-	FILE_HISTORY_MIN_SNAPSHOTS,
-} from "../../constants";
-import type { EncryptionKey } from "../../crypto";
-import { reportWarning } from "../../shared/diagnostics";
-import type { ObjectStorage } from "../../storage/types";
-import type { Manifest } from "../../types";
-import { fetchRemoteManifest, objectKey } from "../manifest";
+import type { EncryptionKey } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import type { ObjectStorage } from "@/storage/types";
+import { fetchRemoteManifest, objectKey } from "@/sync/manifest";
+import type { Manifest } from "@/sync/types";
 import {
 	fetchArchivedManifest,
 	snapshotKey,
 	updateSnapshotIndex,
 } from "./store";
 import type { SnapshotIndex } from "./types";
+
+export const FILE_HISTORY_MIN_SNAPSHOTS = 1;
+
+export const FILE_HISTORY_MAX_SNAPSHOTS = 1000;
+
+/** GC fires only when retained snapshots exceed max by this fraction... */
+export const FILE_HISTORY_GC_EXCESS_RATIO = 0.3;
+
+/** ...or by this absolute count, whichever is larger. Bounds GC frequency. */
+export const FILE_HISTORY_GC_MIN_EXCESS = 10;
 
 export function clampMaxSnapshots(value: number): number {
 	if (!Number.isFinite(value)) return FILE_HISTORY_MIN_SNAPSHOTS;
@@ -25,10 +29,8 @@ export function clampMaxSnapshots(value: number): number {
 }
 
 /**
- * GC is amortised: it only runs once the retained count overshoots the limit
- * by a buffer, then trims back to the limit. The buffer is the larger of a
- * fixed fraction of the limit and an absolute floor, so a small limit still
- * gets a meaningful batch (e.g. limit 5 → fires at 16, not every push).
+ * GC is amortised: runs when retained count overshoots limit by a buffer.
+ * Buffer ensures small limits still get meaningful batches.
  */
 export function gcExcessBuffer(maxSnapshots: number): number {
 	const max = clampMaxSnapshots(maxSnapshots);
@@ -59,12 +61,9 @@ export interface GcResult {
 }
 
 /**
- * Manifest-delta GC. Never lists object storage; orphans are derived purely
- * from the difference between evicted manifests and the still-reachable set
- * (retained snapshots ∪ HEAD). If any retained manifest can't be read we
- * cannot prove an object is unreferenced, so the object sweep is skipped that
- * round (index/snapshot pruning still proceeds — a bounded blob leak is
- * acceptable, dangling references are not).
+ * Manifest-delta GC. Orphans are derived purely from difference between evicted manifests
+ * and reachable set (retained + HEAD). If retained manifest is unreadable, object sweep
+ * is skipped this round (index pruning proceeds - bounded blob leak is acceptable, dangling references are not).
  */
 export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	const { storage, key } = input;
@@ -120,12 +119,10 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 	}
 
 	let deletedObjects = 0;
-	// Reading the head again catches a device that published between the
-	// reachability walk and the sweep: its objects must not be collected.
+	// Re-read head to catch devices publishing during GC; their objects must not be collected.
 	const headNow = await readHead(storage, key);
 	if (headNow.manifest) collectHashes(headNow.manifest, liveHashes);
-	// A head that could not be read is not a head that did not move: sweeping
-	// on an unreadable head deletes objects it may well still reference.
+	// Unreadable head might have moved; sweeping now risks deleting objects it references.
 	const headUnchanged =
 		headNow.read &&
 		(headNow.manifest === null ||
@@ -139,9 +136,7 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 		}
 	}
 
-	// Another device may have pinned a snapshot while this ran: replaying the
-	// eviction onto whatever is there now keeps their pin instead of stamping
-	// this run's stale copy over it.
+	// Replay eviction to preserve pins from concurrent devices.
 	const evictedIds = new Set(evicted.map((entry) => entry.snapshotId));
 	const nextIndex = await updateSnapshotIndex(
 		storage,
@@ -183,9 +178,7 @@ async function safeDelete(
 }
 
 /**
- * The head plus whether it was actually read. `fetchRemoteManifest` returns
- * null both for "no vault published yet" and after a failure that the caller
- * must not mistake for an empty remote.
+ * Returns head and whether it was read. Differentiates "no vault published" from fetch failure.
  */
 async function readHead(
 	storage: ObjectStorage,

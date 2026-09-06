@@ -3,6 +3,7 @@ export {
 	askPassphrase,
 	PassphraseModal,
 } from "./passphrase-modal";
+export { openPromiseModal } from "./promise-modal";
 export {
 	confirmRemoteReset,
 	RemoteResetModal,
@@ -16,3 +17,9 @@ export {
 	SettingsTransferImportModal,
 	showSettingsTransferExport,
 } from "./settings-transfer-modal";
+export {
+	brokerAdmin,
+	CreateShareModal,
+	JoinShareModal,
+	ShareInviteModal,
+} from "./share-modals";

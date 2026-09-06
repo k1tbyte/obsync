@@ -72,9 +72,7 @@ export class SectionStateManager {
 		this.sectionState[section].selected.clear();
 	}
 
-	/** Reads the selection without clearing it: an operation that fails should
-	 * leave the user their choices to retry. Call {@link clearSelection} after a
-	 * successful run. */
+	/** Reads selection without clearing so failures leave choices to retry. Call {@link clearSelection} on success. */
 	selectedPaths(section: ESection): string[] {
 		return Array.from(this.sectionState[section].selected);
 	}

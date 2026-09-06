@@ -1,8 +1,8 @@
 import type { DataAdapter } from "obsidian";
+import { resetState, saveState } from "@/sync/state";
+import type { LocalState } from "@/sync/types";
 
-import { PERSIST_STATE_DEBOUNCE_MS } from "../constants";
-import { resetState, saveState } from "../sync/state";
-import type { LocalState } from "../types";
+const PERSIST_STATE_DEBOUNCE_MS = 500;
 
 export class StatePersister {
 	private current: LocalState | null = null;
@@ -55,7 +55,7 @@ export class StatePersister {
 	 * Writes any debounced state immediately. Call from lifecycle points that
 	 * still run while the app is alive (visibilitychange→hidden, beforeunload)
 	 * so the hash cache survives a quit/close instead of being lost to the
-	 * pending debounce — losing it forces a full vault re-hash next launch.
+	 * pending debounce - losing it forces a full vault re-hash next launch.
 	 */
 	async flush(): Promise<void> {
 		const pending = this.takePending();

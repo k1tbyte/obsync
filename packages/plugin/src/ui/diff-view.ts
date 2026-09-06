@@ -8,15 +8,12 @@ import {
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
-import {
-	DIFF_VIEW_TYPE,
-	HUNK_TEXT_MAX_BYTES,
-	SOURCE_CONTROL_VIEW_TYPE,
-} from "../constants";
-import type ObsyncPlugin from "../main";
-import { errorMessage } from "../shared/errors";
-import { formatBytes } from "../shared/format";
-import type { FileDiffModel } from "../sync/projection";
+import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
+import type { PluginHost } from "@/plugin/host";
+import { errorMessage } from "@/shared/errors";
+import { formatBytes } from "@/shared/format";
+import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
+import type { FileDiffModel } from "@/sync/projection";
 import {
 	type DiffHeaderActions,
 	type HunkCardCallbacks,
@@ -49,7 +46,7 @@ const HUNK_OPS = {
 type HunkOpKind = keyof typeof HUNK_OPS;
 
 export class DiffView extends ItemView {
-	private readonly plugin: ObsyncPlugin;
+	private readonly plugin: PluginHost;
 	private path: string | null = null;
 	private historyHash: string | null = null;
 	private historyLabel = "Version";
@@ -67,7 +64,7 @@ export class DiffView extends ItemView {
 	private refreshPending = false;
 	private hunkOpInFlight = false;
 
-	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: PluginHost) {
 		super(leaf);
 		this.plugin = plugin;
 	}
@@ -86,8 +83,7 @@ export class DiffView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		// The history fields belong here too, or a restored workspace reopens a
-		// version diff as an ordinary one against the current head.
+		// History fields belong here so a restored workspace preserves version diffs.
 		return {
 			path: this.path,
 			historyHash: this.historyHash ?? undefined,
@@ -152,8 +148,7 @@ export class DiffView extends ItemView {
 	private async refreshModel(): Promise<void> {
 		if (!this.path) return;
 		if (this.rendering) {
-			// Remember the request instead of dropping it: the state that triggered
-			// it is newer than the render already in flight.
+			// Queue request: the state that triggered it is newer than the in-flight render.
 			this.refreshPending = true;
 			return;
 		}
@@ -180,8 +175,7 @@ export class DiffView extends ItemView {
 				: await this.plugin.controller.getFileDiff(this.path);
 
 			if (!this.model) {
-				// The file has no differences (e.g. it was pushed/pulled).
-				// Auto-close the view.
+				// No differences remaining; auto-close.
 				this.leaf.detach();
 				return;
 			}
@@ -366,9 +360,7 @@ export class DiffView extends ItemView {
 			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
 			onSelectHunk: (i) => this.setCurrentHunk(i),
 		};
-		// A forced diff goes up to FORCE_DIFF_MAX_BYTES, but a hunk operation
-		// refuses anything past HUNK_TEXT_MAX_BYTES: offering the arrows here
-		// would hand the user a button that always fails.
+		// Disable hunk ops above HUNK_TEXT_MAX_BYTES to prevent guaranteed failures.
 		const actionable =
 			model.leftSize <= HUNK_TEXT_MAX_BYTES &&
 			model.rightSize <= HUNK_TEXT_MAX_BYTES;
@@ -463,8 +455,7 @@ export class DiffView extends ItemView {
 		const path = this.path;
 		const model = this.model;
 		if (!path || !model) return;
-		// One hunk at a time: a second click would address indices computed
-		// against the state the first click is still changing.
+		// Prevent concurrent hunk ops that would use stale indices.
 		if (this.hunkOpInFlight) return;
 		this.hunkOpInFlight = true;
 		const selected = new Set([index]);
@@ -505,10 +496,7 @@ export class DiffView extends ItemView {
 		);
 	}
 
-	/**
-	 * Runs a controller call for the open file, announces it, then re-reads the
-	 * view. `then` overrides the follow-up for actions that move to another file.
-	 */
+	/** Runs a controller call, announces it, then re-reads the view or runs `then`. */
 	private async runOnFile(
 		action: () => Promise<void>,
 		okMessage: string,
@@ -568,16 +556,14 @@ export class DiffView extends ItemView {
 		await this.refreshModel();
 	}
 
-	/** Moves the view to another file, resetting everything that belonged to the
-	 * previous one — `forceText` in particular, or the next file would be loaded
-	 * as text in defiance of the never-load-binary rule. */
+	/** Moves the view to another file, resetting previous state.
+	 * Resetting forceText is load-bearing: diff-view must never load binary content. */
 	private showFile(path: string): void {
 		this.path = path;
 		this.currentHunkIndex = -1;
 		this.forceText = false;
 		this.mergePanel.reset();
-		// updateHeader is not in the public typings, but without it the tab keeps
-		// the previous file's name.
+		// updateHeader prevents the tab from keeping the previous file's name.
 		const leaf = this.leaf as Partial<{ updateHeader: () => void }>;
 		leaf.updateHeader?.();
 	}
