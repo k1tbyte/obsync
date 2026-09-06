@@ -1,4 +1,3 @@
-import "./polyfills";
 import { Plugin } from "obsidian";
 
 import { registerCommands } from "@/commands";
