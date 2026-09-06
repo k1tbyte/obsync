@@ -1,24 +1,15 @@
 import { type App, ItemView, Platform, type WorkspaceLeaf } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
 import type { PluginHost } from "@/plugin/host";
-import { EConflictStrategy, type SyncStatusSnapshot } from "@/sync/controller";
+import type { SyncStatusSnapshot } from "@/sync/controller";
 import {
-	buildTree,
+	ChangesTab,
 	ConflictPreviewManager,
-	ESection,
-	type FileRow,
 	HistoryTab,
-	rowFromChange,
-	rowFromConflict,
-	SectionStateManager,
 	SourceControlActions,
-	showIgnoredFiles,
 	TimelineTab,
 	TrashTab,
-	type TreeNode,
 } from "./source-control";
-
-type SectionActionKind = "push" | "pull" | "none";
 
 const ESourceTab = {
 	Changes: "changes",
@@ -27,23 +18,6 @@ const ESourceTab = {
 	Timeline: "timeline",
 } as const;
 type ESourceTab = (typeof ESourceTab)[keyof typeof ESourceTab];
-
-/** Gives a clickable non-button the semantics a keyboard user needs. */
-function makeActivatable(
-	el: HTMLElement,
-	label: string,
-	activate: () => void,
-): void {
-	el.setAttr("role", "button");
-	el.setAttr("tabindex", "0");
-	el.setAttr("aria-label", label);
-	el.addEventListener("click", () => activate());
-	el.addEventListener("keydown", (event: KeyboardEvent) => {
-		if (event.key !== "Enter" && event.key !== " ") return;
-		event.preventDefault();
-		activate();
-	});
-}
 
 export async function openSourceControlHistory(
 	plugin: PluginHost,
@@ -88,18 +62,12 @@ export async function openSourceControlView(
 
 export class SourceControlView extends ItemView {
 	private readonly plugin: PluginHost;
-	private layout: "tree" | "flat" = "tree";
-	private readonly sections = new SectionStateManager();
 	private readonly previews: ConflictPreviewManager;
 	private readonly actions: SourceControlActions;
+	private readonly changes: ChangesTab;
 	private root: HTMLElement | null = null;
-	private statusLineEl: HTMLElement | null = null;
-	private refreshButtonEl: HTMLButtonElement | null = null;
 	private unsubscribe: (() => void) | null = null;
-	private lastSignature = "";
 	private tab: ESourceTab = ESourceTab.Changes;
-	/** Case-insensitive substring over paths. Survives re-renders, not reloads. */
-	private filter = "";
 	private historyTab!: HistoryTab;
 	private trashTab!: TrashTab;
 	private timelineTab!: TimelineTab;
@@ -110,14 +78,20 @@ export class SourceControlView extends ItemView {
 		this.previews = new ConflictPreviewManager({
 			loadPreview: (path) => this.plugin.controller.getFileDiff(path),
 		});
+		this.changes = new ChangesTab(
+			plugin,
+			this.previews,
+			() => this.actions,
+			() => this.render(this.plugin.controller.getSnapshot(), true),
+			(path) => openDiffView(this.plugin, path),
+		);
 		this.actions = new SourceControlActions({
 			plugin,
-			sections: this.sections,
+			sections: this.changes.sectionState(),
 			previews: this.previews,
 			showHistory: (path) => this.showHistory(path),
 			openDiff: (path) => openDiffView(this.plugin, path),
 		});
-		this.layout = plugin.settings.uiLayout;
 	}
 
 	getViewType(): string {
@@ -211,190 +185,24 @@ export class SourceControlView extends ItemView {
 
 	private render(snapshot: SyncStatusSnapshot, force = false): void {
 		if (!this.root) return;
+		const root = this.root;
 		if (this.tab !== ESourceTab.Changes) {
 			if (!force) return;
-			this.lastSignature = "";
-			const tabRoot = this.root;
-			tabRoot.empty();
-			this.renderTabBar(tabRoot);
-			this.renderActiveTab(tabRoot);
+			this.changes.invalidate();
+			root.empty();
+			this.renderTabBar(root);
+			this.renderActiveTab(root);
 			return;
 		}
-		const signature = this.signatureOf(snapshot);
-		if (!force && signature === this.lastSignature) {
-			// In-place updates to status/progress keep scrolling usable mid-push.
-			this.refreshStatus(snapshot);
-			this.updateSelectionState();
+		if (!force && !this.changes.needsRebuild(snapshot)) {
+			this.changes.refreshInPlace(snapshot);
 			return;
 		}
-		const signatureChanged = signature !== this.lastSignature;
-		this.lastSignature = signature;
-		const root = this.root;
 		const scrollTop = root.scrollTop;
 		root.empty();
-		if (signatureChanged) {
-			this.previews.clearCache();
-		}
 		this.renderTabBar(root);
-		this.renderToolbar(root, snapshot);
-		this.renderStatusLine(root, snapshot);
-		this.renderFilter(root);
-
-		const diff = snapshot.result?.diff;
-		if (!diff) {
-			root.createDiv({
-				cls: "obsync-status-line",
-				text: "Run compare to see changes.",
-			});
-			return;
-		}
-		this.sections.pruneSelection(
-			ESection.Conflicts,
-			diff.conflicts.map((c) => c.path),
-		);
-		this.sections.pruneSelection(
-			ESection.Local,
-			diff.localChanges.map((c) => c.path),
-		);
-		this.sections.pruneSelection(
-			ESection.Remote,
-			diff.remoteChanges.map((c) => c.path),
-		);
-
-		this.renderSection(
-			root,
-			ESection.Conflicts,
-			"Conflicts",
-			this.applyFilter(diff.conflicts.map(rowFromConflict)),
-			snapshot,
-			"none",
-		);
-		this.renderSection(
-			root,
-			ESection.Local,
-			"Local changes (will push)",
-			this.applyFilter(diff.localChanges.map(rowFromChange)),
-			snapshot,
-			"push",
-		);
-		this.renderSection(
-			root,
-			ESection.Remote,
-			"Remote changes (will pull)",
-			this.applyFilter(diff.remoteChanges.map(rowFromChange)),
-			snapshot,
-			"pull",
-		);
+		this.changes.render(root, snapshot);
 		root.scrollTop = scrollTop;
-	}
-
-	private applyFilter(rows: ReadonlyArray<FileRow>): FileRow[] {
-		const needle = this.filter.trim().toLowerCase();
-		if (!needle) return [...rows];
-		return rows.filter((row) => row.path.toLowerCase().includes(needle));
-	}
-
-	/**
-	 * Narrows the lists without touching selection: a path filtered out of view
-	 * stays selected, so a filter can never silently shrink what an action does.
-	 */
-	private renderFilter(parent: HTMLElement): void {
-		const input = parent.createEl("input", {
-			type: "search",
-			cls: "obsync-history-search",
-		});
-		input.placeholder = "Filter by path…";
-		input.value = this.filter;
-		input.setAttr("aria-label", "Filter changed files by path");
-		input.addEventListener("input", () => {
-			this.filter = input.value;
-			const caret = input.selectionStart ?? input.value.length;
-			this.lastSignature = "";
-			this.render(this.plugin.controller.getSnapshot(), true);
-			// The re-render replaced this node; carry focus and caret to the new one.
-			const next = parent.querySelector<HTMLInputElement>(
-				".obsync-history-search",
-			);
-			if (!next) return;
-			next.focus();
-			next.setSelectionRange(caret, caret);
-		});
-	}
-
-	/** Re-renders only the parts that track sync progress. */
-	private refreshStatus(snapshot: SyncStatusSnapshot): void {
-		if (this.statusLineEl) {
-			this.statusLineEl.empty();
-			this.statusLineEl.removeClass("is-error");
-			this.fillStatusLine(this.statusLineEl, snapshot);
-		}
-		if (this.refreshButtonEl) this.refreshButtonEl.disabled = snapshot.busy;
-	}
-
-	/** Identifies the rendered tree structure. Hashes are included so file edits update the view. */
-	private signatureOf(snapshot: SyncStatusSnapshot): string {
-		const diff = snapshot.result?.diff;
-		if (!diff) return `empty|${snapshot.error ?? ""}`;
-		const summarize = (
-			list: ReadonlyArray<{
-				path: string;
-				type?: string;
-				localHash?: string | null;
-				remoteHash?: string | null;
-			}>,
-		): string =>
-			list
-				.map(
-					(c) =>
-						`${c.type ?? ""}:${c.path}:${c.localHash ?? ""}:${c.remoteHash ?? ""}`,
-				)
-				.join(",");
-		return [
-			snapshot.error ?? "",
-			summarize(diff.conflicts),
-			summarize(diff.localChanges),
-			summarize(diff.remoteChanges),
-		].join("|");
-	}
-
-	private renderToolbar(
-		parent: HTMLElement,
-		snapshot: SyncStatusSnapshot,
-	): void {
-		const bar = parent.createDiv({ cls: "obsync-toolbar" });
-		const refresh = bar.createEl("button", { text: "Refresh" });
-		refresh.addEventListener(
-			"click",
-			() => void this.plugin.controller.refresh(),
-		);
-		refresh.disabled = snapshot.busy;
-		this.refreshButtonEl = refresh;
-
-		const pushAll = bar.createEl("button", { text: "Push all" });
-		pushAll.addClass("is-primary");
-		pushAll.disabled = !canPushAll(snapshot);
-		pushAll.addEventListener(
-			"click",
-			() => void this.actions.pushAll(snapshot),
-		);
-
-		const pullAll = bar.createEl("button", { text: "Pull all" });
-		pullAll.addClass("is-primary");
-		pullAll.disabled = !canPullAll(snapshot);
-		pullAll.addEventListener(
-			"click",
-			() => void this.actions.pullAll(snapshot),
-		);
-
-		const layoutToggle = bar.createEl("button", {
-			text: this.layout === "tree" ? "Flat" : "Tree",
-		});
-		layoutToggle.addEventListener("click", () => {
-			this.layout = this.layout === "tree" ? "flat" : "tree";
-			this.plugin.settings.uiLayout = this.layout;
-			void this.plugin.saveSettings();
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
@@ -409,7 +217,7 @@ export class SourceControlView extends ItemView {
 			// Re-renders even on the active tab, so a settings change can be picked up.
 			btn.addEventListener("click", () => {
 				// Only an actual switch invalidates the change tree and its previews.
-				if (this.tab !== tab) this.lastSignature = "";
+				if (this.tab !== tab) this.changes.invalidate();
 				this.tab = tab;
 				if (tab === ESourceTab.History && !this.historyTab.hasPath) {
 					const active = this.plugin.app.workspace.getActiveFile();
@@ -422,307 +230,6 @@ export class SourceControlView extends ItemView {
 		make(ESourceTab.History, "History");
 		make(ESourceTab.Deleted, "Deleted");
 		make(ESourceTab.Timeline, "Timeline");
-	}
-
-	private renderStatusLine(
-		parent: HTMLElement,
-		snapshot: SyncStatusSnapshot,
-	): void {
-		this.statusLineEl = parent.createDiv({ cls: "obsync-status-line" });
-		this.fillStatusLine(this.statusLineEl, snapshot);
-	}
-
-	private fillStatusLine(
-		line: HTMLElement,
-		snapshot: SyncStatusSnapshot,
-	): void {
-		if (snapshot.error) {
-			line.addClass("is-error");
-			line.setText(`Error: ${snapshot.error}`);
-			if (snapshot.error.includes("Remote vault id does not match local")) {
-				const resolveBtn = line.createEl("button", {
-					text: "Resolve vault mismatch",
-					cls: ["mod-warning", "obsync-adopt-new-vault-btn"],
-				});
-				resolveBtn.addEventListener(
-					"click",
-					() => void this.actions.adoptNewVault(),
-				);
-				return;
-			}
-			// Most errors here are transient - a dropped connection, a locked file.
-			const retryBtn = line.createEl("button", { text: "Retry" });
-			retryBtn.disabled = snapshot.busy;
-			retryBtn.addEventListener(
-				"click",
-				() => void this.plugin.controller.refresh(),
-			);
-			return;
-		}
-		if (snapshot.busy) {
-			line.setText(snapshot.progressText ?? "Syncing…");
-			return;
-		}
-		if (snapshot.staleReason) {
-			line.setText(snapshot.staleReason);
-			return;
-		}
-		const last = snapshot.lastCompareAt
-			? new Date(snapshot.lastCompareAt).toLocaleTimeString()
-			: "never";
-		line.setText(
-			`Last compared: ${last} · ↑ ${snapshot.pendingLocal} · ↓ ${snapshot.pendingRemote} · ⚠ ${snapshot.conflicts}`,
-		);
-		const ignoredPaths = snapshot.result?.snapshot.ignoredPaths ?? [];
-		if (ignoredPaths.length > 0) {
-			const ignoredBtn = line.createEl("button", {
-				cls: "obsync-ignored-count",
-				text: ` · ${ignoredPaths.length} ignored`,
-			});
-			ignoredBtn.addEventListener("click", () =>
-				showIgnoredFiles(this.app, ignoredPaths),
-			);
-		}
-	}
-
-	private renderSection(
-		parent: HTMLElement,
-		section: ESection,
-		title: string,
-		rows: ReadonlyArray<FileRow>,
-		snapshot: SyncStatusSnapshot,
-		actionKind: SectionActionKind,
-	): void {
-		this.sections.resetRefs(section);
-		if (rows.length === 0) return;
-		const sectionEl = parent.createDiv({ cls: "obsync-section" });
-		if (this.sections.isCollapsed(section)) sectionEl.addClass("is-collapsed");
-
-		const header = sectionEl.createDiv({ cls: "obsync-section-header" });
-		const titleEl = header.createSpan({
-			cls: "obsync-section-title",
-			text: title,
-		});
-		titleEl.setAttr(
-			"aria-expanded",
-			String(!this.sections.isCollapsed(section)),
-		);
-		const counts = header.createSpan({ cls: "obsync-section-count" });
-		this.sections.bindCounts(section, counts);
-		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-		makeActivatable(titleEl, `${title} section`, () => {
-			const collapsed = this.sections.toggleCollapsed(section);
-			sectionEl.toggleClass("is-collapsed", collapsed);
-			titleEl.setAttr("aria-expanded", String(!collapsed));
-		});
-
-		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
-		const actions = body.createDiv({ cls: "obsync-toolbar" });
-
-		if (actionKind !== "none") {
-			const label = actionKind === "push" ? "Push selected" : "Pull selected";
-			const actionBtn = actions.createEl("button", { text: label });
-			actionBtn.addClass("is-primary");
-			this.sections.bindActionButton(section, actionBtn);
-			actionBtn.addEventListener(
-				"click",
-				() => void this.actions.runSectionAction(section, actionKind),
-			);
-		}
-
-		if (section === ESection.Local) {
-			const revertBtn = actions.createEl("button", { text: "Revert selected" });
-			revertBtn.addClass("is-warning");
-			this.sections.bindRevertButton(section, revertBtn);
-			revertBtn.addEventListener(
-				"click",
-				() => void this.actions.revertSelected(section),
-			);
-		}
-
-		if (section === ESection.Conflicts) {
-			const keepAll = actions.createEl("button", { text: "Keep all local" });
-			keepAll.addClass("is-warning");
-			keepAll.disabled = snapshot.busy || rows.length === 0;
-			keepAll.addEventListener(
-				"click",
-				() => void this.actions.batchResolve(EConflictStrategy.KeepLocal),
-			);
-			const acceptAll = actions.createEl("button", {
-				text: "Accept all remote",
-			});
-			acceptAll.addClass("is-warning");
-			acceptAll.disabled = snapshot.busy || rows.length === 0;
-			acceptAll.addEventListener(
-				"click",
-				() => void this.actions.batchResolve(EConflictStrategy.AcceptRemote),
-			);
-		}
-
-		const selectAll = actions.createEl("button", { text: "Select all" });
-		selectAll.addEventListener("click", () => {
-			this.sections.selectAll(section, rows);
-			this.afterSelectionChange(section, rows.length);
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
-		const selectNone = actions.createEl("button", { text: "Clear" });
-		selectNone.addEventListener("click", () => {
-			this.sections.clearSelection(section);
-			this.afterSelectionChange(section, rows.length);
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
-
-		const list = body.createDiv({ cls: "obsync-file-list" });
-		if (this.layout === "flat") {
-			for (const row of rows)
-				this.renderFileRow(list, row, section, rows.length);
-		} else {
-			const tree = buildTree(rows);
-			this.renderTree(list, tree, section, rows.length);
-		}
-
-		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-	}
-
-	private renderTree(
-		parent: HTMLElement,
-		node: TreeNode,
-		section: ESection,
-		rowsLen: number,
-	): void {
-		for (const child of node.children) {
-			if (child.row) {
-				this.renderFileRow(parent, child.row, section, rowsLen);
-				continue;
-			}
-			const folderPath = child.fullPath;
-			const collapsed = !this.sections.isFolderExpanded(section, folderPath);
-			const folder = parent.createDiv({ cls: "obsync-tree-folder" });
-			if (collapsed) folder.addClass("is-collapsed");
-			folder.setText(`${collapsed ? "▸" : "▾"} ${child.name}`);
-			const children = parent.createDiv({ cls: "obsync-tree-children" });
-			children.toggleClass("is-collapsed", collapsed);
-			makeActivatable(folder, `${child.name} folder`, () => {
-				const nowCollapsed = this.sections.toggleFolder(section, folderPath);
-				children.toggleClass("is-collapsed", nowCollapsed);
-				folder.toggleClass("is-collapsed", nowCollapsed);
-				folder.setAttr("aria-expanded", String(!nowCollapsed));
-				folder.setText(`${nowCollapsed ? "▸" : "▾"} ${child.name}`);
-			});
-			folder.setAttr("aria-expanded", String(!collapsed));
-			this.renderTree(children, child, section, rowsLen);
-		}
-	}
-
-	private renderFileRow(
-		parent: HTMLElement,
-		row: FileRow,
-		section: ESection,
-		rowsLen: number,
-	): void {
-		const item = parent.createDiv({ cls: "obsync-file-row" });
-		if (row.isConflict) item.addClass("is-conflict");
-		item.setAttr("role", "button");
-		item.setAttr("tabindex", "0");
-		item.setAttr("aria-label", `Open diff for ${row.path}`);
-		item.addEventListener("keydown", (event: KeyboardEvent) => {
-			if (event.key !== "Enter" && event.key !== " ") return;
-			event.preventDefault();
-			void openDiffView(this.plugin, row.path);
-		});
-
-		const checkbox = item.createEl("input", { type: "checkbox" });
-		checkbox.checked = this.sections.isSelected(section, row.path);
-		checkbox.addEventListener("click", (e) => e.stopPropagation());
-		checkbox.addEventListener("change", () => {
-			this.sections.setSelected(section, row.path, checkbox.checked);
-			this.afterSelectionChange(section, rowsLen);
-		});
-
-		item.createSpan({
-			cls: `obsync-file-status ${row.statusClass}`,
-			text: row.statusLetter,
-		});
-		item.createSpan({ cls: "obsync-file-name", text: row.path });
-
-		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
-
-		item.addEventListener("click", () => {
-			void openDiffView(this.plugin, row.path);
-		});
-		item.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			this.actions.showContextMenu(e, row.path, section);
-		});
-	}
-
-	private renderConflictRowControls(
-		parent: HTMLElement,
-		item: HTMLElement,
-		row: FileRow,
-	): void {
-		const keepBtn = item.createEl("button", {
-			cls: "obsync-row-action obsync-row-keep",
-			text: "Keep local",
-		});
-		keepBtn.setAttr("aria-label", "Keep local version");
-		keepBtn.setAttr("title", "Keep local version");
-		keepBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			void this.actions.resolveKeepLocal(row.path);
-		});
-
-		const acceptBtn = item.createEl("button", {
-			cls: "obsync-row-action obsync-row-accept",
-			text: "Accept remote",
-		});
-		acceptBtn.setAttr("aria-label", "Accept remote version");
-		acceptBtn.setAttr("title", "Accept remote version");
-		acceptBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			void this.actions.resolveAcceptRemote(row.path);
-		});
-
-		const expanded = this.previews.isExpanded(row.path);
-		const expandBtn = item.createEl("button", {
-			cls: "obsync-expand-btn",
-			text: expanded ? "▾" : "▸",
-		});
-		expandBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			this.previews.toggle(row.path);
-			this.render(this.plugin.controller.getSnapshot(), true);
-		});
-
-		if (expanded) {
-			this.previews.render(parent, row.path, this.actions.previewHandlers());
-		}
-	}
-
-	private afterSelectionChange(section: ESection, rowsLen: number): void {
-		const snapshot = this.plugin.controller.getSnapshot();
-		this.sections.updateSectionUi(section, rowsLen, snapshot.busy);
-	}
-
-	private updateSelectionState(): void {
-		const snapshot = this.plugin.controller.getSnapshot();
-		const diff = snapshot.result?.diff;
-		if (!diff) return;
-		this.sections.updateSectionUi(
-			ESection.Conflicts,
-			diff.conflicts.length,
-			snapshot.busy,
-		);
-		this.sections.updateSectionUi(
-			ESection.Local,
-			diff.localChanges.length,
-			snapshot.busy,
-		);
-		this.sections.updateSectionUi(
-			ESection.Remote,
-			diff.remoteChanges.length,
-			snapshot.busy,
-		);
 	}
 }
 
@@ -755,22 +262,4 @@ export async function openDiffView(
 		},
 	});
 	await plugin.app.workspace.revealLeaf(leaf);
-}
-
-function canPushAll(snapshot: SyncStatusSnapshot): boolean {
-	if (snapshot.busy) return false;
-	const d = snapshot.result?.diff;
-	if (!d) return false;
-	return (
-		d.conflicts.length === 0 &&
-		d.remoteChanges.length === 0 &&
-		d.localChanges.length > 0
-	);
-}
-
-function canPullAll(snapshot: SyncStatusSnapshot): boolean {
-	if (snapshot.busy) return false;
-	const d = snapshot.result?.diff;
-	if (!d) return false;
-	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
 }

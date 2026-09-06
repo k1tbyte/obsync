@@ -13,6 +13,12 @@ import type { ScopePolicy } from "./scope";
 
 const RACY_INDEX_WINDOW_MS = 2_000;
 
+/**
+ * Above this a file is hashed on its own. Hashing holds the whole file, and the
+ * size cap defaults to 100 MB - four of those at once is a mobile crash.
+ */
+const LARGE_FILE_BYTES = 8 * 1024 * 1024;
+
 const ROOT = "";
 
 export interface ScannerOptions {
@@ -49,6 +55,7 @@ export async function scanVault(
 		});
 	}
 	let scanned = 0;
+	const gate = serialGate();
 	await runWithConcurrency(
 		paths,
 		options.concurrency ?? DEFAULT_CONCURRENCY,
@@ -71,6 +78,7 @@ export async function scanVault(
 					stat.mtime,
 					scope.classify(path),
 					hashCache[path],
+					stat.size >= LARGE_FILE_BYTES ? gate : undefined,
 				);
 				files[path] = entry;
 				updatedCache[path] = {
@@ -135,6 +143,8 @@ async function buildEntry(
 	mtime: number,
 	kind: ManifestEntry["kind"],
 	cached: HashCacheEntry | undefined,
+	/** Present for large files, to keep several of them out of memory at once. */
+	gate?: <T>(run: () => Promise<T>) => Promise<T>,
 ): Promise<ManifestEntry> {
 	if (
 		cached &&
@@ -144,9 +154,28 @@ async function buildEntry(
 	) {
 		return { hash: cached.hash, size, mtime, kind };
 	}
-	const buffer = await adapter.readBinary(path);
+	// Gated around the read alone: a cache hit reads nothing and must not queue.
+	const read = (): Promise<ArrayBuffer> => adapter.readBinary(path);
+	const buffer = await (gate ? gate(read) : read());
 	const hash = await sha256Hex(new Uint8Array(buffer));
 	return { hash, size, mtime, kind };
+}
+
+/**
+ * Admits one caller at a time. Hashing needs the whole file resident, so the
+ * worker pool would otherwise hold `concurrency` large files at once - four
+ * 100 MB attachments is enough to end an Obsidian mobile session.
+ */
+function serialGate(): <T>(run: () => Promise<T>) => Promise<T> {
+	let tail: Promise<unknown> = Promise.resolve();
+	return <T>(run: () => Promise<T>): Promise<T> => {
+		const next = tail.then(run, run);
+		tail = next.then(
+			() => undefined,
+			() => undefined,
+		);
+		return next;
+	};
 }
 
 /** Recent writes may change within the same mtime tick and are untrusted. Future mtimes are clock artefacts, not racy writes. */

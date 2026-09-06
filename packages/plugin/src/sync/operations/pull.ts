@@ -41,15 +41,25 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 	await ctx.persistState(
 		buildSessionState(deps.state, pulled.baseline, hashCache),
 	);
+	// A cancelled pull really did land these files, so report what happened
+	// rather than the number that was asked for.
+	const landed = pulled.cancelled
+		? [...pulled.written.keys()]
+		: Array.from(pullSet);
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,
-		`Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
-		Array.from(pullSet).slice(0, LOG_PATH_LIMIT),
+		pulled.cancelled
+			? `Pull cancelled after ${landed.length} of ${pullSet.size} file(s).`
+			: `Pulled ${pullSet.size} file(s) (${formatBytes(bytesDownloaded)}).`,
+		landed.slice(0, LOG_PATH_LIMIT),
 	);
 	return {
 		newRemote: result.remote,
-		touchedPaths: pullSet,
+		// Only what landed was touched; claiming the rest would advance state
+		// for files that were never downloaded.
+		touchedPaths: pulled.cancelled ? new Set(pulled.written.keys()) : pullSet,
 		localEntries: pulled.written,
+		cancelled: pulled.cancelled,
 	};
 };
 
@@ -141,11 +151,11 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 			delete nextHashCache[path];
 			localEntries.set(path, null);
 		} else {
-			const plaintext = await writeRemoteObject(deps, path, remoteEntry.hash);
+			const size = await writeRemoteObject(deps, path, remoteEntry.hash);
 			const stat = await deps.adapter.stat(path).catch(() => null);
 			const entry: ManifestEntry = {
 				hash: remoteEntry.hash,
-				size: plaintext.length,
+				size,
 				mtime: stat?.mtime ?? Date.now(),
 				kind: remoteEntry.kind,
 			};

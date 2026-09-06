@@ -3,9 +3,13 @@ import { reportWarning } from "@/shared/diagnostics";
 import type { ObjectStorage } from "@/storage/types";
 import { fetchRemoteManifest, objectKey } from "@/sync/manifest";
 import type { Manifest } from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { collectChangeHashes } from "./changes";
 import { pinKey, readPinManifest, updateHistoryLog } from "./store";
 import type { HistoryLog, SnapshotEntry } from "./types";
+
+/** Deletes are network round trips; a serial sweep of thousands of them crawls. */
+const GC_DELETE_CONCURRENCY = 4;
 
 export const FILE_HISTORY_MIN_SNAPSHOTS = 1;
 
@@ -139,11 +143,11 @@ export async function collectGarbage(input: GcInput): Promise<GcResult> {
 
 	let deletedObjects = 0;
 	if (!skippedObjectSweep) {
-		for (const hash of evictedHashes) {
-			if (liveHashes.has(hash)) continue;
+		const orphans = [...evictedHashes].filter((hash) => !liveHashes.has(hash));
+		await runWithConcurrency(orphans, GC_DELETE_CONCURRENCY, async (hash) => {
 			await safeDelete(storage, objectKey(hash));
 			deletedObjects++;
-		}
+		});
 	}
 
 	const stillPresent = nextLog.snapshots.filter((entry) =>

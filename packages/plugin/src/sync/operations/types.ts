@@ -10,6 +10,8 @@ export interface OperationOutcome {
 	 * assuming baseline/remote state after partial hunk apply.
 	 */
 	localEntries?: ReadonlyMap<string, ManifestEntry | null>;
+	/** Stopped early at the user's request, having done part of the work. */
+	cancelled?: boolean;
 }
 
 export type ProgressReporter = (text: string | null) => void;

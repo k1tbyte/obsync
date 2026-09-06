@@ -153,3 +153,31 @@ describe("baseline utilities", () => {
 		});
 	});
 });
+
+describe("publishedDelta with Object-member filenames", () => {
+	const kind = "vault" as EFileKind;
+	const entry = (hash: string) => ({ hash, size: 1, mtime: 1, kind });
+	const manifestOf = (files: Record<string, ManifestEntry>): Manifest => ({
+		version: 1,
+		vaultId: "v",
+		snapshotId: "s",
+		parentSnapshotId: null,
+		createdAt: 1,
+		deviceId: "d",
+		files,
+	});
+
+	it("sees a deleted file named like a prototype member", () => {
+		const before = manifestOf({ constructor: entry("C1"), keep: entry("K1") });
+		const after = manifestOf({ keep: entry("K1") });
+		// A plain lookup returns Object.prototype.constructor here, which is
+		// truthy, so the deletion would never advance the baseline.
+		expect([...publishedDelta(before, after)]).toEqual(["constructor"]);
+	});
+
+	it("sees a changed file named like a prototype member", () => {
+		const before = manifestOf({ toString: entry("T1") });
+		const after = manifestOf({ toString: entry("T2") });
+		expect([...publishedDelta(before, after)]).toEqual(["toString"]);
+	});
+});

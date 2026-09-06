@@ -1,7 +1,13 @@
+/**
+ * Runs `worker` over `items` with a bounded number in flight. An aborted signal
+ * stops new work; whatever is already running is allowed to finish, so nothing
+ * is left half-written.
+ */
 export async function runWithConcurrency<T>(
 	items: ReadonlyArray<T>,
 	concurrency: number,
 	worker: (item: T, index: number) => Promise<void>,
+	signal?: AbortSignal,
 ): Promise<void> {
 	// A NaN here would make the worker loop run zero times and resolve as if
 	// every item had been handled.
@@ -14,7 +20,7 @@ export async function runWithConcurrency<T>(
 	for (let i = 0; i < limit; i++) {
 		runners.push(
 			(async () => {
-				while (!failed) {
+				while (!failed && !signal?.aborted) {
 					const index = cursor++;
 					if (index >= items.length) return;
 					try {

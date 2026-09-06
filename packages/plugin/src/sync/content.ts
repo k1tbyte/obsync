@@ -50,15 +50,16 @@ export async function loadRemoteBytes(
 }
 
 /** Downloads, verifies against hash, and writes remote object to disk. */
+/** Returns the byte count, not the bytes: holding them would multiply peak memory. */
 export async function writeRemoteObject(
 	deps: RemoteFetchOptions & { adapter: DataAdapter },
 	path: string,
 	hash: string,
-): Promise<Uint8Array> {
+): Promise<number> {
 	const bytes = await loadRemoteBytes(deps, hash);
 	if (!bytes) throw new Error(`Missing remote object for ${path}`);
 	await writeBinary(deps.adapter, path, bytes);
-	return bytes;
+	return bytes.length;
 }
 
 export async function loadRemoteText(

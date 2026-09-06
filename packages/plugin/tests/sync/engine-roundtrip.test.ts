@@ -1,10 +1,11 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
 import { InMemoryAdapter } from "@tests/helpers/in-memory-adapter";
+import { TestSession, useEncryptionKey } from "@tests/helpers/session";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey } from "@/crypto";
 import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
 import { advanceSessionAfterPush } from "@/sync/baseline";
-import { REMOTE_MANIFEST_KEY } from "@/sync/constants";
+import { REMOTE_MANIFEST_KEY, REMOTE_OBJECTS_PREFIX } from "@/sync/constants";
 import {
 	compare,
 	type EngineDependencies,
@@ -332,3 +333,48 @@ function matchPaths(...paths: ReadonlyArray<string>) {
 		},
 	};
 }
+
+describe("push efficiency and path safety", () => {
+	useEncryptionKey();
+
+	it("uploads one blob for two paths holding the same content", async () => {
+		const session = new TestSession();
+		await session.adapter.write("a.md", "same bytes");
+		await session.adapter.write("b.md", "same bytes");
+		const result = await compare(session.deps());
+
+		await pushPaths(
+			session.deps(),
+			result,
+			result.diff.localChanges.map((change) => change.path),
+		);
+
+		// Content-addressed: identical content is one object, not two uploads.
+		expect(await session.storage.list(REMOTE_OBJECTS_PREFIX)).toHaveLength(1);
+	});
+
+	it("handles files named like Object members", async () => {
+		const session = new TestSession();
+		await session.adapter.write("constructor", "one");
+		await session.adapter.write("toString", "two");
+		const first = await compare(session.deps());
+		const published = await pushPaths(
+			session.deps(),
+			first,
+			first.diff.localChanges.map((change) => change.path),
+		);
+		expect(Object.keys(published.files).sort()).toEqual([
+			"constructor",
+			"toString",
+		]);
+
+		session.state = advanceSessionAfterPush(session.state, first, published);
+		await session.adapter.remove("constructor");
+		const second = await compare(session.deps());
+		// A plain lookup would read Object.prototype.constructor and see the file
+		// as still present, so the deletion would never be published.
+		expect(
+			second.diff.localChanges.map((change) => [change.path, change.type]),
+		).toEqual([["constructor", EChangeType.LocalDelete]]);
+	});
+});
