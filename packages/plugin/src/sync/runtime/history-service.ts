@@ -216,6 +216,8 @@ async function scanLocal(session: EngineDependencies): Promise<LocalSnapshot> {
 		{
 			maxFileBytes: session.maxFileBytes,
 			concurrency: session.concurrency,
+			index: session.index,
+			expected: session.state.baseline?.files,
 		},
 		session.state.hashCache,
 	);
