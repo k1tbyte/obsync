@@ -1,15 +1,15 @@
 import { requestUrl } from "obsidian";
 
-import { DEFAULT_CONCURRENCY } from "../../constants";
-import { normalizeKeyPrefix } from "../../shared/path";
-import { toArrayBuffer } from "../../utils/bytes";
-import { EStorageBackend, type WebDAVStorageConfig } from "../config";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { normalizeKeyPrefix } from "@/shared/path";
+import { EStorageBackend, type WebDAVStorageConfig } from "@/storage/config";
 import {
 	CONCURRENCY_FIELD,
 	EFieldKind,
 	type SettingsFieldSpec,
-} from "../field-spec";
-import type { StorageAdapter } from "../types";
+} from "@/storage/field-spec";
+import type { StorageAdapter } from "@/storage/types";
+import { toArrayBuffer } from "@/utils/bytes";
 import {
 	assertOk,
 	isRetryableStatus,
@@ -80,8 +80,7 @@ export function createWebDAVAdapter(
 	assertConfig(config);
 	const baseUrl = ensureTrailingSlash(config.baseUrl);
 	const basePath = normalizeKeyPrefix(config.basePath);
-	// The path is part of a URL, so it has to be encoded like every other
-	// segment: a folder with a space would otherwise produce an invalid request.
+	// Encode path segments to prevent invalid requests (e.g. from spaces).
 	const rootUrl = baseUrl + encodeKey(basePath);
 	const auth = `Basic ${basicCredentials(config.username, config.password)}`;
 	const knownDirs = new Set<string>();

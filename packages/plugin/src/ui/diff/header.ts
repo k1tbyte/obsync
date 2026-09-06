@@ -1,4 +1,4 @@
-import { EDiffDirection } from "../../sync/projection";
+import { EDiffDirection } from "@/sync/projection";
 
 export interface DiffHeaderState {
 	path: string;

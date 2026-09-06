@@ -1,15 +1,15 @@
 import { type ObsidianProtocolData, requestUrl } from "obsidian";
-
-import { DEFAULT_GDRIVE_AUTH_SERVER } from "../../constants";
-import { notifyError, notifyInfo } from "../../ui/notices";
-import { toArrayBuffer } from "../../utils/bytes";
-import { EStorageBackend, type GoogleDriveStorageConfig } from "../config";
+import {
+	EStorageBackend,
+	type GoogleDriveStorageConfig,
+} from "@/storage/config";
 import {
 	CONCURRENCY_FIELD,
 	EFieldKind,
 	type SettingsFieldSpec,
-} from "../field-spec";
-import type { StorageAdapter } from "../types";
+} from "@/storage/field-spec";
+import type { StorageAdapter, StorageAuthOutcome } from "@/storage/types";
+import { toArrayBuffer } from "@/utils/bytes";
 import {
 	assertOk,
 	isRetryableStatus,
@@ -19,25 +19,33 @@ import {
 	withTimeout,
 } from "./util";
 
+/** Fallback Google Drive auth broker when the user has not self-hosted one. */
+export const DEFAULT_GDRIVE_AUTH_SERVER =
+	"https://obsync-auth.kitbyte.workers.dev";
+
 export async function handleGoogleDriveProtocol(
 	params: ObsidianProtocolData,
 	config: GoogleDriveStorageConfig,
 	saveCallback: () => Promise<void>,
-): Promise<boolean> {
+): Promise<StorageAuthOutcome | false> {
 	if (params.error) {
-		notifyError(`Google Drive auth failed`, params.error);
-		return true;
+		return {
+			ok: false,
+			message: "Google Drive auth failed",
+			detail: params.error,
+		};
 	}
 
 	const accessToken = params.access_token;
 	const refreshToken = params.refresh_token;
 	const expiresIn = params.expires_in;
 
-	// No token at all: this callback was meant for some other backend.
 	if (!accessToken && !refreshToken) return false;
 	if (!accessToken) {
-		notifyError("Google Drive auth failed - no access token received.");
-		return true;
+		return {
+			ok: false,
+			message: "Google Drive auth failed - no access token received.",
+		};
 	}
 
 	config.accessToken = accessToken;
@@ -46,16 +54,15 @@ export async function handleGoogleDriveProtocol(
 	config.expiresAt = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : 0;
 
 	await saveCallback();
-	// Without a refresh token the backend still reads as unconfigured, so
-	// reporting success would leave the user waiting for a sync that cannot run.
+	// Success without refresh token leaves backend unconfigured and sync hanging.
 	if (!config.refreshToken) {
-		notifyError(
-			"Google Drive returned no refresh token. Remove Obsync from your Google account permissions and connect again.",
-		);
-		return true;
+		return {
+			ok: false,
+			message:
+				"Google Drive returned no refresh token. Remove Obsync from your Google account permissions and connect again.",
+		};
 	}
-	notifyInfo("Connected to Google Drive.");
-	return true;
+	return { ok: true, message: "Connected to Google Drive." };
 }
 
 export function defaultGoogleDriveConfig(): GoogleDriveStorageConfig {
@@ -114,7 +121,7 @@ export const GOOGLE_DRIVE_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
-/** Google rejects a multipart upload above this; larger files go resumable. */
+/** Multipart max; larger files go resumable. */
 const MULTIPART_MAX_BYTES = 5 * 1024 * 1024;
 const RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024;
 const DRIVE_PAGE_SIZE = "1000";
@@ -126,11 +133,7 @@ interface GoogleDriveListResponse {
 	nextPageToken?: string;
 }
 
-/**
- * Escapes a value for interpolation into a Google Drive `q` string literal.
- * Drive query syntax wraps literals in single quotes; an unescaped quote or
- * backslash in (e.g.) a folder name would break the query or alter its meaning.
- */
+/** Escapes value for Google Drive 'q' literal to prevent query breakage. */
 function escapeDriveQueryValue(value: string): string {
 	return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
@@ -139,7 +142,7 @@ function escapeDriveQueryValue(value: string): string {
  * Google Drive is a best-effort backend for a content-addressed store: it has
  * no conditional write and no atomic create-by-name, so two devices writing the
  * same new key at the same moment can produce duplicate files. Everything else
- * here follows the shared contract — an error is never reported as absence.
+ * here follows the shared contract - an error is never reported as absence.
  */
 export function createGoogleDriveAdapter(
 	config: GoogleDriveStorageConfig,
@@ -204,9 +207,7 @@ export function createGoogleDriveAdapter(
 	};
 
 	/**
-	 * A token can die mid-run: Drive answers 401, which is not a retryable
-	 * status, so without this one long sync would fail on an expired token it
-	 * could simply have replaced.
+	 * Drive answers 401 mid-run (not retryable); replaces token to avoid failing long syncs.
 	 */
 	const authorized: AuthorizedRequest = async (build) => {
 		const first = await driveRequest(build(await getHeaders()));
@@ -329,9 +330,7 @@ export function createGoogleDriveAdapter(
 		},
 
 		async putIfAbsent(key, body, contentType) {
-			// Drive has no conditional create. Probing first closes the ordinary
-			// race; a genuine tie leaves two files with one name, which findFileId
-			// then resolves arbitrarily — documented, not solved.
+			// Drive has no conditional create. Probing closes ordinary race; genuine tie leaves duplicate resolved arbitrarily - documented, not solved.
 			if (await findFileId(key)) return false;
 			await upload(key, body, contentType, null);
 			return true;
@@ -347,7 +346,6 @@ export function createGoogleDriveAdapter(
 				throw: false,
 			}));
 			fileIdCache.delete(key);
-			// Already gone is the outcome the caller asked for.
 			if (res.status === NOT_FOUND) return;
 			assertOk(res, "delete", key);
 		},
@@ -411,7 +409,6 @@ type AuthorizedRequest = (
 	build: (headers: Record<string, string>) => Parameters<typeof requestUrl>[0],
 ) => Promise<DriveResponse>;
 
-/** `requestUrl` under the shared timeout and retry policy. */
 async function driveRequest(
 	params: Parameters<typeof requestUrl>[0],
 ): Promise<DriveResponse> {
@@ -470,8 +467,7 @@ async function multipartUpload(
 	return existingId ?? (res.json as { id?: string } | null)?.id ?? null;
 }
 
-/** Multipart is capped at 5 MB, so anything larger is sent as a resumable
- * session in chunks. */
+/** Sends >5MB file as resumable chunks. */
 async function resumableUpload(
 	key: string,
 	body: Uint8Array,

@@ -25,7 +25,7 @@ export class SignsProvider {
 		string,
 		{ generation: number; promise: Promise<void> }
 	>();
-	/** Bumped on every invalidation so stale loads can be discarded. */
+	/** Bumped on invalidation to discard stale loads. */
 	private generation = 0;
 
 	constructor(private readonly controller: SyncController) {}
@@ -81,11 +81,7 @@ export class SignsProvider {
 		return this.cache.has(path);
 	}
 
-	/**
-	 * `currentText` is the editor buffer the hunk index was computed against.
-	 * The operation reads the file from disk, so the two are compared before
-	 * anything is published: an unsaved buffer must not push a different hunk.
-	 */
+	/** currentText is compared against disk before publishing so an unsaved buffer does not push a different hunk. */
 	async pushHunk(
 		path: string,
 		index: number,
@@ -181,9 +177,7 @@ export class SignsProvider {
 	}
 
 	private async reload(path: string): Promise<void> {
-		// A request started before the last invalidation would deliver the very
-		// baseline that was just thrown away, so only requests from the current
-		// generation are reused or applied.
+		// Only requests from the current generation are reused or applied, dropping stale ones.
 		const generation = this.generation;
 		const existing = this.inFlight.get(path);
 		if (existing && existing.generation === generation) return existing.promise;
@@ -192,8 +186,7 @@ export class SignsProvider {
 				const snapshot = await this.controller
 					.loadBaselineForPath(path)
 					.catch((err: unknown) => {
-						// Callers fire this with `void`; letting it reject would surface
-						// as an unhandled rejection instead of "no signs for this file".
+						// Resolving to null prevents unhandled rejections for callers firing this with void.
 						reportWarning(`Could not load the baseline for "${path}".`, err);
 						return null;
 					});

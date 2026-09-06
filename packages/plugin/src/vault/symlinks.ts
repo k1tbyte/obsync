@@ -1,14 +1,8 @@
 import { type DataAdapter, FileSystemAdapter } from "obsidian";
 
 /**
- * Symlinks, Windows junctions and directory links look like ordinary folders to
- * Obsidian, so the vault walk happily descends into them and offers to sync
- * whatever lives on the other side. The link belongs to one machine, not to the
- * vault, so it is skipped the way a device-local ignore pattern is: never
- * pushed, and never read as a local deletion of what other devices store there.
- *
- * Only the filesystem can tell a link apart. Mobile has neither Node nor
- * symlinks, so it degrades to "nothing is a link".
+ * Links appear as folders to Obsidian. They belong to one machine, so they are skipped like device-local ignores: never pushed, never read as local deletions.
+ * Only the filesystem can identify links. Mobile lacks Node and symlinks, so it degrades to a no-op.
  */
 export interface SymlinkDetector {
 	isLink(path: string): boolean;
@@ -28,10 +22,7 @@ const NEVER: SymlinkDetector = {
 	findLink: () => null,
 };
 
-/**
- * @param root Vault-relative folder that the detector's paths are relative to,
- * for sessions running inside a sub-tree (a shared folder).
- */
+/** @param root Vault-relative folder detector paths are relative to, for sub-tree sessions. */
 export function createSymlinkDetector(
 	adapter: DataAdapter,
 	enabled: boolean,
@@ -70,9 +61,7 @@ export function symlinkDetector(
 	};
 	return {
 		isLink(path) {
-			// A file under a linked folder is an ordinary file, so every ancestor
-			// has to be probed. Caching each prefix keeps that to roughly one
-			// filesystem call per path across a whole scan.
+			// Files under linked folders are ordinary, requiring ancestor probing. Caching prefixes minimizes filesystem calls.
 			return findLink(path) !== null;
 		},
 		findLink,

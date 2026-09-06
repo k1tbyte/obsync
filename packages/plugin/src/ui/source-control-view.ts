@@ -1,7 +1,7 @@
 import { type App, ItemView, Platform, type WorkspaceLeaf } from "obsidian";
-import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "../constants";
-import type ObsyncPlugin from "../main";
-import { EConflictStrategy, type SyncStatusSnapshot } from "../sync/controller";
+import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
+import type { PluginHost } from "@/plugin/host";
+import { EConflictStrategy, type SyncStatusSnapshot } from "@/sync/controller";
 import {
 	buildTree,
 	ConflictPreviewManager,
@@ -42,7 +42,7 @@ function makeActivatable(
 }
 
 export async function openSourceControlHistory(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	path?: string,
 ): Promise<void> {
 	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
@@ -72,7 +72,7 @@ export async function openSourceControlView(
 }
 
 export class SourceControlView extends ItemView {
-	private readonly plugin: ObsyncPlugin;
+	private readonly plugin: PluginHost;
 	private layout: "tree" | "flat" = "tree";
 	private readonly sections = new SectionStateManager();
 	private readonly previews: ConflictPreviewManager;
@@ -85,7 +85,7 @@ export class SourceControlView extends ItemView {
 	private tab: ESourceTab = ESourceTab.Changes;
 	private historyTab!: HistoryTab;
 
-	constructor(leaf: WorkspaceLeaf, plugin: ObsyncPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: PluginHost) {
 		super(leaf);
 		this.plugin = plugin;
 		this.previews = new ConflictPreviewManager({
@@ -151,9 +151,7 @@ export class SourceControlView extends ItemView {
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
-	/**
-	 * After a push, reload history only when the History tab is showing a file.
-	 */
+	/** Reload history after a push only if the History tab shows a file. */
 	refreshHistoryAfterPush(): void {
 		if (this.tab !== ESourceTab.History || !this.historyTab.hasPath) return;
 		this.historyTab.clearVersions();
@@ -173,8 +171,7 @@ export class SourceControlView extends ItemView {
 		}
 		const signature = this.signatureOf(snapshot);
 		if (!force && signature === this.lastSignature) {
-			// Status, progress and button states change far more often than the
-			// tree; updating them in place is what keeps scrolling usable mid-push.
+			// In-place updates to status/progress keep scrolling usable mid-push.
 			this.refreshStatus(snapshot);
 			this.updateSelectionState();
 			return;
@@ -249,15 +246,7 @@ export class SourceControlView extends ItemView {
 		if (this.refreshButtonEl) this.refreshButtonEl.disabled = snapshot.busy;
 	}
 
-	/**
-	 * Identifies the rendered tree, and nothing else.
-	 *
-	 * Progress text and busy state used to be part of it, so every "Pushing
-	 * 3/12…" tick rebuilt the whole tree and threw away scroll position, focus
-	 * and expanded previews. Hashes are part of it, because editing a file that
-	 * is already listed changes no path and no type, and the view would not
-	 * notice.
-	 */
+	/** Identifies the rendered tree structure. Hashes are included so file edits update the view. */
 	private signatureOf(snapshot: SyncStatusSnapshot): string {
 		const diff = snapshot.result?.diff;
 		if (!diff) return `empty|${snapshot.error ?? ""}`;
@@ -642,7 +631,7 @@ export class SourceControlView extends ItemView {
 }
 
 export async function openDiffView(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	path: string,
 	history?: { hash: string; label: string; size?: number },
 ): Promise<void> {

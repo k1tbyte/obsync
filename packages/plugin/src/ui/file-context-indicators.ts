@@ -1,12 +1,12 @@
-import { MarkdownView, setIcon } from "obsidian";
+import { MarkdownView, type Plugin, setIcon } from "obsidian";
 
-import type ObsyncPlugin from "../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	describeShareTooltip,
 	findShareForPath,
 	shareIndicatorState,
-} from "../share";
-import { createSymlinkDetector, type SymlinkDetector } from "../vault/symlinks";
+} from "@/share";
+import { createSymlinkDetector, type SymlinkDetector } from "@/vault/symlinks";
 import type { IndicatorHandle } from "./indicator-handle";
 import { revealInFileExplorer } from "./obsidian-helpers";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./share-indicator";
 
 export function registerFileContextIndicators(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 ): IndicatorHandle {
 	const root = plugin.addStatusBarItem();
 	root.addClass("obsync-file-context", "obsync-hidden");
@@ -48,8 +48,7 @@ export function registerFileContextIndicators(
 			detector = createDetector(plugin);
 		}
 
-		// Clicking the file explorer (e.g. a collapse chevron) makes it the
-		// active leaf, so keep the last markdown view instead of losing context.
+		// Keep the last markdown view when clicking the file explorer.
 		const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 		if (activeView) contextView = activeView;
 		if (contextView && !contextView.containerEl.isConnected) {
@@ -71,7 +70,7 @@ export function registerFileContextIndicators(
 		revealPath = linkRoot ?? share?.localRoot ?? null;
 
 		if (share) {
-			const status = plugin.shares?.getStatus(share.id);
+			const status = plugin.shares.getStatus(share.id);
 			if (status) {
 				const state = shareIndicatorState(share, status);
 				const tooltip = describeShareTooltip(share, status);
@@ -130,8 +129,7 @@ export function registerFileContextIndicators(
 
 	plugin.registerEvent(plugin.app.workspace.on("file-open", schedule));
 	plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", schedule));
-	// Collapsing folders, splits and mode switches rebuild the view header and
-	// drop custom actions, so the chip and header action must be re-added.
+	// Re-add chip and action after layout changes drop them.
 	plugin.registerEvent(plugin.app.workspace.on("layout-change", schedule));
 	plugin.registerEvent(plugin.app.vault.on("create", resetDetector));
 	plugin.registerEvent(plugin.app.vault.on("delete", resetDetector));
@@ -161,7 +159,7 @@ export function registerFileContextIndicators(
 	};
 }
 
-function createDetector(plugin: ObsyncPlugin): SymlinkDetector {
+function createDetector(plugin: Plugin & PluginHost): SymlinkDetector {
 	return createSymlinkDetector(
 		plugin.app.vault.adapter,
 		plugin.settings.ignoreSymlinks,

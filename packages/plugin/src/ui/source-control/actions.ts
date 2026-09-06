@@ -1,13 +1,9 @@
 import { Menu } from "obsidian";
 
-import { BATCH_RESOLVE_CONFIRM_THRESHOLD } from "../../constants";
-import type ObsyncPlugin from "../../main";
-import type {
-	EConflictStrategy,
-	SyncStatusSnapshot,
-} from "../../sync/controller";
-import { notifyError, notifyInfo, runWithNotice } from "../notices";
-import { openInEditor, revealInFileExplorer } from "../obsidian-helpers";
+import type { PluginHost } from "@/plugin/host";
+import type { EConflictStrategy, SyncStatusSnapshot } from "@/sync/controller";
+import { notifyError, notifyInfo, runWithNotice } from "@/ui/notices";
+import { openInEditor, revealInFileExplorer } from "@/ui/obsidian-helpers";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
 import {
 	confirmAdoptNewVault,
@@ -17,8 +13,10 @@ import {
 import type { SectionStateManager } from "./section-state-manager";
 import { ESection } from "./types";
 
+const BATCH_RESOLVE_CONFIRM_THRESHOLD = 5;
+
 interface SourceControlActionDeps {
-	plugin: ObsyncPlugin;
+	plugin: PluginHost;
 	sections: SectionStateManager;
 	previews: ConflictPreviewManager;
 	showHistory: (path: string) => void;
@@ -26,7 +24,7 @@ interface SourceControlActionDeps {
 }
 
 export class SourceControlActions {
-	private readonly plugin: ObsyncPlugin;
+	private readonly plugin: PluginHost;
 	private readonly sections: SectionStateManager;
 	private readonly previews: ConflictPreviewManager;
 	private readonly showHistory: (path: string) => void;
@@ -159,8 +157,7 @@ export class SourceControlActions {
 	async revertSelected(section: ESection): Promise<void> {
 		const paths = this.sections.selectedPaths(section);
 		if (paths.length === 0) return;
-		// Revert overwrites unsaved local work with the last synced version, so it
-		// asks first — the same courtesy the reset command already extends.
+		// Revert overwrites unsaved local work, so it asks first.
 		if (!(await confirmRevert(this.plugin.app, paths))) return;
 		await this.runSelection(
 			section,
@@ -189,8 +186,7 @@ export class SourceControlActions {
 		);
 	}
 
-	/** Clears the selection only once the operation succeeded, so a failure
-	 * leaves the user something to retry. */
+	/** Clears selection only on success so failures leave the user something to retry. */
 	private async runSelection(
 		section: ESection,
 		action: () => Promise<unknown>,

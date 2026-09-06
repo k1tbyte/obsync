@@ -9,57 +9,66 @@
 ## Environment & tooling
 
 - Node.js: use current LTS (Node 18+ recommended).
-- **Package manager: npm** (required for this sample - `package.json` defines npm scripts and dependencies).
+- **Package manager: pnpm** (workspace monorepo; `pnpm-workspace.yaml` lists the packages).
 - **Bundler: esbuild** (required for this sample - `esbuild.config.mjs` and build scripts depend on it). Alternative bundlers like Rollup or webpack are acceptable for other projects if they bundle all external dependencies into `main.js`.
 - Types: `obsidian` type definitions.
-
-**Note**: This sample project has specific technical dependencies on npm and esbuild. If you're creating a plugin from scratch, you can choose different tools, but you'll need to replace the build configuration accordingly.
+- Lint and format: **Biome** (`biome.json`). Tests: **vitest**.
 
 ### Install
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### Dev (watch)
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ### Production build
 
 ```bash
-npm run build
+pnpm build
 ```
 
 ## Linting
 
-- To use eslint install eslint from terminal: `npm install -g eslint`
-- To use eslint to analyze this project use this command: `eslint main.ts`
-- eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder: `eslint ./src/`
+- `pnpm lint` checks the whole repo, `pnpm lint:fix` applies what Biome can fix.
+- `pnpm typecheck` runs `tsc -noEmit` in every package; `pnpm test` runs every suite.
 
 ## File & folder conventions
 
 - **Organize code into multiple files**: Split functionality across separate modules rather than putting everything in `main.ts`.
 - Source lives in `src/`. Keep `main.ts` small and focused on plugin lifecycle (loading, unloading, registering commands).
-- **Example file structure**:
+- **Actual layout** (`packages/plugin/src/`):
   ```
-  src/
-    main.ts           # Plugin entry point, lifecycle management
-    settings.ts       # Settings interface and defaults
-    commands/         # Command implementations
-      command1.ts
-      command2.ts
-    ui/              # UI components, modals, views
-      modal.ts
-      view.ts
-    utils/           # Utility functions, helpers
-      helpers.ts
-      constants.ts
-    types.ts         # TypeScript interfaces and types
+  main.ts        # lifecycle only: onload/onunload, saveSettings, scheduleScopeRefresh
+  plugin/        # composition root - host.ts, bootstrap, and one register*() per concern
+  core/          # long-lived services: LogService, PassphraseManager, StatePersister, DeviceName
+  sync/          # the engine: manifest, diff, operations, history, projection. No UI.
+  storage/       # remote backends behind StorageAdapter, plus the registry
+  share/         # shared folders: service orchestrator + status/realtime/session collaborators
+  vault/         # Obsidian filesystem access, scanning, ignore rules
+  settings/      # settings model, transfer, and the settings tab sections
+  ui/            # views, modals, indicators, notices
+  editor/        # CodeMirror gutter signs
+  shared/, utils/  # app-aware helpers vs. generic algorithms
   ```
+- **`PluginHost` over the plugin class** (`plugin/host.ts`): feature modules take `PluginHost`,
+  never `import ObsyncPlugin from "@/main"` - that import direction is what turned `main.ts`
+  into a proxy dump. A module that also registers something with Obsidian takes
+  `Plugin & PluginHost`; `ObsyncPlugin` satisfies both.
+- **Layering**: `sync/`, `storage/`, `share/` and `vault/` must not import from `ui/`,
+  `settings/` (beyond `settings/model`) or `editor/`. An adapter that needs to tell the user
+  something returns a result for the caller to surface - see `StorageAuthOutcome`.
+- **Imports**: `@/` for anything outside the file's own directory, relative `./` inside it.
+  Tests reach source through `@/` and their own helpers through `@tests/`.
+  Cross-area *behaviour* goes through the area barrel (`@/ui`, `@/storage`); leaf type modules
+  (`@/storage/types`, `@/share/types`) are imported directly so a type never drags in an adapter graph.
+- **Constants live with their consumer.** A value used by one module is a module-level `const`
+  there; only genuinely cross-area values belong in `src/constants.ts`.
+- **Tests mirror `src/`**: `tests/<area>/<module>.test.ts`, helpers in `tests/helpers/`.
 - **Do not commit build artifacts**: Never commit `node_modules/`, `main.js`, or other generated files to version control.
 - Keep the plugin small. Avoid large dependencies. Prefer browser-compatible packages.
 - Generated output should be placed at the plugin root or `dist/` depending on your build setup. Release artifacts must end up at the top level of the plugin folder in the vault (`main.js`, `manifest.json`, `styles.css`).
@@ -81,7 +90,7 @@ npm run build
 ## Testing
 
 - **Unit tests**: `vitest` is configured for core logic testing (`diff.ts`, `hunks.ts`, `concurrency.ts`, `ignore.ts`, etc.).
-  - Run tests with `npm run test` or `npm run test:watch`.
+  - Run tests with `pnpm test`, or `pnpm --filter obsync test:watch` while iterating.
   - ALL domain logic (diffs, merging, concurrency, hunks matching, baseline cache) must have complete unit-test coverage.
 - **Hunk source of truth**: a hunk operation must take both texts from `loadHunkSides`, the same function the projection uses, and must verify the sha256 of each side before it applies an index. A view that diffs one pair of texts while the operation recomputes from another will apply the wrong hunk.
 - **Baseline advance**: the baseline may only move for paths an operation actually wrote. Adopting a whole published or remote manifest silently claims every file this device has not downloaded, and the next push publishes them as deletions.
@@ -104,7 +113,7 @@ npm run build
 - Device transfer exports only the main sync settings as a compact `obsidian://obsync?d=...` URL/QR. The payload should use short field names, omit default-valued fields, and may compress before encryption when that makes the token smaller. Never include the cached passphrase, passphrase cache settings, or local-only display preferences. Import must require the same passphrase and explicit confirmation.
 - Local diagnostics are stored only on the current device in `<configDir>/plugins/obsync/logs.json` and surfaced in the second tab of the plugin settings. They must stay excluded from sync.
 - Shared folders (`src/share/`) sync one vault folder to a share-specific storage prefix with a random per-share AES key (never the vault passphrase). Share manifests store share-root-relative paths (via `ScopedVaultAdapter`) so participants can mount a share at different local folders. Conflict handling must never lose data: clean three-way merge, otherwise local wins and the remote version is written as a conflict copy; delete-vs-edit resolves to the edit.
-- Invite links (`obsidian://obsync-share?d=…`) are encrypted with an out-of-band passphrase and carry the share key plus a broker token — **never storage credentials**. Participants reach storage only through the owner's self-hosted broker (`packages/auth-worker`), which presigns one S3 URL per object under `shares/<id>/`. `share-key.ts` is the whole security boundary: it must fail closed, and every change to it needs traversal tests. Shares therefore require S3-compatible storage; WebDAV and Google Drive cannot presign.
+- Invite links (`obsidian://obsync-share?d=…`) are encrypted with an out-of-band passphrase and carry the share key plus a broker token — **never storage credentials**. Participants reach storage only through the owner's self-hosted broker (`packages/auth-worker`), which presigns one S3 URL per object under `shares/<id>/`. `share-key.ts` is the whole security boundary: it must fail closed, and every change to it needs traversal tests. Shares therefore require S3-compatible storage; WebDAV and Google Drive cannot presign. The share backend is its own setting (`shareStorageKind`, picked under Shared folders) and is independent of `activeStorageKind` - a vault syncing to Google Drive still shares over S3 without switching. `listShareBackends()`/`canHostShares()` in `storage/registry.ts` are the source of truth for which backends qualify. A share's stored `storage` config pins its location (endpoint, bucket, prefix) forever; only the credentials are refreshed from settings on each cycle, via `withCurrentCredentials()` - re-deriving the location would silently orphan the objects already there.
 - Diff views must never load file content that cannot be shown as text: classify sides from `adapter.stat()`, manifest entry sizes, and `KNOWN_BINARY_EXTENSIONS` before reading or downloading anything (see `src/sync/projection.ts`). Keep this invariant when touching diff/merge code paths.
 
 ## Versioning & releases
@@ -253,7 +262,7 @@ this.registerInterval(window.setInterval(() => { /* ... */ }, 1000));
 ## Troubleshooting
 
 - Plugin doesn't load after build: ensure `main.js` and `manifest.json` are at the top level of the plugin folder under `<Vault>/.obsidian/plugins/<plugin-id>/`. 
-- Build issues: if `main.js` is missing, run `npm run build` or `npm run dev` to compile your TypeScript source code.
+- Build issues: if `main.js` is missing, run `pnpm build` or `pnpm dev` to compile your TypeScript source code.
 - Commands not appearing: verify `addCommand` runs after `onload` and IDs are unique.
 - Settings not persisting: ensure `loadData`/`saveData` are awaited and you re-render the UI after changes.
 - Mobile-only issues: confirm you're not using desktop-only APIs; check `isDesktopOnly` and adjust.

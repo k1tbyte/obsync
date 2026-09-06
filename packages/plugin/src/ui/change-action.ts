@@ -1,4 +1,4 @@
-import type { EChangeType } from "../types";
+import type { EChangeType } from "@/sync/types";
 
 export type ChangeAction = "add" | "modify" | "delete";
 

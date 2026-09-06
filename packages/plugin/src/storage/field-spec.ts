@@ -1,4 +1,4 @@
-import { DEFAULT_CONCURRENCY } from "../constants";
+import { DEFAULT_CONCURRENCY } from "@/constants";
 
 export const EFieldKind = {
 	Text: "text",
@@ -39,7 +39,6 @@ export type SettingsFieldSpec =
 	| ToggleFieldSpec
 	| NumberFieldSpec;
 
-/** Shared per-backend upload/download parallelism field. */
 export const CONCURRENCY_FIELD: NumberFieldSpec = {
 	kind: EFieldKind.Number,
 	key: "concurrency",

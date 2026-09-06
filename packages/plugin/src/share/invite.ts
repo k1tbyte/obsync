@@ -1,13 +1,13 @@
-import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
-import { getDescriptor } from "../storage";
+import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "@/crypto";
+import { getDescriptor } from "@/storage";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
 	type StorageAdapterConfig,
-} from "../storage/config";
-import { deriveRoomToken } from "../sync/realtime";
-import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
-import { deflateBytes, inflateBytes } from "../utils/compress";
+} from "@/storage/config";
+import { deriveRoomToken } from "@/sync/realtime";
+import { base64UrlToBytes, bytesToBase64Url } from "@/utils/base64";
+import { deflateBytes, inflateBytes } from "@/utils/compress";
 import { type SharedFolderConfig, shareChannelId } from "./types";
 
 export const SHARE_INVITE_ACTION = "obsync-share";
@@ -25,7 +25,6 @@ const STORAGE_BACKENDS = new Set<string>(Object.values(EStorageBackend));
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** What travels inside an invite: everything a device needs to join. */
 export interface ShareInvite {
 	id: string;
 	name: string;
@@ -47,8 +46,7 @@ interface InvitePayload {
 
 /**
  * Encodes a share invite as an encrypted `obsidian://obsync-share?d=…` URL.
- *
- * The payload carries the share's content key plus a broker token — never
+ * The payload carries the share's content key plus a broker token - never
  * storage credentials. The token grants access to this share's prefix only and
  * can be revoked without touching the other participants.
  */
@@ -95,8 +93,6 @@ export async function createShareInviteUrl(
 	return `obsidian://${SHARE_INVITE_ACTION}?${INVITE_PARAM}=${token}`;
 }
 
-/** Decodes and validates an invite URL or bare token. Throws on bad input,
- * wrong passphrase, or a malformed payload. */
 export async function readShareInvite(
 	input: string,
 	passphrase: string,

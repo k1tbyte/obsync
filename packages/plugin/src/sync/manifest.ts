@@ -1,17 +1,17 @@
 import {
-	MANIFEST_VERSION,
-	REMOTE_MANIFEST_KEY,
-	REMOTE_OBJECTS_PREFIX,
-} from "../constants";
-import {
 	decryptJson,
 	type EncryptionKey,
 	encryptJson,
 	randomId,
-} from "../crypto";
-import type { ObjectStorage } from "../storage/types";
-import type { LocalSnapshot, Manifest } from "../types";
+} from "@/crypto";
+import type { ObjectStorage } from "@/storage/types";
+import {
+	MANIFEST_VERSION,
+	REMOTE_MANIFEST_KEY,
+	REMOTE_OBJECTS_PREFIX,
+} from "@/sync/constants";
 import { defaultDeviceName } from "./device";
+import type { LocalSnapshot, Manifest } from "./types";
 
 export async function fetchRemoteManifest(
 	storage: ObjectStorage,
@@ -31,15 +31,11 @@ export async function fetchRemoteManifest(
 /**
  * Returns the authoritative remote for diffing.
  *
- * S3-compatible backends (R2/B2/Wasabi/MinIO) don't always serve read-after-write
- * consistently. After we publish manifest M2 (parent=M1), a fresh GET may still
- * return M1 for a while. Naively trusting that GET would mark every just-pushed
- * file as a "remote change" pointing back to the pre-push hash — and pulling it
- * would silently roll back the user's work.
- *
- * If the fetched manifest's snapshotId equals `baseline.parentSnapshotId`, we
- * know we have already published past it. The local baseline IS what we last
- * wrote to S3, so use it as the authoritative remote.
+ * S3-compatible backends don't always serve read-after-write consistently.
+ * Naively trusting a stale GET would mark just-pushed files as remote changes
+ * pointing to the pre-push hash - and pulling would roll back the user's work.
+ * If fetched manifest equals baseline.parentSnapshotId, the local baseline is
+ * what we last wrote to S3, so use it as the authoritative remote.
  */
 export function reconcileRemoteAgainstBaseline(
 	remote: Manifest | null,
@@ -75,12 +71,8 @@ export class ConcurrentPushError extends Error {
 }
 
 /**
- * Publishes a manifest, but first verifies that the remote head is still at
- * `expectedParentSnapshotId`. If another writer pushed between our compare and
- * publish, we abort without overwriting. The post-publish verify guards against
- * a race where two writers both pass the precheck and race the PUT.
- *
- * `expectedParentSnapshotId` is `null` on first push (no prior remote).
+ * Publishes a manifest if remote head matches expectedParentSnapshotId.
+ * Post-publish verify guards against races where two writers pass precheck.
  */
 export async function publishManifestWithGuard(
 	storage: ObjectStorage,
@@ -89,9 +81,7 @@ export async function publishManifestWithGuard(
 	expectedParentSnapshotId: string | null,
 	baseline: Manifest | null = null,
 ): Promise<void> {
-	// Both reads go through the same stale-read reconciliation as compare, so a
-	// backend that has not caught up with our own last write does not look like
-	// a competing writer.
+	// Stale-read reconciliation prevents a lagging backend from appearing as a competing writer.
 	const fetched = await fetchRemoteManifest(storage, key);
 	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
 	const precheckId = precheck?.snapshotId ?? null;
@@ -114,9 +104,8 @@ export async function publishManifestWithGuard(
 }
 
 /**
- * Snapshot ids this device published on the way to `published`. A lagging
- * backend can still serve any of them; a competing writer always mints a fresh
- * id, so reading one of ours back is a stale read and not a lost push.
+ * Snapshot ids this device published on the way to `published`. Reading one
+ * back indicates a stale read, not a lost push.
  */
 function ownSnapshotIds(
 	published: Manifest,

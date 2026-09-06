@@ -1,9 +1,3 @@
-import type {
-	LocalSnapshot,
-	LocalState,
-	ManifestEntry,
-	SessionState,
-} from "../types";
 import { diff } from "./diff";
 import {
 	type CompareResult,
@@ -11,6 +5,12 @@ import {
 	filterManifestForDiff,
 } from "./engine";
 import type { OperationOutcome } from "./operations/types";
+import type {
+	LocalSnapshot,
+	LocalState,
+	ManifestEntry,
+	SessionState,
+} from "./types";
 
 export function recomputeAfterWrite(
 	prevResult: CompareResult,
@@ -23,9 +23,7 @@ export function recomputeAfterWrite(
 	const remoteFiles = outcome.newRemote?.files ?? {};
 	const files: Record<string, ManifestEntry> = { ...prevResult.snapshot.files };
 	for (const path of outcome.touchedPaths) {
-		// An operation that rewrote the file says so explicitly (null = it is now
-		// absent); only paths it did not touch locally may be assumed equal to
-		// baseline/remote.
+		// Explicit rewrite by operation takes precedence (null = absent); untouched paths fallback to baseline/remote.
 		const next = outcome.localEntries?.has(path)
 			? outcome.localEntries.get(path)
 			: (baselineFiles[path] ?? remoteFiles[path]);
@@ -52,8 +50,7 @@ export function recomputeAfterWrite(
 	};
 }
 
-/** Flattens the persisted per-storage state into the session view the engine
- * works with. */
+/** Flattens persisted per-storage state into session view. */
 export function projectSession(
 	local: LocalState | null,
 	identity: string,
@@ -69,8 +66,7 @@ export function projectSession(
 	};
 }
 
-/** Writes a session back into the persisted state under its own storage slot,
- * leaving every other storage's remembered vaultId/baseline untouched. */
+/** Writes session back into its storage slot, leaving other storages untouched. */
 export function mergeSessionIntoLocal(
 	current: LocalState | null,
 	session: SessionState,
@@ -83,8 +79,7 @@ export function mergeSessionIntoLocal(
 			baseline: session.baseline,
 		};
 	} else if (current?.storages[identity] && session.baseline !== null) {
-		// Preserve the slot's vaultId if the engine returned a baseline without
-		// re-asserting vaultId (defensive — should not normally happen).
+		// Preserve vaultId if engine returned baseline without vaultId (defensive).
 		storages[identity] = {
 			vaultId: current.storages[identity].vaultId,
 			baseline: session.baseline,
@@ -97,8 +92,7 @@ export function mergeSessionIntoLocal(
 		deviceName: session.deviceName,
 		storages,
 		hashCache: session.hashCache,
-		// Shared-folder caches are owned by the share service; a main-sync
-		// persist must carry them through untouched, not drop them.
+		// Preserve share service caches.
 		shareCaches: current?.shareCaches ?? {},
 	};
 }

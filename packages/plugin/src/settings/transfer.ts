@@ -1,8 +1,8 @@
-import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
-import { getDescriptor } from "../storage";
-import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
-import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
-import { deflateBytes, inflateBytes } from "../utils/compress";
+import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "@/crypto";
+import { getDescriptor } from "@/storage";
+import { EStorageBackend, type StorageAdapterConfig } from "@/storage/config";
+import { base64UrlToBytes, bytesToBase64Url } from "@/utils/base64";
+import { deflateBytes, inflateBytes } from "@/utils/compress";
 import {
 	activeStorage,
 	DEFAULT_SETTINGS,
@@ -29,8 +29,7 @@ const TRANSFER_SYNC_KEYS: ReadonlyArray<keyof SettingsSyncCategories> = [
 	"themes",
 ];
 const DEFAULT_SYNC_MASK = encodeSyncMask(DEFAULT_SETTINGS_SYNC);
-/** The share broker only ever backs a shared folder, never the main vault, so
- * it must not be transferable as the active backend. */
+/** The share broker only backs shared folders, never the main vault; it cannot be transferred as active. */
 const STORAGE_BACKENDS = new Set<string>(
 	Object.values(EStorageBackend).filter(
 		(kind) => kind !== EStorageBackend.ShareBroker,
@@ -40,7 +39,7 @@ const STORAGE_BACKENDS = new Set<string>(
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** Every settings key TRANSFER_FIELDS carries, derived so the two cannot drift. */
+/** TRANSFER_FIELDS settings keys, derived to prevent drift. */
 type TransferFieldKey = (typeof TRANSFER_FIELDS)[number]["settingsKey"];
 
 export interface ObsyncTransferSettings
@@ -519,8 +518,7 @@ function isOptionalStoragePayload(value: unknown): boolean {
 	const payload = value as Partial<TransferStoragePayload>;
 	if (!isStorageBackend(payload.a)) return false;
 	if (!isPlainObject(payload.c)) return false;
-	// The active backend has to be one of the configs that travelled with it,
-	// or the import points at a backend the receiving device cannot build.
+	// The active backend must be included in the transfer payload.
 	if (!(payload.a in payload.c)) return false;
 	return Object.values(payload.c).every(isTransferStorageConfig);
 }
@@ -579,9 +577,7 @@ function createStoragePayload(
 	settings: ObsyncSettings,
 	mode: ESettingsTransferStorageMode,
 ): TransferStoragePayload {
-	// activeStorage() falls back to a default config when activeStorageKind
-	// names a slot that is not there, so the payload follows the config it
-	// actually exported rather than the possibly dangling key.
+	// activeStorage() falls back to a default config if the active slot is missing; export follows the resolved config.
 	const active = activeStorage(settings);
 	const storageConfigs =
 		mode === ESettingsTransferStorageMode.All

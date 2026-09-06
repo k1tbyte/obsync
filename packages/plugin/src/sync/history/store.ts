@@ -1,14 +1,15 @@
+import { decryptJson, type EncryptionKey, encryptJson } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import { errorMessage } from "@/shared/errors";
+import type { ObjectStorage } from "@/storage/types";
 import {
 	REMOTE_SNAPSHOT_INDEX_KEY,
 	REMOTE_SNAPSHOTS_PREFIX,
-	SNAPSHOT_INDEX_VERSION,
-} from "../../constants";
-import { decryptJson, type EncryptionKey, encryptJson } from "../../crypto";
-import { reportWarning } from "../../shared/diagnostics";
-import { errorMessage } from "../../shared/errors";
-import type { ObjectStorage } from "../../storage/types";
-import type { Manifest } from "../../types";
+} from "@/sync/constants";
+import type { Manifest } from "@/sync/types";
 import type { SnapshotIndex, SnapshotIndexEntry } from "./types";
+
+const SNAPSHOT_INDEX_VERSION = 1;
 
 export function snapshotKey(snapshotId: string): string {
 	return `${REMOTE_SNAPSHOTS_PREFIX}${snapshotId}.json.enc`;
@@ -24,26 +25,22 @@ export async function readSnapshotIndex(
 	try {
 		parsed = await decryptJson<SnapshotIndex>(key, blob);
 	} catch (err) {
-		// The index object exists but could not be decrypted/parsed (transient
-		// fetch corruption, wrong key mid-rotation, etc.). Returning a fresh
-		// index here would let the caller overwrite the real one and orphan all
-		// history. Fail loudly instead so the update is skipped this round.
+		// Present but unreadable index (corruption, key rotation). Fail loudly instead of returning
+		// fresh index, which would overwrite real one and orphan history.
 		throw new Error(
 			`Snapshot index present but unreadable; refusing to reset it: ${errorMessage(err)}`,
 		);
 	}
 	if (!Array.isArray(parsed.entries)) {
-		// Same reasoning as above: an index that is present but malformed must not
-		// be silently replaced with an empty one.
+		// Malformed index must not be silently replaced.
 		throw new Error("Snapshot index is malformed; refusing to reset it.");
 	}
 	return parsed;
 }
 
 /**
- * Applies a change to the index and confirms it survived. Publishers are
- * serialised by the manifest guard, but history updates are not, so a second
- * writer can land between the read and the write and drop an entry.
+ * Applies change to index and confirms survival. History updates are not serialized
+ * by manifest guard, preventing concurrent writers from dropping entries.
  */
 export async function updateSnapshotIndex(
 	storage: ObjectStorage,

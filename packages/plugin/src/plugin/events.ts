@@ -1,10 +1,10 @@
-import { type TAbstractFile, TFile } from "obsidian";
+import { type Plugin, type TAbstractFile, TFile } from "obsidian";
 import { IGNORE_FILE_NAME } from "@/constants";
 import type { StatePersister } from "@/core";
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import { openSourceControlHistory } from "@/ui";
 
-export function registerFileHistoryMenu(plugin: ObsyncPlugin): void {
+export function registerFileHistoryMenu(plugin: Plugin & PluginHost): void {
 	plugin.registerEvent(
 		plugin.app.workspace.on("file-menu", (menu, file) => {
 			if (!plugin.settings.fileHistoryEnabled) return;
@@ -19,7 +19,7 @@ export function registerFileHistoryMenu(plugin: ObsyncPlugin): void {
 	);
 }
 
-export function registerIgnoreFileRefresh(plugin: ObsyncPlugin): void {
+export function registerIgnoreFileRefresh(plugin: Plugin & PluginHost): void {
 	const refreshIfIgnoreFile = (file: TAbstractFile, oldPath?: string): void => {
 		if (!isTrackedIgnorePath(file.path) && !isTrackedIgnorePath(oldPath))
 			return;
@@ -43,7 +43,7 @@ export function registerIgnoreFileRefresh(plugin: ObsyncPlugin): void {
 }
 
 export function registerStatePersistenceFlush(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	statePersister: StatePersister,
 ): void {
 	const flush = (): void => {

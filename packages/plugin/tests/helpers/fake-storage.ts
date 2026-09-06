@@ -1,9 +1,9 @@
-import type { StorageAdapter } from "../../src/storage/types";
+import type { StorageAdapter } from "@/storage/types";
 
-/** In-memory {@link StorageAdapter} for tests. `map` is exposed for assertions. */
+/** In-memory StorageAdapter. */
 export class FakeStorage implements StorageAdapter {
 	readonly map = new Map<string, Uint8Array>();
-	/** Counts existence probes, so tests can assert redundant ones are skipped. */
+	/** Counts existence probes for test assertions. */
 	existsCalls = 0;
 
 	identity(): string {

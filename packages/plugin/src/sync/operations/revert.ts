@@ -1,9 +1,9 @@
-import { LOG_PATH_LIMIT } from "../../constants";
-import { ESyncLogOperation } from "../../logs/store";
-import { EChangeType, type ManifestEntry } from "../../types";
-import { deletePath } from "../../vault/io";
-import { textToBytes, writeRemoteObject } from "../content";
-import { applyHunks, computeHunks } from "../hunks";
+import { ESyncLogOperation } from "@/logs/store";
+import { LOG_PATH_LIMIT } from "@/sync/constants";
+import { textToBytes, writeRemoteObject } from "@/sync/content";
+import { applyHunks, computeHunks } from "@/sync/hunks";
+import { EChangeType, type ManifestEntry } from "@/sync/types";
+import { deletePath } from "@/vault/io";
 import { writeLocalFile } from "./local-write";
 import {
 	assertSidesUnchanged,
@@ -85,8 +85,7 @@ export const revertHunksOp: Operation<RevertHunksArgs> = async (
 
 	const nextHashCache = { ...result.updatedCache };
 	let localEntry: ManifestEntry | null;
-	// A file with no baseline that reverts back to nothing was a local add:
-	// remove it instead of leaving an empty file behind.
+	// Reverting a local add leaves nothing; remove file instead of leaving it empty.
 	if (merged === "" && !deps.state.baseline?.files[path]) {
 		await deletePath(deps.adapter, path);
 		delete nextHashCache[path];

@@ -1,14 +1,9 @@
-import { hasDotSegment, normalizePath } from "../shared/path";
-import { EFileKind } from "../types";
-import type { ScopePolicy } from "../vault/scope";
-import type { SymlinkDetector } from "../vault/symlinks";
+import { hasDotSegment, normalizePath } from "@/shared/path";
+import { EFileKind } from "@/sync/types";
+import type { ScopePolicy } from "@/vault/scope";
+import type { SymlinkDetector } from "@/vault/symlinks";
 
-/**
- * Scope for a shared folder session. Paths are share-root-relative (the
- * {@link ScopedVaultAdapter} handles mapping), so everything is in scope
- * except dot-directories/files (.obsidian, .trash, .git and friends must
- * never travel through a share).
- */
+/** Paths are share-root-relative via ScopedVaultAdapter; dot-directories must never travel through a share. */
 export function createShareScopePolicy(
 	symlinks?: SymlinkDetector,
 ): ScopePolicy {

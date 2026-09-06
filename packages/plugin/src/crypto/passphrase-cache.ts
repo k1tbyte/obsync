@@ -1,12 +1,11 @@
 import type { DataAdapter } from "obsidian";
-
+import { PLUGIN_ID } from "@/constants";
 import {
 	DEVICE_KEY_BYTES,
 	DEVICE_KEY_FILE_NAME,
 	PASSPHRASE_CACHE_FILE_NAME,
-	PLUGIN_ID,
-} from "../constants";
-import { readBinary, writeBinary } from "../vault/io";
+} from "@/crypto/constants";
+import { readBinary, writeBinary } from "@/vault/io";
 import {
 	decryptJson,
 	type EncryptionKey,

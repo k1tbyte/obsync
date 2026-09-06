@@ -1,9 +1,7 @@
 import type { View, Workspace } from "obsidian";
 
 /**
- * The core file explorer's row map is not part of Obsidian's public API. Every
- * assumption about its shape lives here, behind a check, so an Obsidian update
- * that changes or removes it costs the indicators rather than the plugin.
+ * Abstracts the undocumented file explorer row map so Obsidian updates fail gracefully.
  */
 interface FileExplorerView extends View {
 	fileItems?: unknown;

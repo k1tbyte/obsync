@@ -1,4 +1,4 @@
-import type { FileDiffModel } from "../../sync/projection";
+import type { FileDiffModel } from "@/sync/projection";
 import {
 	type ConflictPreviewHandlers,
 	renderConflictPreview,
@@ -57,8 +57,7 @@ export class ConflictPreviewManager {
 			return;
 		}
 		previewEl.setText("Loading diff…");
-		// The element a load was started for may already be detached by a
-		// re-render, so the newest one is remembered and filled instead.
+		// The element may be detached by a re-render, so remember and fill the newest one.
 		this.pendingTargets.set(path, { previewEl, handlers });
 		if (this.loadingPreviews.has(path)) return;
 		this.loadingPreviews.add(path);

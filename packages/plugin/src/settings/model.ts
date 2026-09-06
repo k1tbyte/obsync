@@ -1,15 +1,16 @@
-import {
-	DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
-	DEFAULT_MAX_FILE_BYTES,
-} from "@/constants";
 import type { SharedFolderConfig } from "@/share/types";
 import {
+	canHostShares,
 	defaultS3Config,
-	type EStorageBackend,
+	EStorageBackend,
 	getDescriptor,
 	isAdapterConfigured,
 	type StorageAdapterConfig,
 } from "@/storage";
+
+const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+const DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS = 50;
 
 export interface SettingsSyncCategories {
 	coreSettings: boolean;
@@ -30,13 +31,12 @@ export const DEFAULT_SETTINGS_SYNC: SettingsSyncCategories = {
 };
 
 export interface ObsyncSettings {
-	/** Per-backend saved configs. The active one is `storageConfigs[activeStorageKind]`. */
+	/** Per-backend saved configs. */
 	storageConfigs: Record<string, StorageAdapterConfig>;
 	activeStorageKind: EStorageBackend;
 	settingsSync: SettingsSyncCategories;
 	ignorePatterns: string;
-	/** Skip symlinks, junctions and directory links: they point outside the
-	 * vault and exist only on this device. */
+	/** Skip symlinks and directory links pointing outside the vault. */
 	ignoreSymlinks: boolean;
 	maxFileBytes: number;
 	autoPullOnStartup: boolean;
@@ -51,9 +51,13 @@ export interface ObsyncSettings {
 	realtimeServerUrl: string;
 	realtimeToken: string;
 	cachePassphrase: boolean;
-	/** Folders shared with other people; each syncs to its own encrypted
-	 * remote location with its own key. */
+	/** Folders shared with others, each with its own encrypted remote and key. */
 	sharedFolders: SharedFolderConfig[];
+	/**
+	 * Backend that hosts shared folders. Independent of activeStorageKind, so a
+	 * vault syncing to Google Drive can still share over S3 without switching.
+	 */
+	shareStorageKind: EStorageBackend;
 	/** Self-hosted broker that signs share access for invitees. */
 	shareBrokerUrl: string;
 	shareBrokerAdminSecret: string;
@@ -86,6 +90,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	realtimeToken: "",
 	cachePassphrase: true,
 	sharedFolders: [],
+	shareStorageKind: EStorageBackend.S3,
 	shareBrokerUrl: "",
 	shareBrokerAdminSecret: "",
 	showStatusBar: true,
@@ -95,10 +100,16 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	uiLayout: "tree",
 };
 
-/** The single source of truth for the active backend config. */
 export function activeStorage(settings: ObsyncSettings): StorageAdapterConfig {
 	return (
 		settings.storageConfigs[settings.activeStorageKind] ?? defaultS3Config()
+	);
+}
+
+/** Config that hosts shared folders - not necessarily the active one. */
+export function shareStorage(settings: ObsyncSettings): StorageAdapterConfig {
+	return (
+		settings.storageConfigs[settings.shareStorageKind] ?? defaultS3Config()
 	);
 }
 
@@ -106,12 +117,11 @@ export function isStorageConfigured(settings: ObsyncSettings): boolean {
 	return isAdapterConfigured(activeStorage(settings));
 }
 
-/**
- * Bounds for every numeric setting. `mergeSettings` is the only door into the
- * settings object - loading `data.json`, and importing a transfer token both
- * come through it - so clamping here is what keeps a hand-edited file or a
- * crafted token from handing the engine a zero size cap or a negative interval.
- */
+export function isShareStorageConfigured(settings: ObsyncSettings): boolean {
+	return isAdapterConfigured(shareStorage(settings));
+}
+
+/** Bounds for numeric settings. Clamping here prevents invalid values from files or tokens. */
 const NUMERIC_BOUNDS = {
 	maxFileBytes: { min: 1, max: 2 * 1024 * 1024 * 1024 },
 	autoPullIntervalMinutes: { min: 0, max: 24 * 60 },
@@ -125,18 +135,14 @@ interface Bounds {
 	max: number;
 }
 
-/**
- * Below the minimum the value is nonsense (a negative interval, a zero size
- * cap) and the default is the honest answer; above the maximum the user is
- * asking for as much as possible, so cap rather than discard.
- */
+/** Returns fallback if below minimum; caps if above maximum. */
 function clamp(value: unknown, bounds: Bounds, fallback: number): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
 	if (value < bounds.min) return fallback;
 	return Math.min(bounds.max, Math.round(value));
 }
 
-/** Legacy single-field shape, folded into `storageConfigs` on first load. */
+/** Legacy single-field shape, folded on first load. */
 interface LegacyStorageShape {
 	storage?: StorageAdapterConfig;
 }
@@ -154,9 +160,7 @@ export function mergeSettings(
 	if (Object.keys(storageConfigs).length === 0) {
 		storageConfigs[DEFAULT_STORAGE.kind] = DEFAULT_STORAGE;
 	}
-	// Backfill fields added after a config was first saved (e.g. per-storage
-	// concurrency) from that backend's defaults, so older configs pick up
-	// new defaults without a re-save.
+	// Backfill fields added after initial save from backend defaults.
 	for (const [kind, config] of Object.entries(storageConfigs)) {
 		config.concurrency = clamp(
 			config.concurrency,
@@ -170,11 +174,23 @@ export function mergeSettings(
 			? requested
 			: (Object.keys(storageConfigs)[0] as EStorageBackend);
 
+	// A share backend must be able to presign; anything else would strand every
+	// share behind a broker that cannot reach the data.
+	const shareStorageKind =
+		stored?.shareStorageKind && canHostShares(stored.shareStorageKind)
+			? stored.shareStorageKind
+			: DEFAULT_SETTINGS.shareStorageKind;
+	if (!storageConfigs[shareStorageKind]) {
+		storageConfigs[shareStorageKind] =
+			getDescriptor(shareStorageKind).defaults();
+	}
+
 	const merged = {
 		...DEFAULT_SETTINGS,
 		...(stored ?? {}),
 		storageConfigs,
 		activeStorageKind,
+		shareStorageKind,
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
 			...((stored?.settingsSync as
@@ -200,8 +216,7 @@ function normalizeSharedFolders(value: unknown): SharedFolderConfig[] {
 			typeof (entry as SharedFolderConfig).id === "string" &&
 			typeof (entry as SharedFolderConfig).localRoot === "string" &&
 			typeof (entry as SharedFolderConfig).keyB64 === "string" &&
-			// typeof null is "object": a null here reaches isAdapterConfigured and
-			// takes the plugin down on load.
+			// Reject null to prevent crashes.
 			(entry as SharedFolderConfig).storage !== null &&
 			typeof (entry as SharedFolderConfig).storage === "object",
 	);

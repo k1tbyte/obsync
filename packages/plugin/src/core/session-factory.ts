@@ -10,7 +10,7 @@ import type { EngineDependencies } from "@/sync/engine";
 import { PassphraseRotatedError } from "@/sync/keyfile";
 import { projectSession } from "@/sync/session-state";
 import { loadState } from "@/sync/state";
-import type { SessionState } from "@/types";
+import type { SessionState } from "@/sync/types";
 import { notifyInfo } from "@/ui";
 import {
 	loadLocalIgnoreMatcher,

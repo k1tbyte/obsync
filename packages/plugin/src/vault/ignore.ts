@@ -1,7 +1,7 @@
 import ignore, { type Ignore } from "ignore";
 import type { DataAdapter } from "obsidian";
 
-import { IGNORE_FILE_NAME } from "../constants";
+import { IGNORE_FILE_NAME } from "@/constants";
 
 export interface IgnoreMatcher {
 	ignores(path: string): boolean;

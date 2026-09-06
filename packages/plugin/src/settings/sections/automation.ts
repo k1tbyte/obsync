@@ -1,15 +1,21 @@
 import { Setting } from "obsidian";
 
+import type { PluginHost } from "@/plugin/host";
 import {
-	AUTO_PULL_MAX_MINUTES,
-	AUTO_PULL_MIN_MINUTES,
+	type FieldContext,
+	renderFields,
+	type SettingsField,
+} from "@/settings/fields";
+import { EFieldKind } from "@/storage/field-spec";
+import {
+	clampMaxSnapshots,
 	FILE_HISTORY_MAX_SNAPSHOTS,
 	FILE_HISTORY_MIN_SNAPSHOTS,
-} from "../../constants";
-import type ObsyncPlugin from "../../main";
-import { EFieldKind } from "../../storage/field-spec";
-import { clampMaxSnapshots } from "../../sync/history";
-import { type FieldContext, renderFields, type SettingsField } from "../fields";
+} from "@/sync/history";
+
+const AUTO_PULL_MIN_MINUTES = 0;
+
+const AUTO_PULL_MAX_MINUTES = 1440;
 
 const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
@@ -106,10 +112,10 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	},
 ];
 
-/** Returns an unsubscribe for the live relay-status rows. */
+/** Returns unsubscribe for relay-status rows. */
 export function renderAutomationSection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	onDisplay: () => void,
 ): () => void {
 	new Setting(parent).setName("Automation").setHeading();
@@ -122,12 +128,12 @@ export function renderAutomationSection(
 
 function renderRelayStatus(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 ): () => void {
 	const statusSetting = new Setting(parent).setName("Relay status");
 	const devicesSetting = new Setting(parent).setName("Connected devices");
-	let connected = plugin.isRealtimeConnected();
-	let devices = [...plugin.getRealtimeDevices()];
+	let connected = plugin.realtime.isConnected();
+	let devices = [...plugin.realtime.getDevices()];
 
 	const render = (): void => {
 		statusSetting.setDesc(describeRelayStatus(plugin, connected));
@@ -141,11 +147,11 @@ function renderRelayStatus(
 	};
 	render();
 
-	const unsubscribeStatus = plugin.subscribeRealtimeStatus((value) => {
+	const unsubscribeStatus = plugin.realtime.subscribe((value) => {
 		connected = value;
 		render();
 	});
-	const unsubscribeDevices = plugin.subscribeRealtimeDevices((value) => {
+	const unsubscribeDevices = plugin.realtime.subscribeDevices((value) => {
 		devices = [...value];
 		render();
 	});
@@ -155,9 +161,9 @@ function renderRelayStatus(
 	};
 }
 
-/** The relay reconnects with the newly saved URL, token, and enabled flag. */
-function restartRelay(plugin: ObsyncPlugin): void {
-	plugin.initRealtime();
+/** Reconnects relay with new settings. */
+function restartRelay(plugin: PluginHost): void {
+	plugin.realtime.restart();
 }
 
 function clampAutoPullMinutes(raw: string): number {
@@ -168,7 +174,7 @@ function clampAutoPullMinutes(raw: string): number {
 	);
 }
 
-function describeRelayStatus(plugin: ObsyncPlugin, connected: boolean): string {
+function describeRelayStatus(plugin: PluginHost, connected: boolean): string {
 	if (!plugin.settings.realtimeSync) return "Relay is disabled.";
 	return connected ? "● Connected" : "○ Not connected";
 }

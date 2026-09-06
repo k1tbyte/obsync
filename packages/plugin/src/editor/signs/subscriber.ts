@@ -37,8 +37,7 @@ export const subscriberPlugin = (provider: SignsProvider) =>
 				}
 				if (this.path && next) {
 					this.path = next;
-					// Deliver straight away: waiting for the next document change left
-					// the gutter blank until the user typed something.
+					// Deliver immediately to avoid leaving the gutter blank until the user types.
 					this.pendingPath = null;
 					provider.changeViewPath(this.view, next, true);
 					return;

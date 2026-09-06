@@ -1,14 +1,11 @@
-import { sha256Hex } from "../../crypto";
-import type { ManifestEntry } from "../../types";
-import { deletePath, writeBinary } from "../../vault/io";
-import type { EngineDependencies } from "../engine";
+import { sha256Hex } from "@/crypto";
+import type { EngineDependencies } from "@/sync/engine";
+import type { ManifestEntry } from "@/sync/types";
+import { deletePath, writeBinary } from "@/vault/io";
 
 /**
- * Writes a file and describes what is now on disk. Callers feed the result to
- * both the hash cache and `OperationOutcome.localEntries`, so the two can never
- * disagree with the bytes actually written. `mtime` comes from `stat` rather
- * than the clock: a cache entry with an invented mtime forces a needless
- * re-hash on the next scan.
+ * Writes file and returns manifest entry. `mtime` comes from `stat` to avoid
+ * forcing needless re-hashes on next scan.
  */
 export async function writeLocalFile(
 	deps: EngineDependencies,

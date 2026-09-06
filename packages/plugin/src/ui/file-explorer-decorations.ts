@@ -1,13 +1,12 @@
 import { setIcon } from "obsidian";
-
-import type ObsyncPlugin from "../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	describeShareTooltip,
 	type ShareIndicatorState,
 	shareIndicatorState,
-} from "../share";
-import type { SyncController } from "../sync/controller";
-import type { EChangeType } from "../types";
+} from "@/share";
+import type { SyncController } from "@/sync/controller";
+import type { EChangeType } from "@/sync/types";
 import { type ChangeAction, changeActionOf } from "./change-action";
 import {
 	decorateShareIndicator,
@@ -51,7 +50,7 @@ const CHANGE_CLASS_BY_ACTION: Record<ChangeAction, ChangeIndicatorClass> = {
 };
 
 export function computeDecorations(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	controller: SyncController,
 	directLinks: ReadonlyMap<string, string>,
 ): Map<string, PathDecoration> {
@@ -64,7 +63,7 @@ export function computeDecorations(
 		patchDecoration(out, path, { linkRoot });
 	}
 	for (const share of plugin.settings.sharedFolders) {
-		const status = plugin.shares?.getStatus(share.id);
+		const status = plugin.shares.getStatus(share.id);
 		if (!status) continue;
 		patchDecoration(out, share.localRoot, {
 			share: {

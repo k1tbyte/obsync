@@ -1,7 +1,7 @@
 import type { Plugin } from "obsidian";
 
-import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
-import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
+import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
+import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { openSourceControlView } from "./source-control-view";
 
 export function registerStatusBar(

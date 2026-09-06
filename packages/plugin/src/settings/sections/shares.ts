@@ -1,6 +1,6 @@
 import { type ButtonComponent, Setting } from "obsidian";
 
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	describeShareStatus,
 	describeShareTooltip,
@@ -12,23 +12,31 @@ import {
 	type SharedFolderConfig,
 	shareIndicatorState,
 } from "@/share";
-import { notifyError, notifyInfo, openConfirmModal } from "@/ui";
+import { listShareBackends } from "@/storage";
+import type { EStorageBackend } from "@/storage/config";
 import {
 	brokerAdmin,
 	CreateShareModal,
 	JoinShareModal,
+	notifyError,
+	notifyInfo,
+	openConfirmModal,
 	ShareInviteModal,
-} from "@/ui/modals/share-modals";
+} from "@/ui";
+
+import { renderStorageFields } from "./storage-fields";
 
 export function renderSharesSection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	onDisplay: () => void,
 ): (() => void) | null {
 	new Setting(parent).setName("Shared folders").setHeading();
 	new Setting(parent).setDesc(
 		"Share a folder with other people. Each share syncs to its own encrypted storage location with its own key. Invitees get a revocable token for that folder only — never your storage credentials.",
 	);
+
+	renderShareStorage(parent, plugin, onDisplay);
 
 	new Setting(parent)
 		.setName("Broker URL")
@@ -85,15 +93,55 @@ export function renderSharesSection(
 	};
 	renderList();
 	return (
-		plugin.shares?.subscribe(() => {
+		plugin.shares.subscribe(() => {
 			for (const update of rowUpdates.values()) update();
 		}) ?? null
 	);
 }
 
+/**
+ * Shares carry their own backend, separate from the vault's. A vault on Google
+ * Drive can still share over S3 without the user switching back and forth.
+ */
+function renderShareStorage(
+	parent: HTMLElement,
+	plugin: PluginHost,
+	onDisplay: () => void,
+): void {
+	const settings = plugin.settings;
+	const backends = listShareBackends();
+
+	new Setting(parent)
+		.setName("Share storage")
+		.setDesc(
+			"Where shared folders live. Only backends that can presign a URL per object qualify - that is how invitees reach the data without ever holding your credentials. Each share gets its own prefix and key inside it.",
+		)
+		.addDropdown((dropdown) => {
+			for (const entry of backends) dropdown.addOption(entry.kind, entry.label);
+			dropdown.setValue(settings.shareStorageKind);
+			dropdown.setDisabled(backends.length < 2);
+			dropdown.onChange((value) => {
+				const nextKind = value as EStorageBackend;
+				if (nextKind === settings.shareStorageKind) return;
+				settings.shareStorageKind = nextKind;
+				void plugin.saveSettings().then(onDisplay);
+			});
+		});
+
+	// One config per backend, so repeating the fields here would be a second
+	// editing surface for the same values that goes stale on every keystroke.
+	if (settings.shareStorageKind === settings.activeStorageKind) {
+		new Setting(parent).setDesc(
+			"Shares reuse the credentials from Backend above, under their own prefix.",
+		);
+		return;
+	}
+	renderStorageFields(parent, plugin, settings.shareStorageKind);
+}
+
 function renderShareRow(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	share: SharedFolderConfig,
 	onDisplay: () => void,
 ): () => void {
@@ -113,7 +161,7 @@ function renderShareRow(
 			.setTooltip("Compare and sync this share immediately")
 			.onClick(async () => {
 				try {
-					await plugin.shares?.syncNow(share.id);
+					await plugin.shares.syncNow(share.id);
 					notifyInfo(`"${share.name}" is in sync.`);
 				} catch (err) {
 					notifyError(`Sync of "${share.name}" failed`, err);
@@ -142,7 +190,7 @@ function renderShareRow(
 			.onClick(async () => {
 				share.paused = !share.paused;
 				await plugin.saveSettings();
-				plugin.shares?.refresh();
+				plugin.shares.refresh();
 				onDisplay();
 			}),
 	);
@@ -156,7 +204,7 @@ function renderShareRow(
 	removeButton?.addClass("obsync-share-remove");
 
 	const renderStatus = (): void => {
-		const status = plugin.shares?.getStatus(share.id) ?? IDLE_SHARE_STATUS;
+		const status = plugin.shares.getStatus(share.id) ?? IDLE_SHARE_STATUS;
 		const state = shareIndicatorState(share, status);
 		for (const name of ["active", "syncing", "error", "paused", "offline"]) {
 			setting.settingEl.removeClass(`obsync-share-${name}`);
@@ -181,9 +229,9 @@ function renderShareRow(
 	return renderStatus;
 }
 
-/** Lists the share's participants and revokes the one the owner picks. */
+/** Revokes a participant's access. */
 async function managePeople(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	share: SharedFolderConfig,
 ): Promise<void> {
 	const admin = brokerAdmin(plugin);
@@ -214,14 +262,9 @@ async function managePeople(
 	}
 }
 
-/**
- * Removing a share means two different things. The owner ends it for everyone,
- * so every invite is revoked and the share's encrypted copy is deleted — the
- * files themselves survive in the owner's normal vault sync. A participant only
- * detaches locally and must never touch the owner's remote data.
- */
+/** Owner ends share for everyone (revokes invites, deletes copy); participant detaches locally. */
 async function removeShare(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	share: SharedFolderConfig,
 	onDisplay: () => void,
 ): Promise<void> {
@@ -244,9 +287,7 @@ async function removeShare(
 	if (!confirmed) return;
 
 	if (owned) {
-		// Revoke first: no token should outlive the data it could still write to.
-		// If that fails, stop — removing the share locally while participants
-		// still hold write tokens is worse than leaving it in place.
+		// Revoke first so no token outlives the data it writes to. Fail closed if revocation fails.
 		try {
 			await revokeAllShareTokens(brokerAdmin(plugin), share.id);
 		} catch (err) {
@@ -257,7 +298,7 @@ async function removeShare(
 			return;
 		}
 		try {
-			await plugin.shares?.deleteRemoteShareData(share);
+			await plugin.shares.deleteRemoteShareData(share);
 		} catch (err) {
 			notifyError("Could not delete the share's remote copy", err);
 		}

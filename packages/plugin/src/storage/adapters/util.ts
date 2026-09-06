@@ -1,10 +1,8 @@
-/** Backoff schedule shared by every adapter. */
 export const RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
-/** One deadline for every remote call, whichever backend serves it. */
 export const STORAGE_TIMEOUT_MS = 30_000;
 
-/** A remote call that answered with something other than 2xx. */
+/** Remote call answered with non-2xx. */
 export class StorageHttpError extends Error {
 	constructor(
 		readonly status: number,
@@ -26,7 +24,6 @@ export function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Rejects if `promise` has not settled within `ms`. */
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const id = setTimeout(() => reject(new StorageTimeoutError(ms)), ms);
@@ -43,15 +40,12 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	});
 }
 
-/**
- * Statuses that mean "not now" rather than "no". 404 and the other 4xx are
- * answers, and retrying them only wastes the user's time.
- */
+/** Retryable statuses (e.g. 429, 5xx). 4xx errors are definitive answers, not retried. */
 export function isRetryableStatus(status: number): boolean {
 	return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-/** Transport failures the platform reports as a plain Error or TypeError. */
+/** Platform transport failures. */
 const NETWORK_FAILURE =
 	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETRESET|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
 
@@ -79,7 +73,6 @@ export function isRetryableError(err: unknown): boolean {
 	return typeof e.message === "string" && NETWORK_FAILURE.test(e.message);
 }
 
-/** The one retry policy. Adapters differ in transport, not in patience. */
 export async function withRetry<T>(
 	fn: () => Promise<T>,
 	isRetryable: (err: unknown) => boolean = isRetryableError,
@@ -97,11 +90,7 @@ export async function withRetry<T>(
 	throw lastErr;
 }
 
-/**
- * Only 2xx is success. A 3xx body is a redirect page, and returning it as
- * object bytes would corrupt the vault, so redirects fail like any other
- * unexpected status.
- */
+/** Treat 3xx as failure to prevent saving redirect pages as object bytes. */
 export function assertOk(
 	res: { status: number; text?: string },
 	action: string,

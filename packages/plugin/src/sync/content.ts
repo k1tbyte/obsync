@@ -1,15 +1,13 @@
 import type { DataAdapter } from "obsidian";
-
-import {
-	HUNK_TEXT_MAX_BYTES,
-	KNOWN_BINARY_EXTENSIONS,
-	TEXT_SNIFF_BYTES,
-} from "../constants";
-import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
-import type { ObjectStorage } from "../storage/types";
-import type { Manifest } from "../types";
-import { readBinary, writeBinary } from "../vault/io";
+import { decryptBytes, type EncryptionKey, sha256Hex } from "@/crypto";
+import type { ObjectStorage } from "@/storage/types";
+import { KNOWN_BINARY_EXTENSIONS } from "@/sync/binary-extensions";
+import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
+import { readBinary, writeBinary } from "@/vault/io";
 import { objectKey } from "./manifest";
+import type { Manifest } from "./types";
+
+const TEXT_SNIFF_BYTES = 8 * 1024;
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 const encoder = new TextEncoder();
@@ -51,10 +49,7 @@ export async function loadRemoteBytes(
 	return plaintext;
 }
 
-/**
- * Downloads one object, verifies it against its hash, and writes it to `path`.
- * The single path for materialising a remote object on disk.
- */
+/** Downloads, verifies against hash, and writes remote object to disk. */
 export async function writeRemoteObject(
 	deps: RemoteFetchOptions & { adapter: DataAdapter },
 	path: string,
@@ -83,8 +78,7 @@ export async function loadBaselineText(
 ): Promise<string | null> {
 	const entry = baseline?.files[path];
 	if (!entry) return null;
-	// The manifest already knows the plaintext size and the path tells us the
-	// kind — don't download content that can never be shown as text.
+	// Manifest size and path extension avoid downloading unshowable binary content.
 	if (entry.size > HUNK_TEXT_MAX_BYTES) return null;
 	if (hasKnownBinaryExtension(path)) return null;
 	return loadRemoteText(deps, entry.hash);
@@ -97,8 +91,8 @@ export function isLikelyText(bytes: Uint8Array): boolean {
 }
 
 /**
- * Extension-based binary detection. Lets diff/merge code classify a file as
- * binary from its path alone, without reading (or downloading) any content.
+ * Classifies known binary extensions from path alone, without reading or
+ * downloading content.
  */
 export function hasKnownBinaryExtension(path: string): boolean {
 	const dot = path.lastIndexOf(".");
@@ -107,7 +101,7 @@ export function hasKnownBinaryExtension(path: string): boolean {
 	return KNOWN_BINARY_EXTENSIONS.has(ext);
 }
 
-/** Size-independent binary sniff: a NUL within the first {@link TEXT_SNIFF_BYTES}. */
+/** NUL-sniffs the first {@link TEXT_SNIFF_BYTES} to detect binary content. */
 export function hasBinaryBytes(bytes: Uint8Array): boolean {
 	const scan = Math.min(bytes.length, TEXT_SNIFF_BYTES);
 	for (let i = 0; i < scan; i++) {

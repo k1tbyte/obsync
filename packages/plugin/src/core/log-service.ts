@@ -8,8 +8,8 @@ import {
 	loadSyncLogs,
 	type SyncLogEntry,
 	saveSyncLogs,
-} from "../logs/store";
-import { setDiagnosticsSink } from "../shared/diagnostics";
+} from "@/logs/store";
+import { setDiagnosticsSink } from "@/shared/diagnostics";
 
 export class LogService {
 	private entries: SyncLogEntry[] = [];

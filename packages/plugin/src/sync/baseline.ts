@@ -1,11 +1,11 @@
-import { randomId } from "../crypto";
+import { randomId } from "@/crypto";
+import type { CompareResult } from "./engine";
 import type {
 	HashCacheEntry,
 	Manifest,
 	ManifestEntry,
 	SessionState,
-} from "../types";
-import type { CompareResult } from "./engine";
+} from "./types";
 
 export function buildSessionState(
 	previous: SessionState,
@@ -70,7 +70,6 @@ export function advanceBaselineForPaths(
 	};
 }
 
-/** The paths a publish actually rewrote, derived from the manifest it based on. */
 export function publishedDelta(
 	before: Manifest | null,
 	after: Manifest,
@@ -87,10 +86,8 @@ export function publishedDelta(
 }
 
 /**
- * Folds the entries just written to disk into the hash cache. The mtime must
- * come from the file that was written, not from the manifest: a remote mtime
- * never matches `stat`, so every pulled file would be re-hashed on the next
- * scan.
+ * Folds written entries into hash cache. Uses local file mtime to avoid
+ * re-hashing pulled files on next scan.
  */
 export function mergeWrittenIntoCache(
 	written: ReadonlyMap<string, ManifestEntry | null>,
@@ -107,9 +104,7 @@ export function mergeWrittenIntoCache(
 	return next;
 }
 
-/** Forgets the current storage's vaultId and baseline so the next compare
- * treats it as a fresh slot. Local hashCache is preserved (it indexes the
- * vault's own files, not the remote). */
+/** Clears vaultId and baseline. Local hashCache is preserved. */
 export function resetSessionState(state: SessionState): SessionState {
 	return {
 		deviceId: state.deviceId || randomId(),
@@ -150,7 +145,7 @@ export function baselineForPath(
 
 /**
  * Three-way merge of the empty-folder list: keep everything either side knows
- * about, but drop folders the baseline recorded and this device no longer has —
+ * about, but drop folders the baseline recorded and this device no longer has -
  * otherwise a locally deleted empty folder is resurrected by every push.
  */
 export function mergeFolderArrays(

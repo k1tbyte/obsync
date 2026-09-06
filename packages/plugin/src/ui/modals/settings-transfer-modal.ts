@@ -1,11 +1,6 @@
 import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 import * as QRCode from "qrcode";
 
-import {
-	IMPORT_CONFIRMATION_TEXT,
-	QR_ERROR_CORRECTION,
-	QR_SIZE,
-} from "@/constants";
 import { activeStorage, type ObsyncSettings } from "@/settings/model";
 import {
 	DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
@@ -17,6 +12,12 @@ import {
 import { errorMessage } from "@/shared/errors";
 import { describeStorageTarget } from "@/storage";
 import { openPromiseModal } from "./promise-modal";
+
+const IMPORT_CONFIRMATION_TEXT = "IMPORT";
+
+const QR_SIZE = 320;
+
+const QR_ERROR_CORRECTION = "L" as const;
 
 interface SettingsTransferExportModalOptions {
 	createPackage: (

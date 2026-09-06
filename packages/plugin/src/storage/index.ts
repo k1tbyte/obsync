@@ -1,4 +1,7 @@
-export { defaultGoogleDriveConfig } from "./adapters/google-drive";
+export {
+	DEFAULT_GDRIVE_AUTH_SERVER,
+	defaultGoogleDriveConfig,
+} from "./adapters/google-drive";
 export { defaultS3Config } from "./adapters/s3";
 export { defaultWebDAVConfig } from "./adapters/webdav";
 export {
@@ -19,13 +22,19 @@ export {
 	type ToggleFieldSpec,
 } from "./field-spec";
 export {
+	canHostShares,
 	createStorageAdapter,
 	describeStorageTarget,
 	getDescriptor,
 	handleStorageProtocol,
 	isAdapterConfigured,
 	listBackends,
+	listShareBackends,
 	type StorageDescriptor,
 	storageIdentity,
 } from "./registry";
-export type { ObjectStorage, StorageAdapter } from "./types";
+export type {
+	ObjectStorage,
+	StorageAdapter,
+	StorageAuthOutcome,
+} from "./types";

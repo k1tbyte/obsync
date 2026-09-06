@@ -1,5 +1,5 @@
-import { HUNK_TEXT_MAX_BYTES } from "../../constants";
-import { sha256Hex } from "../../crypto";
+import { sha256Hex } from "@/crypto";
+import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
 import {
 	bytesToText,
 	hasKnownBinaryExtension,
@@ -7,16 +7,16 @@ import {
 	loadLocalBytes,
 	loadRemoteBytes,
 	textToBytes,
-} from "../content";
-import type { CompareResult, EngineDependencies } from "../engine";
+} from "@/sync/content";
+import type { CompareResult, EngineDependencies } from "@/sync/engine";
 
 const NOT_TEXT = "Hunk-level actions are only supported for text files";
 
 /** Which two texts a hunk list was computed from. */
 export const EHunkPair = {
-	/** baseline vs local — mirrors `buildLocalChangeDiff`. */
+	/** baseline vs local - mirrors `buildLocalChangeDiff`. */
 	Local: "local",
-	/** local vs remote — mirrors `buildRemoteChangeDiff` and `buildConflictDiff`. */
+	/** local vs remote - mirrors `buildRemoteChangeDiff` and `buildConflictDiff`. */
 	Remote: "remote",
 } as const;
 export type EHunkPair = (typeof EHunkPair)[keyof typeof EHunkPair];
@@ -64,8 +64,7 @@ export async function hashSides(sides: HunkSides): Promise<HunkSidesHash> {
 }
 
 /**
- * Refuses the operation when either side moved since the view computed its
- * hunks, because the selected indices would then address other regions.
+ * Refuses operation if either side moved since diff computation, as selected indices would address other regions.
  */
 export async function assertSidesUnchanged(
 	sides: HunkSides,
@@ -94,8 +93,7 @@ async function localSide(
 	deps: EngineDependencies,
 	path: string,
 ): Promise<string> {
-	// Decide from the path and the stat, so a gigabyte of binary is never read
-	// into memory only to be rejected.
+	// Preflight path/stat to avoid reading large binaries into memory just to reject them.
 	if (hasKnownBinaryExtension(path)) throw new Error(NOT_TEXT);
 	const stat = await deps.adapter.stat(path).catch(() => null);
 	if (stat?.type === "file" && stat.size > HUNK_TEXT_MAX_BYTES) {

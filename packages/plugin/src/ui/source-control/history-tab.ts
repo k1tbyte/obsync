@@ -1,9 +1,9 @@
-import type ObsyncPlugin from "../../main";
-import { errorMessage } from "../../shared/errors";
-import { formatBytes } from "../../shared/format";
-import { deviceLabel } from "../../sync/device";
-import type { FileVersion } from "../../sync/history";
-import { notifyError, notifyInfo } from "../notices";
+import type { PluginHost } from "@/plugin/host";
+import { errorMessage } from "@/shared/errors";
+import { formatBytes, formatTimestamp } from "@/shared/format";
+import { deviceLabel } from "@/sync/device";
+import type { FileVersion } from "@/sync/history";
+import { notifyError, notifyInfo } from "@/ui/notices";
 
 export class HistoryTab {
 	private explicitPath: string | null = null;
@@ -12,7 +12,7 @@ export class HistoryTab {
 	private loadingPath: string | null = null;
 
 	constructor(
-		private readonly plugin: ObsyncPlugin,
+		private readonly plugin: PluginHost,
 		private readonly onRerender: () => void,
 		private readonly openDiff: (
 			path: string,
@@ -214,8 +214,4 @@ export class HistoryTab {
 			notifyError("Restore failed", err);
 		}
 	}
-}
-
-function formatTimestamp(ms: number): string {
-	return new Date(ms).toLocaleString();
 }

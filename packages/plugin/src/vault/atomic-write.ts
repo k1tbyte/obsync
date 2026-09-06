@@ -1,10 +1,7 @@
 import type { DataAdapter } from "obsidian";
 
 /**
- * Replaces a file without ever leaving it missing: the new content is written
- * beside it, the old copy is kept as `.bak` until the rename succeeds, and the
- * loader knows to fall back to either. The temporary name is derived from the
- * target, so two files being written at once cannot collide.
+ * Replaces a file atomically using a .new temp file and a .bak backup, preventing missing files and parallel write collisions.
  */
 export async function writeAtomic(
 	adapter: DataAdapter,

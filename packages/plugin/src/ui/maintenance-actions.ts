@@ -1,4 +1,4 @@
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import { activeStorage } from "@/settings/model";
 import { describeStorageTarget } from "@/storage";
 
@@ -8,14 +8,9 @@ import { openConfirmModal } from "./source-control/modals";
 
 const NO_STORAGE = "Configure a storage backend first.";
 
-/**
- * The maintenance operations, shared by the command palette and the settings
- * tab so both surfaces confirm and report identically.
- */
+/** Maintenance operations shared by command palette and settings tab. */
 
-export async function verifyRemoteIntegrity(
-	plugin: ObsyncPlugin,
-): Promise<void> {
+export async function verifyRemoteIntegrity(plugin: PluginHost): Promise<void> {
 	try {
 		const result = await plugin.controller.verifyRemote(true);
 		if (!result) {
@@ -35,7 +30,7 @@ export async function verifyRemoteIntegrity(
 }
 
 export async function deepCleanOrphanedObjects(
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 ): Promise<void> {
 	const confirmed = await openConfirmModal({
 		app: plugin.app,
@@ -62,7 +57,7 @@ export async function deepCleanOrphanedObjects(
 	}
 }
 
-export async function resetLocalState(plugin: ObsyncPlugin): Promise<void> {
+export async function resetLocalState(plugin: PluginHost): Promise<void> {
 	const confirmed = await openConfirmModal({
 		app: plugin.app,
 		title: "Reset local state?",
@@ -83,9 +78,7 @@ export async function resetLocalState(plugin: ObsyncPlugin): Promise<void> {
 }
 
 /** Returns true when the remote was reset, so callers can follow up. */
-export async function resetRemoteStorage(
-	plugin: ObsyncPlugin,
-): Promise<boolean> {
+export async function resetRemoteStorage(plugin: PluginHost): Promise<boolean> {
 	const confirmed = await confirmRemoteReset(plugin.app, {
 		description: describeStorageTarget(activeStorage(plugin.settings)),
 	});

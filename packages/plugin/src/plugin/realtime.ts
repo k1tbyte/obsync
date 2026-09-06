@@ -1,6 +1,5 @@
 import { debounce } from "obsidian";
 
-import { REALTIME_SYNC_DEBOUNCE_MS } from "@/constants";
 import {
 	activeStorage,
 	isStorageConfigured,
@@ -10,12 +9,15 @@ import { storageIdentity } from "@/storage";
 import type { SyncController } from "@/sync/controller";
 import { RealtimeClient, type RealtimePresenceDevice } from "@/sync/realtime";
 
+const REALTIME_SYNC_DEBOUNCE_MS = 2_000;
+
 export class PluginRealtime {
 	private client: RealtimeClient | null = null;
 	private onRemoteSync: ReturnType<typeof debounce> | null = null;
 	/** Everything the connection depends on, so a change to any of it restarts. */
 	private connectionKey: string | null = null;
 	private connected = false;
+	private disposed = false;
 	private readonly listeners = new Set<(connected: boolean) => void>();
 	private devices: RealtimePresenceDevice[] = [];
 	private readonly deviceListeners = new Set<
@@ -57,6 +59,7 @@ export class PluginRealtime {
 	}
 
 	restart(): void {
+		if (this.disposed) return;
 		this.client?.dispose();
 		this.client = null;
 		this.onRemoteSync?.cancel();
@@ -101,6 +104,7 @@ export class PluginRealtime {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.client?.dispose();
 		this.client = null;
 		this.onRemoteSync?.cancel();

@@ -1,9 +1,9 @@
 import type { DataAdapter } from "obsidian";
 
-import { PLUGIN_ID } from "../constants";
-import { randomId } from "../crypto";
-import { writeAtomic } from "../vault/atomic-write";
-import { ensureParent } from "../vault/io";
+import { PLUGIN_ID } from "@/constants";
+import { randomId } from "@/crypto";
+import { writeAtomic } from "@/vault/atomic-write";
+import { ensureParent } from "@/vault/io";
 
 const LOG_FILE_NAME = "logs.json";
 const MAX_LOG_ENTRIES = 200;

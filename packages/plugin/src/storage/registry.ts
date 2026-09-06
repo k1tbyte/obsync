@@ -35,7 +35,7 @@ import {
 } from "./adapters/webdav";
 import { EStorageBackend, type StorageAdapterConfig } from "./config";
 import type { SettingsFieldSpec } from "./field-spec";
-import type { StorageAdapter } from "./types";
+import type { StorageAdapter, StorageAuthOutcome } from "./types";
 
 export interface StorageDescriptor<
 	T extends StorageAdapterConfig = StorageAdapterConfig,
@@ -47,12 +47,17 @@ export interface StorageDescriptor<
 	describeTarget: (config: T) => string;
 	identity: (config: T) => string;
 	fields: ReadonlyArray<SettingsFieldSpec>;
-	/** Returns false when the callback was not this backend's to handle. */
+	/**
+	 * Can host shared folders. Requires per-object presigned URLs: the broker
+	 * hands invitees one signed URL per object instead of proxying the data.
+	 */
+	hostsShares?: boolean;
+	/** Returns false when not this backend's to handle. */
 	handleProtocol?: (
 		params: ObsidianProtocolData,
 		config: T,
 		saveCallback: () => Promise<void>,
-	) => Promise<boolean>;
+	) => Promise<StorageAuthOutcome | false>;
 }
 
 const STORAGE_REGISTRY: {
@@ -68,6 +73,7 @@ const STORAGE_REGISTRY: {
 		describeTarget: describeS3Target,
 		identity: s3Identity,
 		fields: S3_FIELDS,
+		hostsShares: true,
 	},
 	[EStorageBackend.WebDAV]: {
 		label: "WebDAV",
@@ -99,8 +105,24 @@ const STORAGE_REGISTRY: {
 	},
 };
 
-/** Backends a user can pick as their own vault storage. The broker is only
- * ever reached through a share invite, never chosen directly. */
+/** Backends that can host a shared folder, for the share-storage picker. */
+export function listShareBackends(): ReadonlyArray<{
+	kind: EStorageBackend;
+	label: string;
+}> {
+	return Object.entries(STORAGE_REGISTRY)
+		.filter(([, descriptor]) => descriptor.hostsShares === true)
+		.map(([kind, descriptor]) => ({
+			kind: kind as EStorageBackend,
+			label: descriptor.label,
+		}));
+}
+
+export function canHostShares(kind: EStorageBackend): boolean {
+	return STORAGE_REGISTRY[kind].hostsShares === true;
+}
+
+/** Backends users can pick directly (broker is invite-only). */
 const SELECTABLE_BACKENDS = new Set<EStorageBackend>([
 	EStorageBackend.S3,
 	EStorageBackend.WebDAV,
@@ -127,8 +149,7 @@ export function listBackends(): ReadonlyArray<{
 
 export function createStorageAdapter(
 	config: StorageAdapterConfig,
-	/** Called when the adapter updates the config itself, e.g. after refreshing
-	 * an OAuth token, so the caller can persist it. */
+	/** Called when adapter updates config (e.g. token refresh) so caller can persist it. */
 	onConfigChanged?: () => void,
 ): StorageAdapter {
 	const descriptor = STORAGE_REGISTRY[
@@ -158,26 +179,25 @@ export function storageIdentity(config: StorageAdapterConfig): string {
 	return descriptor.identity(config);
 }
 /**
- * Routes an `obsidian://` callback to the backend that owns it, not to the
- * active one: configuring Google Drive while S3 is selected must still deliver
- * the OAuth result.
+ * Routes obsidian:// callbacks to owning backend, not active one (e.g. configuring Drive while S3 is active).
  */
 export async function handleStorageProtocol(
 	params: ObsidianProtocolData,
 	getConfig: (kind: EStorageBackend) => StorageAdapterConfig | undefined,
 	saveCallback: () => Promise<void>,
-): Promise<void> {
+): Promise<StorageAuthOutcome | null> {
 	for (const [kind, entry] of Object.entries(STORAGE_REGISTRY)) {
 		const descriptor = entry as StorageDescriptor<StorageAdapterConfig>;
 		if (!descriptor.handleProtocol) continue;
 		const config = getConfig(kind as EStorageBackend);
 		if (!config) continue;
-		// A descriptor that does not recognise the callback returns false, so the
-		// next backend still gets a chance at it.
-		if (
-			(await descriptor.handleProtocol(params, config, saveCallback)) !== false
-		) {
-			return;
-		}
+		// Unrecognized callback returns false; next backend gets a chance.
+		const outcome = await descriptor.handleProtocol(
+			params,
+			config,
+			saveCallback,
+		);
+		if (outcome !== false) return outcome;
 	}
+	return null;
 }

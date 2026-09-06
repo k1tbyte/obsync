@@ -1,20 +1,9 @@
 /**
  * Obsync real-time sync relay.
  *
- * Each "room" is a sync channel identified by the storage identity
- * (e.g. "s3|bucket/prefix") or by a share id.
- *
- * When a device pushes changes, it sends a "sync" message.
- * The server broadcasts it to all other connected devices in the same room.
- *
- * An HTTP POST to the room acts as a fallback notify endpoint.
- *
- * Token auth: if the TOKEN env var is set (via --var TOKEN=... at deploy time),
- * every connection must present the *room* token, which is
- * HMAC-SHA256(TOKEN, roomId) in lowercase hex. Deriving it per room means a
- * participant of one share cannot join another share's room by guessing its id
- * and watching who is online. Clients must derive the same value; see
- * `deriveRoomToken` in the plugin.
+ * Rooms are sync channels (storage identity or share id). Sync messages broadcast to others; POST is fallback.
+ * Token auth: room token is HMAC-SHA256(TOKEN, roomId). Deriving per room prevents cross-share room joining.
+ * Room tokens never carry deployment secrets.
  */
 
 import type * as Party from "partykit/server";
@@ -60,14 +49,12 @@ export default class SyncRelay implements Party.Server {
 	}
 
 	onMessage(message: string | ArrayBuffer, sender: Party.Connection): void {
-		// A rejected connection can still have a frame in flight when it is
-		// closed, and only an accepted one carries presence state.
+		// Rejected connections can have in-flight frames when closed; only accepted ones carry presence.
 		if (!sender.state) return;
 		if (typeof message !== "string") return;
 		if (message === "ping") return; // Keepalive, ignore.
 
 		if (message === "sync") {
-			// Broadcast to everyone except the sender.
 			this.room.broadcast(JSON.stringify({ type: "sync" }), [sender.id]);
 		}
 	}
@@ -77,7 +64,6 @@ export default class SyncRelay implements Party.Server {
 			return new Response("Unauthorized", { status: 401 });
 		}
 
-		// POST = HTTP fallback for notify (when WebSocket is not connected)
 		if (request.method === "POST") {
 			// The poster may also hold an open socket in this room; excluding it
 			// keeps a device from waking itself up.

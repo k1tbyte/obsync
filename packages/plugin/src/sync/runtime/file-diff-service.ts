@@ -7,7 +7,7 @@ import {
 import { DiffCache, type DiffCacheInput } from "@/sync/diff-cache";
 import type { CompareResult, EngineDependencies } from "@/sync/engine";
 import type { FileDiffModel } from "@/sync/projection";
-import type { Conflict, EChangeType, FileChange } from "@/types";
+import type { Conflict, EChangeType, FileChange } from "@/sync/types";
 
 export interface PathStatus {
 	change?: FileChange;
@@ -59,8 +59,7 @@ export class FileDiffService {
 		if (!conflict?.baselineHash) return null;
 		const session = await this.deps.openSession();
 		if (!session) return null;
-		// Size/extension pre-flight so a binary or oversized conflict never
-		// downloads all three sides just to return null.
+		// Pre-flight size/extension so binary or oversized conflicts return null before downloading.
 		const mergeable = await isTextMergeCandidate(
 			session,
 			path,
@@ -83,9 +82,8 @@ export class FileDiffService {
 	}
 
 	/**
-	 * Loads the baseline text for a path even when there is no current change
-	 * status (so the live editor signs can diff against it). Returns null when
-	 * the path is not in the baseline manifest or its content is binary.
+	 * Loads baseline text for a path, even without current change status (for live editor diffs).
+	 * Returns null if missing from baseline or if binary.
 	 */
 	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
 		const session = await this.deps.openSession();

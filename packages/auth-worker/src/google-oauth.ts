@@ -51,7 +51,7 @@ export async function handleTokenRefresh(
 	if (!token?.access_token) {
 		return jsonResponse({ error: "token_refresh_failed" }, 502);
 	}
-	// Return only what the client needs — never echo Google's raw response, which
+	// Return only what the client needs - never echo Google's raw response, which
 	// may carry a rotated refresh token or error details.
 	return jsonResponse(
 		{ access_token: token.access_token, expires_in: token.expires_in },
@@ -75,9 +75,8 @@ export async function handleAuthCallback(
 	const code = url.searchParams.get("code");
 	if (!code) {
 		const state = await issueState(env);
-		// The state also goes into a cookie: a signature alone only proves this
-		// worker minted it, and an attacker can mint one by loading /auth. What
-		// makes it a CSRF token is that it must come back from the same browser.
+		// The state also goes into a cookie: a signature proves we minted it,
+		// but returning from the same browser proves it is not CSRF.
 		return new Response(null, {
 			status: 302,
 			headers: {
@@ -87,9 +86,8 @@ export async function handleAuthCallback(
 		});
 	}
 
-	// Without this check any link of the form /auth?code=… would hand the
-	// victim's Obsidian an attacker's Drive tokens, and their vault would sync
-	// into the attacker's account.
+	// Without this check, /auth?code=... would let an attacker sync the
+	// victim's vault into the attacker's Drive.
 	const state = url.searchParams.get("state");
 	if (
 		!(await verifyState(env, state)) ||
@@ -149,10 +147,8 @@ function matchesCookie(request: Request, state: string): boolean {
 }
 
 /**
- * CSRF token for the consent round trip: a timestamp plus an HMAC of it under a
- * secret the worker already holds, so no storage is needed. The signature only
- * proves this worker issued it - the cookie it is paired with is what ties it
- * to one browser.
+ * CSRF token: a timestamp plus an HMAC under a secret the worker holds.
+ * The signature proves issue; the paired cookie ties it to one browser.
  */
 async function issueState(env: GoogleOAuthEnv): Promise<string> {
 	const issued = String(Date.now());
@@ -223,7 +219,6 @@ function callbackUrl(token: GoogleTokenResponse): string {
 	return callback.toString();
 }
 
-/** Posts to Google's token endpoint. Returns null on any non-OK response. */
 async function exchange(
 	env: GoogleOAuthEnv,
 	params: Record<string, string>,
@@ -237,8 +232,7 @@ async function exchange(
 			...params,
 		}),
 	});
-	// Read the status first: a 5xx from Google is an HTML page, and parsing it
-	// as JSON would throw before the failure could be reported.
+	// A 5xx from Google is HTML; parsing as JSON would throw before reporting failure.
 	if (!response.ok) {
 		console.error("google token exchange failed", response.status);
 		return null;

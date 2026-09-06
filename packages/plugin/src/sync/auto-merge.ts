@@ -1,11 +1,11 @@
-import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "../constants";
-import { ESyncLogOperation } from "../logs/store";
-import type { Manifest, ManifestEntry, SessionState } from "../types";
+import { ESyncLogOperation } from "@/logs/store";
+import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "@/sync/constants";
 import { tryAutoMergeConflict } from "./conflict-merge";
 import { hasKnownBinaryExtension, textToBytes } from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
 import { writeLocalFile } from "./operations/local-write";
+import type { Manifest, ManifestEntry, SessionState } from "./types";
 
 export async function autoMergeOp(
 	deps: EngineDependencies,
@@ -19,8 +19,8 @@ export async function autoMergeOp(
 	for (const conflict of result.diff.conflicts) {
 		// No common ancestor: nothing to merge against, and no reason to stat.
 		if (!conflict.baselineHash) continue;
-		// Rule out binary/oversized files from path + manifest sizes alone —
-		// never download megabytes just to discover the file can't be merged.
+		// Rules out binary/oversized files via path and manifest sizes - never
+		// downloads megabytes just to discover the file can't be merged.
 		const mergeable = await isTextMergeCandidate(
 			deps,
 			conflict.path,
@@ -48,9 +48,8 @@ export async function autoMergeOp(
 		return { newRemote: result.remote, touchedPaths: new Set() };
 	}
 
-	// Advance the baseline entry for each merged path to the remote version.
-	// This means the merged local content is treated as a new local change
-	// (diverging from the acknowledged remote baseline) rather than a conflict.
+	// Advances baseline for merged paths so the merged content is treated as a
+	// new local edit, not a conflict.
 	const freshState: SessionState = ctx.getFreshState() ?? deps.state;
 	const baseline = freshState.baseline;
 	if (baseline) {
@@ -74,16 +73,14 @@ export async function autoMergeOp(
 	return {
 		newRemote: result.remote,
 		touchedPaths: new Set(mergedPaths),
-		// The merged text is neither the local nor the remote version: without
-		// this the snapshot adopts the remote hash and the merge is never pushed.
+		// Merged text is new: localEntries ensures the snapshot does not adopt the remote hash and drop the push.
 		localEntries,
 	};
 }
 
 /**
- * Cheap pre-flight for a three-way text merge: the path must not be a known
- * binary type and every side must be within the text diff cap. Sizes come
- * from `stat` and the manifests, so nothing is read or downloaded.
+ * Pre-flight for three-way text merge: rejects known binary types and oversized
+ * files using stat and manifest sizes without reading or downloading.
  */
 export async function isTextMergeCandidate(
 	deps: Pick<EngineDependencies, "adapter">,

@@ -1,5 +1,5 @@
-import { LOG_PATH_LIMIT } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
+import { LOG_PATH_LIMIT } from "@/sync/constants";
 import type { EngineDependencies } from "@/sync/engine";
 import {
 	type CleanResult,

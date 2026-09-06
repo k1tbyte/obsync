@@ -1,6 +1,7 @@
-import type ObsyncPlugin from "../main";
-import type { SyncController } from "../sync/controller";
-import { createSymlinkDetector } from "../vault/symlinks";
+import type { Plugin } from "obsidian";
+import type { PluginHost } from "@/plugin/host";
+import type { SyncController } from "@/sync/controller";
+import { createSymlinkDetector } from "@/vault/symlinks";
 import {
 	type FileExplorerRows,
 	readFileExplorer,
@@ -19,7 +20,7 @@ import type { IndicatorHandle } from "./indicator-handle";
 const LINK_SCAN_BATCH = 64;
 
 export function registerFileExplorerIndicators(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	controller: SyncController,
 ): IndicatorHandle {
 	let applied = new Map<string, AppliedDecoration>();

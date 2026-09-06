@@ -1,10 +1,12 @@
 import type { DataAdapter } from "obsidian";
-import { PLUGIN_ID, STATE_FILE_NAME } from "../constants";
-import { randomId } from "../crypto";
-import type { LocalState } from "../types";
-import { writeAtomic } from "../vault/atomic-write";
-import { ensureParent } from "../vault/io";
+import { PLUGIN_ID } from "@/constants";
+import { randomId } from "@/crypto";
+import { writeAtomic } from "@/vault/atomic-write";
+import { ensureParent } from "@/vault/io";
 import { defaultDeviceName } from "./device";
+import type { LocalState } from "./types";
+
+const STATE_FILE_NAME = "state.json";
 
 export function stateFilePath(configDir: string): string {
 	const trimmed = configDir.endsWith("/") ? configDir.slice(0, -1) : configDir;

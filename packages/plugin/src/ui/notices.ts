@@ -1,6 +1,6 @@
 import { Notice } from "obsidian";
 
-import { errorMessage } from "../shared/errors";
+import { errorMessage } from "@/shared/errors";
 
 const NOTICE_DURATION_MS = 8000;
 
@@ -20,10 +20,7 @@ export function reportError(err: unknown): void {
 	console.error("[obsync]", err);
 }
 
-/**
- * Runs an action, announcing success or failure. The shared shape behind every
- * "do the thing, then tell the user" button in the UI.
- */
+/** Runs an action and announces success or failure. */
 export async function runWithNotice(
 	action: () => Promise<unknown>,
 	successMessage: string,

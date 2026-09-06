@@ -1,15 +1,17 @@
 import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
-import { DEFAULT_CONCURRENCY, RACY_INDEX_WINDOW_MS } from "../constants";
-import { sha256Hex } from "../crypto";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { sha256Hex } from "@/crypto";
 import type {
 	HashCacheEntry,
 	LocalSnapshot,
 	ManifestEntry,
 	SkippedFile,
-} from "../types";
-import { runWithConcurrency } from "../utils/concurrency";
+} from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
 import type { ScopePolicy } from "./scope";
+
+const RACY_INDEX_WINDOW_MS = 2_000;
 
 const ROOT = "";
 
@@ -51,8 +53,7 @@ export async function scanVault(
 		paths,
 		options.concurrency ?? DEFAULT_CONCURRENCY,
 		async (path) => {
-			// One unreadable file (locked, deleted mid-scan) must not fail the whole
-			// scan and with it every operation that starts from one.
+			// Unreadable files (locked, deleted mid-scan) must not fail the entire scan.
 			try {
 				const stat = await adapter.stat(path);
 				if (stat?.type !== "file") return;
@@ -86,12 +87,10 @@ export async function scanVault(
 		},
 	);
 
-	// Both Windows and macOS default to case-insensitive filesystems, and two
-	// spellings of one file would otherwise flap against each other forever.
+	// Windows and macOS default to case-insensitive filesystems; prevent case collisions.
 	if (Platform.isWin || Platform.isMacOS) {
 		const lower = new Map<string, string>();
-		// Sorted, so the surviving spelling of a case collision is the same on
-		// every scan instead of whichever worker happened to finish first.
+		// Sort to ensure the surviving spelling of a case collision is deterministic.
 		for (const path of Object.keys(files).sort()) {
 			const lc = path.toLowerCase();
 			const existing = lower.get(lc);
@@ -108,16 +107,14 @@ export async function scanVault(
 		}
 	}
 
-	// Cached entries under an unreadable directory are carried forward: dropping
-	// them would re-hash the whole subtree once it becomes readable again.
+	// Carry forward cached entries under unreadable directories to avoid re-hashing later.
 	for (const [path, entry] of Object.entries(hashCache)) {
 		if (!updatedCache[path] && isUnderUnreadable(path, unreadable)) {
 			updatedCache[path] = entry;
 		}
 	}
 
-	// The folders were reached through canDescend already; re-testing them with
-	// a made-up file name would bypass extension-based ignore rules.
+	// Folders were reached via canDescend; re-testing bypasses extension-based ignore rules.
 	const emptyFolders = rawEmptyFolders.filter((dir) => scope.canDescend(dir));
 	return {
 		snapshot: {
@@ -152,11 +149,7 @@ async function buildEntry(
 	return { hash, size, mtime, kind };
 }
 
-/**
- * A file written moments ago may still change within the same mtime tick, so
- * its cached hash is not trusted. An mtime in the future is a clock artefact,
- * not a recent write: treating it as racy would re-read that file forever.
- */
+/** Recent writes may change within the same mtime tick and are untrusted. Future mtimes are clock artefacts, not racy writes. */
 function isRacy(mtime: number): boolean {
 	const age = Date.now() - mtime;
 	return age >= 0 && age < RACY_INDEX_WINDOW_MS;
@@ -174,14 +167,12 @@ async function listAllFiles(
 }> {
 	const files: string[] = [];
 	const emptyFolders: string[] = [];
-	// Collected during the walk: the filtering happens here, so a caller looking
-	// at the returned paths alone could never tell what an ignore rule dropped.
+	// Filtering happens here; caller receives ignored paths separately.
 	const ignored: string[] = [];
 	/** Directories the adapter refused to list, whose contents stay unknown. */
 	const unreadable: string[] = [];
 	const stack: string[] = [dir];
-	// A symlinked directory can point back at an ancestor; without this the walk
-	// would follow the cycle forever.
+	// Symlinked directories can create cycles; track visited to prevent infinite loops.
 	const visited = new Set<string>();
 	while (stack.length > 0) {
 		const current = stack.pop() as string;
@@ -208,9 +199,7 @@ async function listAllFiles(
 				ignored.push(folder);
 			}
 		}
-		// Only a directory that is genuinely empty needs an entry: one that holds
-		// ignored or excluded content is not empty, and publishing it would
-		// recreate it as a ghost on every other device.
+		// Only genuinely empty directories need an entry; publishing those with ignored content recreates ghosts.
 		if (
 			current !== dir &&
 			listing.files.length === 0 &&

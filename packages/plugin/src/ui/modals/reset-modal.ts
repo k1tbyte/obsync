@@ -1,7 +1,8 @@
 import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 
-import { RESET_CONFIRMATION_TEXT as CONFIRMATION_TEXT } from "../../constants";
 import { openPromiseModal } from "./promise-modal";
+
+const CONFIRMATION_TEXT = "RESET";
 
 export interface RemoteResetTarget {
 	description: string;

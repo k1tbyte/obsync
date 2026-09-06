@@ -1,7 +1,13 @@
-import { type App, PluginSettingTab, Setting, TFile } from "obsidian";
+import {
+	type App,
+	type Plugin,
+	PluginSettingTab,
+	Setting,
+	TFile,
+} from "obsidian";
 
 import { IGNORE_FILE_NAME } from "@/constants";
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import { EFieldKind } from "@/storage/field-spec";
 import { defaultDeviceName } from "@/sync/device";
 import {
@@ -117,11 +123,11 @@ const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 ];
 
 export class ObsyncSettingTab extends PluginSettingTab {
-	private readonly plugin: ObsyncPlugin;
+	private readonly plugin: Plugin & PluginHost;
 	private activeTab: ESettingsViewTab = ESettingsViewTab.Settings;
 	private sectionUnsubs: Array<() => void> = [];
 
-	constructor(app: App, plugin: ObsyncPlugin) {
+	constructor(app: App, plugin: Plugin & PluginHost) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -296,15 +302,14 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			.addText((t) =>
 				t
 					.setPlaceholder(defaultDeviceName())
-					.setValue(this.plugin.getDeviceName())
-					.onChange((v) => void this.plugin.setDeviceName(v)),
+					.setValue(this.plugin.device.current())
+					.onChange((v) => void this.plugin.device.rename(v)),
 			);
 	}
 
 	private async handleExportSettings(): Promise<void> {
 		showSettingsTransferExport(this.app, {
-			createPackage: (options) =>
-				this.plugin.createSettingsTransferPackage(options),
+			createPackage: (options) => this.plugin.transfer.createPackage(options),
 		});
 	}
 
@@ -312,7 +317,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		const input = await askSettingsTransferInput(this.app);
 		if (!input) return;
 		try {
-			const imported = await this.plugin.importSettingsTransfer(input);
+			const imported = await this.plugin.transfer.importFrom(input);
 			if (!imported) return;
 			notifyInfo("Settings imported.");
 			this.display();

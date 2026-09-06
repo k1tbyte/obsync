@@ -1,6 +1,7 @@
 import { type App, Modal } from "obsidian";
 
-import { EConflictStrategy } from "../../sync/controller";
+import { EConflictStrategy } from "@/sync/controller";
+import { openPromiseModal } from "@/ui/modals/promise-modal";
 
 export interface ConfirmModalOptions {
 	app: App;
@@ -14,14 +15,11 @@ export interface ConfirmModalOptions {
 export function openConfirmModal(
 	options: ConfirmModalOptions,
 ): Promise<boolean> {
-	return new Promise((resolve) => {
+	return openPromiseModal<boolean>((answer) => {
 		const modal = new Modal(options.app);
-		let settled = false;
 		const finish = (confirmed: boolean): void => {
-			if (settled) return;
-			settled = true;
+			answer(confirmed);
 			modal.close();
-			resolve(confirmed);
 		};
 		modal.titleEl.setText(options.title);
 		for (const paragraph of options.body) {
@@ -35,9 +33,8 @@ export function openConfirmModal(
 		const okBtn = buttons.createEl("button", { text: options.confirmLabel });
 		okBtn.addClass(options.confirmClass ?? "mod-cta");
 		okBtn.addEventListener("click", () => finish(true));
-		modal.onClose = (): void => finish(false);
-		modal.open();
-	});
+		return modal;
+	}, false);
 }
 
 export function confirmBatchResolve(

@@ -1,9 +1,9 @@
-import { DEFAULT_CONCURRENCY } from "../../constants";
-import type { EncryptionKey } from "../../crypto";
-import type { ObjectStorage } from "../../storage/types";
-import type { Manifest } from "../../types";
-import { runWithConcurrency } from "../../utils/concurrency";
-import { loadRemoteBytes } from "../content";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import type { EncryptionKey } from "@/crypto";
+import type { ObjectStorage } from "@/storage/types";
+import { loadRemoteBytes } from "@/sync/content";
+import type { Manifest } from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { fetchArchivedManifest, readSnapshotIndex } from "./store";
 import type { FileVersion } from "./types";
 
@@ -15,10 +15,8 @@ export interface FileHistoryQuery {
 }
 
 /**
- * Builds the distinct-version timeline for one path. Walks the snapshot index
- * newest→oldest and emits a version each time the content hash changes, so the
- * list reflects actual edits rather than every push. Archived manifests are
- * fetched here (when the user opens history), never eagerly on push.
+ * Builds distinct-version timeline for path. Emits version when content hash changes.
+ * Archived manifests are fetched lazily here, not on push.
  */
 export async function getFileHistory(
 	query: FileHistoryQuery,
@@ -43,8 +41,7 @@ export async function getFileHistory(
 	let lastHash: string | null = null;
 	for (const entry of index.entries) {
 		const manifest = manifests.get(entry.snapshotId);
-		// Unreadable snapshot: skip it without claiming the file was absent, or the
-		// next older version shows up again as a new one.
+		// Skip unreadable snapshot without claiming file absent, to avoid false "new" versions.
 		if (!manifest) continue;
 		const file = manifest.files[path];
 		if (!file) {

@@ -1,16 +1,16 @@
-import { LOG_PATH_LIMIT } from "../../constants";
-import { ESyncLogOperation } from "../../logs/store";
-import { formatBytes, sumBytes } from "../../shared/format";
-import type { Manifest, ManifestEntry } from "../../types";
-import { deletePath } from "../../vault/io";
+import { ESyncLogOperation } from "@/logs/store";
+import { formatBytes, sumBytes } from "@/shared/format";
 import {
 	baselineForPath,
 	buildSessionState,
 	mergeWrittenIntoCache,
-} from "../baseline";
-import { textToBytes, writeRemoteObject } from "../content";
-import { pullPaths } from "../engine";
-import { applyHunks, computeHunks } from "../hunks";
+} from "@/sync/baseline";
+import { LOG_PATH_LIMIT } from "@/sync/constants";
+import { textToBytes, writeRemoteObject } from "@/sync/content";
+import { pullPaths } from "@/sync/engine";
+import { applyHunks, computeHunks } from "@/sync/hunks";
+import type { Manifest, ManifestEntry } from "@/sync/types";
+import { deletePath } from "@/vault/io";
 import { writeLocalFile } from "./local-write";
 import {
 	assertSidesUnchanged,
