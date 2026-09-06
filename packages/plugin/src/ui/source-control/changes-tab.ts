@@ -1,15 +1,25 @@
 import type { PluginHost } from "@/plugin/host";
 import { EConflictStrategy, type SyncStatusSnapshot } from "@/sync/controller";
+import type { DiffResult } from "@/sync/types";
 
 import type { SourceControlActions } from "./actions";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
+import { diffEquals } from "./diff-identity";
 import { showIgnoredFiles } from "./modals";
 import { rowFromChange, rowFromConflict } from "./row-formatter";
 import { SectionStateManager } from "./section-state-manager";
-import { buildTree } from "./tree-builder";
-import { ESection, type FileRow, type TreeNode } from "./types";
+import { buildTree, flattenRows, flattenTree } from "./tree-builder";
+import { ESection, type FileRow, type VisualRow } from "./types";
+import { mountVirtualList, type VirtualListHandle } from "./virtual-list";
 
 type SectionActionKind = "push" | "pull" | "none";
+
+/**
+ * Below this a list is cheap to build whole, and building it whole keeps
+ * anything that changes a row's height - an expanded conflict preview - working
+ * without the list having to measure it.
+ */
+const VIRTUAL_MIN_ROWS = 100;
 
 /** Gives a clickable non-button the semantics a keyboard user needs. */
 function makeActivatable(
@@ -35,13 +45,26 @@ function makeActivatable(
 export class ChangesTab {
 	private layout: "tree" | "flat";
 	private filter = "";
-	private lastSignature = "";
+	/**
+	 * What the pane was last built from. A compare returns a fresh result even
+	 * when nothing moved, so identity alone would rebuild on every refresh;
+	 * the fields the rows are drawn from are walked instead, which describing
+	 * them as one string cost 5.3 ms and 2.5 MB per broadcast at 20k.
+	 */
+	private lastDiff: DiffResult | null = null;
+	private lastError: string | null = null;
+	private built = false;
+	/** Row counts as filtered, which a status-only refresh must not undo. */
+	private readonly renderedCounts = new Map<ESection, number>();
 	private statusLineEl: HTMLElement | null = null;
 	private refreshButtonEl: HTMLButtonElement | null = null;
 	private cancelButtonEl: HTMLButtonElement | null = null;
 	private pushAllButtonEl: HTMLButtonElement | null = null;
 	private pullAllButtonEl: HTMLButtonElement | null = null;
 	private readonly sections = new SectionStateManager();
+	/** The pane scrolls, not the lists; every window is computed against it. */
+	private scroller: HTMLElement | null = null;
+	private readonly lists = new Map<ESection, VirtualListHandle>();
 
 	constructor(
 		private readonly plugin: PluginHost,
@@ -58,26 +81,48 @@ export class ChangesTab {
 		return this.sections;
 	}
 
+	/** Virtual lists listen on the scroller, which outlives their own rows. */
+	dispose(): void {
+		for (const list of this.lists.values()) list.destroy();
+		this.lists.clear();
+	}
+
 	/** Forces a full rebuild on the next render. */
 	invalidate(): void {
-		this.lastSignature = "";
+		this.built = false;
 	}
 
 	/** True when the tree itself changed; otherwise only status needs touching. */
 	needsRebuild(snapshot: SyncStatusSnapshot): boolean {
-		return this.signatureOf(snapshot) !== this.lastSignature;
+		return (
+			!this.built ||
+			(snapshot.error ?? null) !== this.lastError ||
+			!diffEquals(this.lastDiff, snapshot.result?.diff ?? null)
+		);
 	}
 
 	/** In-place updates to status/progress keep scrolling usable mid-push. */
 	refreshInPlace(snapshot: SyncStatusSnapshot): void {
 		this.refreshStatus(snapshot);
 		this.updateSelectionState();
+		// An error line grows a button and a progress line changes length, both
+		// of which move the lists below them.
+		this.refreshLists();
+	}
+
+	/** Re-windows every list against where it now sits in the pane. */
+	refreshLists(): void {
+		for (const list of this.lists.values()) list.refresh();
 	}
 
 	render(root: HTMLElement, snapshot: SyncStatusSnapshot): void {
-		const signature = this.signatureOf(snapshot);
-		if (signature !== this.lastSignature) this.previews.clearCache();
-		this.lastSignature = signature;
+		this.dispose();
+		this.scroller = root;
+		if (this.needsRebuild(snapshot)) this.previews.clearCache();
+		this.built = true;
+		this.lastDiff = snapshot.result?.diff ?? null;
+		this.lastError = snapshot.error ?? null;
+		this.renderedCounts.clear();
 		this.renderToolbar(root, snapshot);
 		this.renderStatusLine(root, snapshot);
 		this.renderFilter(root);
@@ -151,7 +196,7 @@ export class ChangesTab {
 		input.addEventListener("input", () => {
 			this.filter = input.value;
 			const caret = input.selectionStart ?? input.value.length;
-			this.lastSignature = "";
+			this.invalidate();
 			this.rerender();
 			// The re-render replaced this node; carry focus and caret to the new one.
 			const next = parent.querySelector<HTMLInputElement>(
@@ -182,32 +227,6 @@ export class ChangesTab {
 		if (this.refreshButtonEl) this.refreshButtonEl.disabled = snapshot.busy;
 		this.cancelButtonEl?.toggleClass("obsync-hidden", !snapshot.cancellable);
 		this.setBulkButtonState(snapshot);
-	}
-
-	/** Identifies the rendered tree structure. Hashes are included so file edits update the view. */
-	private signatureOf(snapshot: SyncStatusSnapshot): string {
-		const diff = snapshot.result?.diff;
-		if (!diff) return `empty|${snapshot.error ?? ""}`;
-		const summarize = (
-			list: ReadonlyArray<{
-				path: string;
-				type?: string;
-				localHash?: string | null;
-				remoteHash?: string | null;
-			}>,
-		): string =>
-			list
-				.map(
-					(c) =>
-						`${c.type ?? ""}:${c.path}:${c.localHash ?? ""}:${c.remoteHash ?? ""}`,
-				)
-				.join(",");
-		return [
-			snapshot.error ?? "",
-			summarize(diff.conflicts),
-			summarize(diff.localChanges),
-			summarize(diff.remoteChanges),
-		].join("|");
 	}
 
 	private renderToolbar(
@@ -345,11 +364,15 @@ export class ChangesTab {
 		);
 		const counts = header.createSpan({ cls: "obsync-section-count" });
 		this.sections.bindCounts(section, counts);
+		this.renderedCounts.set(section, rows.length);
 		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
 		makeActivatable(titleEl, `${title} section`, () => {
 			const collapsed = this.sections.toggleCollapsed(section);
 			sectionEl.toggleClass("is-collapsed", collapsed);
 			titleEl.setAttr("aria-expanded", String(!collapsed));
+			// Hiding a body moves every section under it, and a windowed list
+			// reads its own position to decide which rows to hold.
+			this.refreshLists();
 		});
 
 		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
@@ -410,45 +433,96 @@ export class ChangesTab {
 		});
 
 		const list = body.createDiv({ cls: "obsync-file-list" });
-		if (this.layout === "flat") {
-			for (const row of rows)
-				this.renderFileRow(list, row, section, rows.length);
-		} else {
-			const tree = buildTree(rows);
-			this.renderTree(list, tree, section, rows.length);
-		}
-
+		this.layoutSection(list, section, rows);
 		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
 	}
 
-	private renderTree(
+	/**
+	 * Fills a section's list, and can refill it in place: expanding a folder
+	 * changes which rows exist without touching anything else on the pane.
+	 */
+	private layoutSection(
+		list: HTMLElement,
+		section: ESection,
+		rows: ReadonlyArray<FileRow>,
+	): void {
+		const scroller = this.scroller;
+		// Dropping the list drops its height, and the browser clamps the pane's
+		// scroll position to what is left before the new list restores it.
+		const scrollTop = scroller?.scrollTop ?? 0;
+		this.lists.get(section)?.destroy();
+		this.lists.delete(section);
+		list.empty();
+
+		const visual =
+			this.layout === "flat"
+				? flattenRows(rows)
+				: flattenTree(buildTree(rows), (path) =>
+						this.sections.isFolderExpanded(section, path),
+					);
+		const build = (index: number): HTMLElement =>
+			this.buildVisualRow(
+				list,
+				visual[index] as VisualRow,
+				section,
+				rows.length,
+				() => this.layoutSection(list, section, rows),
+			);
+
+		// Conflict rows grow an inline preview, so their height is not the pitch
+		// a windowed list places them on.
+		if (
+			!scroller ||
+			section === ESection.Conflicts ||
+			visual.length < VIRTUAL_MIN_ROWS
+		) {
+			for (let index = 0; index < visual.length; index++) build(index);
+		} else {
+			this.lists.set(
+				section,
+				mountVirtualList({
+					scroller,
+					container: list,
+					count: visual.length,
+					renderRow: build,
+				}),
+			);
+		}
+		if (scroller) scroller.scrollTop = scrollTop;
+		// This section just changed height, which moves every section under it.
+		this.refreshLists();
+	}
+
+	private buildVisualRow(
 		parent: HTMLElement,
-		node: TreeNode,
+		visual: VisualRow,
 		section: ESection,
 		rowsLen: number,
-	): void {
-		for (const child of node.children) {
-			if (child.row) {
-				this.renderFileRow(parent, child.row, section, rowsLen);
-				continue;
-			}
-			const folderPath = child.fullPath;
-			const collapsed = !this.sections.isFolderExpanded(section, folderPath);
-			const folder = parent.createDiv({ cls: "obsync-tree-folder" });
-			if (collapsed) folder.addClass("is-collapsed");
-			folder.setText(`${collapsed ? "▸" : "▾"} ${child.name}`);
-			const children = parent.createDiv({ cls: "obsync-tree-children" });
-			children.toggleClass("is-collapsed", collapsed);
-			makeActivatable(folder, `${child.name} folder`, () => {
-				const nowCollapsed = this.sections.toggleFolder(section, folderPath);
-				children.toggleClass("is-collapsed", nowCollapsed);
-				folder.toggleClass("is-collapsed", nowCollapsed);
-				folder.setAttr("aria-expanded", String(!nowCollapsed));
-				folder.setText(`${nowCollapsed ? "▸" : "▾"} ${child.name}`);
-			});
-			folder.setAttr("aria-expanded", String(!collapsed));
-			this.renderTree(children, child, section, rowsLen);
-		}
+		relayout: () => void,
+	): HTMLElement {
+		return visual.row
+			? this.renderFileRow(parent, visual.row, section, rowsLen, visual.depth)
+			: this.renderFolderRow(parent, visual, section, relayout);
+	}
+
+	private renderFolderRow(
+		parent: HTMLElement,
+		visual: VisualRow,
+		section: ESection,
+		relayout: () => void,
+	): HTMLElement {
+		const folderPath = visual.folderPath as string;
+		const collapsed = visual.collapsed === true;
+		const folder = parent.createDiv({ cls: "obsync-tree-folder" });
+		setDepth(folder, visual.depth);
+		if (collapsed) folder.addClass("is-collapsed");
+		folder.setText(`${collapsed ? "▸" : "▾"} ${visual.name}`);
+		folder.setAttr("aria-expanded", String(!collapsed));
+		makeActivatable(folder, `${visual.name} folder`, () => {
+			this.sections.toggleFolder(section, folderPath);
+			relayout();
+		});
+		return folder;
 	}
 
 	private renderFileRow(
@@ -456,8 +530,10 @@ export class ChangesTab {
 		row: FileRow,
 		section: ESection,
 		rowsLen: number,
-	): void {
+		depth: number,
+	): HTMLElement {
 		const item = parent.createDiv({ cls: "obsync-file-row" });
+		setDepth(item, depth);
 		if (row.isConflict) item.addClass("is-conflict");
 		item.setAttr("role", "button");
 		item.setAttr("tabindex", "0");
@@ -480,7 +556,9 @@ export class ChangesTab {
 			cls: `obsync-file-status ${row.statusClass}`,
 			text: row.statusLetter,
 		});
-		item.createSpan({ cls: "obsync-file-name", text: row.path });
+		const name = item.createSpan({ cls: "obsync-file-name", text: row.path });
+		// The row is one line high, so a path the pane cannot fit is elided.
+		name.setAttr("title", row.path);
 
 		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
 
@@ -491,6 +569,7 @@ export class ChangesTab {
 			e.preventDefault();
 			this.getActions().showContextMenu(e, row.path, section);
 		});
+		return item;
 	}
 
 	private renderConflictRowControls(
@@ -547,23 +626,12 @@ export class ChangesTab {
 
 	private updateSelectionState(): void {
 		const snapshot = this.plugin.controller.getSnapshot();
-		const diff = snapshot.result?.diff;
-		if (!diff) return;
-		this.sections.updateSectionUi(
-			ESection.Conflicts,
-			diff.conflicts.length,
-			snapshot.busy,
-		);
-		this.sections.updateSectionUi(
-			ESection.Local,
-			diff.localChanges.length,
-			snapshot.busy,
-		);
-		this.sections.updateSectionUi(
-			ESection.Remote,
-			diff.remoteChanges.length,
-			snapshot.busy,
-		);
+		if (!snapshot.result?.diff) return;
+		// The counts drawn are of the filtered rows, so re-deriving them from the
+		// diff would report the whole list under an active filter.
+		for (const [section, count] of this.renderedCounts) {
+			this.sections.updateSectionUi(section, count, snapshot.busy);
+		}
 	}
 }
 
@@ -583,4 +651,9 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
+}
+
+/** Indentation the flattened tree no longer gets from nested containers. */
+function setDepth(el: HTMLElement, depth: number): void {
+	if (depth > 0) el.style.setProperty("--obsync-depth", String(depth));
 }

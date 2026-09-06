@@ -634,13 +634,127 @@ forgotten.
 
 ---
 
-## Phase 5 — UI at scale (P2)
+## Phase 5 — UI at scale (P2) — DONE
 
-1. Virtualize the source-control change list. 80,052 DOM nodes for 20,001 rows.
-2. `ui/file-explorer-api.ts:28` rebuilds a 20,976-entry Map on every rAF during
-   explorer scroll. Cache it, invalidate from the existing MutationObserver.
-3. `ui/source-control/changes-tab.ts:188` `signatureOf` concatenates every change
-   into one string per frame. Compare cheaply, or version the diff result.
+Measured on the same 20,211-file vault with 20,001 local changes, source
+control pane open:
+
+| Metric | Before | After |
+|---|---|---|
+| Changes pane render, flat layout | 3,190 ms | **24–28 ms** |
+| Longest task during that render | 3,190 ms | **none** |
+| DOM nodes in the pane | 80,028 | **140** |
+| Tree layout, every folder collapsed | 81,312 nodes | **26** |
+| `needsRebuild` per controller broadcast | 5.34 ms, a 2.49 MB string | **0 µs** |
+| Progress broadcast (busy, no tree change) | rebuild | 0.1 ms, no rebuild |
+| Explorer row map, per rAF while scrolling | 5.79 ms | **one lookup per path** |
+| Scrolling the whole 510,000 px list | — | 11–17 ms per window |
+
+### 1. One list of visible rows, windowed
+
+Both layouts now flatten to the same thing: a `VisualRow[]` in display order,
+which `ui/source-control/virtual-list.ts` windows against the pane's scroller.
+Rows sit at a fixed pitch on absolute positions, so the list has its full height
+from the first frame and the scrollbar never moves under the user.
+
+The pane scrolls, not the lists, so each section computes its window from the
+distance between its own top and the scroller's. The window is rebuilt on a
+coalesced rAF from `scroll` and from a `ResizeObserver`; only rows that entered
+or left are created or removed, about 30 to 48 at a time.
+
+Pitch is measured from one real row with the windowed styles already applied,
+not assumed - a hidden view reads every height as zero, so the first row that
+reports one settles the pitch and everything placed against the fallback moves.
+
+### 2. A collapsed folder costs one row
+
+The tree built every descendant and left CSS to hide it, so collapsing a folder
+saved nothing: 81,312 nodes for a tree with all 642 folders shut. Flattening
+skips what a collapsed folder hides, which is why the same tree is now 26 nodes.
+
+Nesting is an indent on the row rather than a nested container, so the vertical
+guide line between levels is gone.
+
+### 3. Identity instead of a description
+
+`needsRebuild` described every change as one string to decide whether the tree
+moved - 2.49 MB and 5.34 ms per broadcast at 20k, on the path that runs once a
+frame during a sync. The compare result is replaced and never patched, so its
+identity answers the same question in nothing.
+
+### 4. The explorer row map is not built at all
+
+`readFileExplorer` materialised a 20,976-entry `Map` inside the frame the
+explorer is scrolling in - 5.79 ms of a 16 ms budget - to answer for the handful
+of paths that actually carry a badge. It now returns a lookup instead, and the
+whole path list only where the symlink scan wants it.
+
+### Limits
+
+- The conflicts section is never windowed: its rows grow an inline diff preview,
+  so their height is not the pitch a windowed list would place them on. A vault
+  with more than a few hundred conflicts still builds them all.
+- Below 100 rows a list is built whole, which keeps small change sets and
+  anything that varies a row's height working exactly as before.
+- A row is one line high and a path too long for the pane is elided, with the
+  full path on the element's `title`. The mobile rule that let a row wrap is off
+  inside a windowed list, where a taller row would overlap its neighbour.
+
+### Review outcome
+
+Two swarm reviews, one on the windowed list, one on the two cheap comparisons.
+12 findings acted on, 3 refuted. Each fix mutation-checked or verified live.
+
+**The comparison that decides whether to rebuild.** Comparing the compare
+result by identity was wrong: `compare()` returns a fresh object even when
+nothing moved, so every refresh of a settled vault rebuilt the whole pane. The
+fields the rows are drawn from are now walked instead - same fields the deleted
+string covered, short-circuiting on the first difference. An unchanged 20k diff
+costs **0.17 ms** against the 5.34 ms the string took, and the same object still
+costs 0.5 µs. Also: the section counts a status-only refresh redraws were
+re-derived from the unfiltered diff, so an active filter would have had its
+counts overwritten with the whole list.
+
+**Things that move a list without the scroller scrolling.** A windowed list
+reads its own position to decide which rows to hold, and four things moved it
+silently: collapsing a section, expanding a folder in another section, the
+status line growing a Retry button, and the pane's scroll being restored after
+`root.empty()` clamped it to zero. All four now re-window, synchronously -
+waiting a frame would show the rows for where the pane used to be.
+
+**Rebuilding a section threw the scroll position away.** Dropping a list drops
+its height, so the browser clamped the pane's scroll to what was left before the
+new list restored it: every folder toggle in tree mode jumped the user back
+toward the top. The position is saved across the rebuild. Verified: 1642 px
+before a toggle, 1642 px after.
+
+**Keyboard focus was lost on scroll.** A row is `tabindex="0"`; scrolling it out
+of the window removed it and dropped focus to the body. The focused row is now
+kept mounted until focus moves off it. Tab order still cannot cross the window
+boundary - a windowed list only offers the rows it holds, and fixing that means
+an `aria-activedescendant` listbox rather than per-row buttons.
+
+**Row height is no longer incidental.** The pitch held because the CSS happened
+to equalise a folder row and a file row. Both are now pinned to the measured
+height, and the measurement takes the taller of the first two rows, because a
+tree interleaves the two kinds. Verified: one distinct height across a windowed
+list.
+
+**Also.** A tab switch replaced the pane without disposing the lists, which kept
+listening on it and building rows into a detached container. A collapsed section
+is `display: none`, where every rect reads zero and the window was computed from
+nonsense; that update is now skipped.
+
+**Refuted.** `measurePitch` on an empty list (the call site requires 100 rows),
+`destroy()` leaving rows attached (both callers empty the container), and
+`row-gap` reading `normal` under `display: block` - `gap: 2px` is specified on
+the list, so it computes to `2px` whatever the display is, which the measured
+25.5 px pitch against 23.5 px rows confirms.
+
+**Left alone.** A file row in tree layout shows its whole path rather than its
+base name. That predates this phase, the folder above it already gives the
+context, and the full path is on the row's `title` either way - but the base
+name is now available on the flattened row if it should change.
 
 ---
 

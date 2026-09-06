@@ -133,10 +133,6 @@
 	display: none;
 }
 
-.obsync-tree-children.is-collapsed {
-	display: none;
-}
-
 .obsync-file-list {
 	display: flex;
 	flex-direction: column;
@@ -208,14 +204,36 @@
 	padding: 1px var(--size-4-2);
 }
 
-.obsync-tree-children {
-	margin-left: var(--size-4-3);
-	border-left: 1px solid var(--background-modifier-border);
-	padding-left: var(--size-4-1);
+/* Nesting is an indent on the row itself: the tree is flattened into one list
+   so a collapsed folder costs one row rather than its whole subtree. */
+.obsync-file-row,
+.obsync-tree-folder {
+	padding-left: calc(
+		var(--size-4-2) +
+		var(--obsync-depth, 0) *
+		var(--size-4-4)
+	);
 }
 
-.obsync-tree-folder.is-collapsed + .obsync-tree-children {
-	display: none;
+/* A windowed list places its rows itself, on a fixed pitch. */
+.obsync-file-list.is-virtual {
+	display: block;
+	position: relative;
+}
+
+.obsync-file-list.is-virtual > .obsync-file-row,
+.obsync-file-list.is-virtual > .obsync-tree-folder {
+	position: absolute;
+	left: 0;
+	right: 0;
+	/* A wrapped row would be taller than the pitch and overlap its neighbour. */
+	flex-wrap: nowrap;
+	/* One pitch for both kinds: a windowed list places a folder and a file on
+	   the same grid, and a folder is otherwise a pixel shorter. */
+	padding-top: 2px;
+	padding-bottom: 2px;
+	box-sizing: border-box;
+	height: var(--obsync-row-height, auto);
 }
 
 /* Diff view */
