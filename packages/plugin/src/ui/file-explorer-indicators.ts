@@ -62,7 +62,7 @@ export function registerFileExplorerIndicators(
 		for (const path of paths) {
 			const previous = applied.get(path);
 			const decoration = next.get(path);
-			const target = explorer.rows.get(path);
+			const target = explorer.row(path);
 			if (!decoration || !target) {
 				if (previous) clearDecoration(previous.target);
 				continue;
@@ -105,7 +105,7 @@ export function registerFileExplorerIndicators(
 			directLinks = new Map();
 			return;
 		}
-		const paths = [...explorer.rows.keys()];
+		const paths = explorer.paths();
 		const visible = new Set(paths);
 		const found = new Map(
 			[...directLinks].filter(([path]) => visible.has(path)),

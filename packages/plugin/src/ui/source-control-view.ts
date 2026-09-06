@@ -147,6 +147,8 @@ export class SourceControlView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
+		// Windowed lists listen on contentEl, which survives emptying it.
+		this.changes.dispose();
 		// A load still in flight will call back; without this it rebuilds a dead view.
 		this.root = null;
 		this.contentEl.empty();
@@ -188,6 +190,9 @@ export class SourceControlView extends ItemView {
 		const root = this.root;
 		if (this.tab !== ESourceTab.Changes) {
 			if (!force) return;
+			// Another tab's content replaces the pane, but the windowed lists
+			// listen on the pane itself and would keep answering for it.
+			this.changes.dispose();
 			this.changes.invalidate();
 			root.empty();
 			this.renderTabBar(root);
@@ -202,7 +207,10 @@ export class SourceControlView extends ItemView {
 		root.empty();
 		this.renderTabBar(root);
 		this.changes.render(root, snapshot);
+		// Emptying the pane clamped the scroll to nothing, so the lists mounted
+		// against the top. Restoring it moves them without a scroll event.
 		root.scrollTop = scrollTop;
+		this.changes.refreshLists();
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
