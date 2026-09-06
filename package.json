@@ -13,12 +13,14 @@
 		"lint:fix": "biome check --write .",
 		"typecheck": "pnpm -r --if-present run typecheck",
 		"version": "node version-bump.mjs",
+		"obsidian": "node tools/obsidian.mjs",
 		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.9",
 		"husky": "^9.1.7",
 		"jiti": "^2.7.0",
+		"playwright-core": "^1.63.0",
 		"tslib": "^2.8.1",
 		"typescript": "6.0.3"
 	}
