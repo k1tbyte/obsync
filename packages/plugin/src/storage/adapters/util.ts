@@ -103,3 +103,16 @@ export function assertOk(
 		`Failed to ${action} "${key}" (HTTP ${res.status})${detail}`,
 	);
 }
+
+/** Header lookup that does not assume the platform's casing. */
+export function headerValue(
+	headers: Record<string, string> | undefined,
+	name: string,
+): string | null {
+	if (!headers) return null;
+	const wanted = name.toLowerCase();
+	for (const [key, value] of Object.entries(headers)) {
+		if (key.toLowerCase() === wanted) return value;
+	}
+	return null;
+}

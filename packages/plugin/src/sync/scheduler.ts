@@ -5,6 +5,9 @@ import type { SyncController } from "./controller";
 
 const AUTO_PULL_STARTUP_DELAY_MS = 3_000;
 
+/** Cap on waiting for the metadata cache, so a vault that never reports it settled still syncs. */
+const AUTO_PULL_INDEX_WAIT_MS = 60_000;
+
 const AUTO_PULL_BUSY_COOLDOWN_MS = 30_000;
 
 const VAULT_EVENT_DEBOUNCE_MS = 1_500;
@@ -57,13 +60,8 @@ export function registerScheduler(
 		}
 	};
 
-	if (host.settings.autoPullOnStartup) {
-		const timer = window.setTimeout(
-			() => void tick(),
-			AUTO_PULL_STARTUP_DELAY_MS,
-		);
-		host.register(() => window.clearTimeout(timer));
-	}
+	if (host.settings.autoPullOnStartup)
+		scheduleFirstRun(host, () => void tick());
 
 	// Read interval on every wake-up so setting changes apply without restart.
 	let minutesInEffect = host.settings.autoPullIntervalMinutes;
@@ -109,6 +107,36 @@ export function registerScheduler(
 	host.registerEvent(host.app.vault.on("create", onVaultEvent));
 	host.registerEvent(host.app.vault.on("delete", onVaultEvent));
 	host.registerEvent(host.app.vault.on("rename", onVaultEvent));
+}
+
+/**
+ * The first scan reads Obsidian's metadata cache. Starting before that cache
+ * resolves costs three times as much, because the scan competes with Obsidian's
+ * own indexing for the main thread. A cache that has already settled waits out
+ * the old delay instead: `resolved` would not fire again there until something
+ * in the vault changed.
+ */
+function scheduleFirstRun(host: SchedulerHost, run: () => void): void {
+	// `initialized` is not in the typings; without it only `layoutReady` tells a
+	// settled cache from one still filling, and a small vault that resolved
+	// before this ran would wait out the cap.
+	const cache = host.app.metadataCache as { initialized?: boolean };
+	if (host.app.workspace.layoutReady || cache.initialized === true) {
+		const timer = window.setTimeout(run, AUTO_PULL_STARTUP_DELAY_MS);
+		host.register(() => window.clearTimeout(timer));
+		return;
+	}
+	let done = false;
+	let timer = 0;
+	const fire = (): void => {
+		if (done) return;
+		done = true;
+		window.clearTimeout(timer);
+		run();
+	};
+	timer = window.setTimeout(fire, AUTO_PULL_INDEX_WAIT_MS);
+	host.register(() => window.clearTimeout(timer));
+	host.registerEvent(host.app.metadataCache.on("resolved", fire));
 }
 
 function dueAfter(minutes: number): number {

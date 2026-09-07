@@ -9,10 +9,12 @@ export class StatePersister {
 	private pendingHashCacheState: LocalState | null = null;
 	private flushTimer: number | null = null;
 	/**
-	 * The payload of the last successful write. A settled refresh persists a
-	 * state identical to the one on disk, which at 20k files is a 3.3 MB rewrite
-	 * for no new bytes. Never seeded from {@link setInitial}: `loadState`
-	 * normalises what it read and can mint a device id that has to reach disk.
+	 * A digest of the last successful write. A settled refresh persists a state
+	 * identical to the one on disk, which at 20k files is a 3.3 MB rewrite for no
+	 * new bytes. The digest rather than the payload: the payload is that same 3.3
+	 * MB, pinned for as long as the plugin is loaded. Never seeded from
+	 * {@link setInitial}: `loadState` normalises what it read and can mint a
+	 * device id that has to reach disk.
 	 */
 	private lastWritten: string | null = null;
 	/** Serialises every write: a debounced flush and a direct persist otherwise
@@ -46,13 +48,14 @@ export class StatePersister {
 	private write(state: LocalState): Promise<void> {
 		return this.enqueue(async () => {
 			const serialized = serializeState(state);
-			if (serialized === this.lastWritten) return;
+			const digest = fingerprint(serialized);
+			if (digest === this.lastWritten) return;
 			// writeAtomic can fail between renaming the old file aside and moving
 			// the new one in. Keeping the memo would then skip a retry of the very
 			// state that is no longer on disk.
 			this.lastWritten = null;
 			await saveState(this.adapter, this.configDir, serialized);
-			this.lastWritten = serialized;
+			this.lastWritten = digest;
 		});
 	}
 
@@ -88,7 +91,7 @@ export class StatePersister {
 			resetState(this.adapter, this.configDir, this.current),
 		);
 		this.current = next;
-		this.lastWritten = serializeState(next);
+		this.lastWritten = fingerprint(serializeState(next));
 		return next;
 	}
 
@@ -172,4 +175,19 @@ function storagesEqual(
 
 function hasHashCacheEntries(state: LocalState): boolean {
 	return Object.keys(state.hashCache ?? {}).length > 0;
+}
+
+/**
+ * Two independent FNV-1a passes plus the length. One 32-bit pass collides often
+ * enough over a multi-megabyte payload to skip a write that was needed.
+ */
+function fingerprint(text: string): string {
+	let a = 0x811c9dc5;
+	let b = 0xcbf29ce4;
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		a = Math.imul(a ^ code, 0x01000193);
+		b = Math.imul(b ^ code, 0x85ebca6b);
+	}
+	return `${text.length}:${(a >>> 0).toString(36)}:${(b >>> 0).toString(36)}`;
 }

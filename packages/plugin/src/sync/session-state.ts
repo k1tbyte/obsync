@@ -1,9 +1,5 @@
 import { diff } from "./diff";
-import {
-	type CompareResult,
-	type EngineDependencies,
-	filterManifestForDiff,
-} from "./engine";
+import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationOutcome } from "./operations/types";
 import type {
 	LocalSnapshot,
@@ -39,8 +35,9 @@ export function recomputeAfterWrite(
 	};
 	const result = diff({
 		local: snapshot,
-		remote: filterManifestForDiff(outcome.newRemote, scope),
-		baseline: filterManifestForDiff(baseline, scope),
+		remote: outcome.newRemote,
+		baseline,
+		includes: (path) => scope.includesInDiff(path),
 	});
 	return {
 		snapshot,

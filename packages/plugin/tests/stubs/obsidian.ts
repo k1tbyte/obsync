@@ -13,7 +13,8 @@ export const Platform = {
 };
 
 export function debounce<T extends (...args: unknown[]) => unknown>(fn: T): T {
-	return fn;
+	// Obsidian returns a debouncer; callers cancel it on unload.
+	return Object.assign(fn, { cancel: () => undefined, run: () => undefined });
 }
 
 export function requestUrl(): Promise<unknown> {

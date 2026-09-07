@@ -1,4 +1,4 @@
-import type { Plugin } from "obsidian";
+import type { App, Plugin } from "obsidian";
 
 import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
 import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
@@ -14,8 +14,16 @@ export function registerRibbon(
 	controller: SyncController,
 	realtimeStatus: RealtimeStatusHandle,
 ): void {
+	// Through a holder rather than `plugin` directly: the click listener rides on
+	// a DOM element other plugins keep in their own event maps after unload, and
+	// whatever its closure captures is kept with it.
+	const host: { app: App | null } = { app: plugin.app };
+	plugin.register(() => {
+		host.app = null;
+	});
 	const icon = plugin.addRibbonIcon("refresh-cw", "Obsync", () => {
-		void openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+		if (host.app)
+			void openSourceControlView(host.app, SOURCE_CONTROL_VIEW_TYPE);
 	});
 	icon.addClass("obsync-ribbon-icon");
 

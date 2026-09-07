@@ -65,6 +65,12 @@ export class SyncControllerRuntimeState {
 
 	dispose(): void {
 		this.broadcaster.dispose();
+		// Obsidian keeps a plugin's bundle scope alive through any closure that
+		// outlives unload, and other plugins hold detached elements of ours. What
+		// survives should be an empty controller, not 20k files worth of compare.
+		this.result = null;
+		this.error = null;
+		this.progressText = null;
 	}
 
 	setResult(result: CompareResult): void {

@@ -8,10 +8,11 @@ import {
 	EFieldKind,
 	type SettingsFieldSpec,
 } from "@/storage/field-spec";
-import type { StorageAdapter } from "@/storage/types";
+import type { ConditionalRead, StorageAdapter } from "@/storage/types";
 import { toArrayBuffer } from "@/utils/bytes";
 import {
 	assertOk,
+	headerValue,
 	isRetryableStatus,
 	STORAGE_TIMEOUT_MS,
 	StorageHttpError,
@@ -24,6 +25,7 @@ const PROPFIND_BODY =
 const HTTP_OK_MIN = 200;
 const HTTP_OK_MAX = 299;
 const HTTP_NOT_FOUND = 404;
+const HTTP_NOT_MODIFIED = 304;
 const HTTP_METHOD_NOT_ALLOWED = 405;
 const _HTTP_CONFLICT = 409;
 const HTTP_MULTI_STATUS = 207;
@@ -95,6 +97,37 @@ export function createWebDAVAdapter(
 
 	const urlForKey = (key: string): string => rootUrl + encodeKey(key);
 
+	const readObject = async (
+		key: string,
+		etag: string | null,
+	): Promise<ConditionalRead> => {
+		const res = await davRequest({
+			url: urlForKey(key),
+			method: "GET",
+			headers: buildHeaders(etag ? { "If-None-Match": etag } : {}),
+			throw: false,
+		});
+		// A server that ignores the precondition answers 200 and the read is
+		// simply unconditional, which is what it was before. One that answers 304
+		// to a read carrying no validator describes nothing, and the caller of a
+		// plain read would take it for an object that is not there.
+		if (res.status === HTTP_NOT_MODIFIED) {
+			if (!etag) {
+				throw new Error(
+					`WebDAV answered 304 to an unconditional read of "${key}".`,
+				);
+			}
+			return { status: "unchanged" };
+		}
+		if (res.status === HTTP_NOT_FOUND) return { status: "absent" };
+		assertOk(res, "read", key);
+		return {
+			status: "found",
+			body: new Uint8Array(res.arrayBuffer),
+			etag: headerValue(res.headers, "etag"),
+		};
+	};
+
 	async function ensureParentDir(key: string): Promise<void> {
 		const fullPath = basePath + key;
 		const idx = fullPath.lastIndexOf("/");
@@ -143,16 +176,10 @@ export function createWebDAVAdapter(
 			return true;
 		},
 		async get(key) {
-			const res = await davRequest({
-				url: urlForKey(key),
-				method: "GET",
-				headers: buildHeaders(),
-				throw: false,
-			});
-			if (res.status === HTTP_NOT_FOUND) return null;
-			assertOk(res, "read", key);
-			return new Uint8Array(res.arrayBuffer);
+			const read = await readObject(key, null);
+			return read.status === "found" ? read.body : null;
 		},
+		getIfChanged: readObject,
 		async put(key, body, contentType) {
 			const res = await sendPut(key, body, contentType);
 			assertOk(res, "write", key);

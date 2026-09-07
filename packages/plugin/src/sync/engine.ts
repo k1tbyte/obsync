@@ -74,7 +74,7 @@ export async function compare(
 			deps.state.hashCache,
 		),
 		knownRemote === undefined
-			? fetchRemoteManifest(deps.storage, deps.key)
+			? fetchRemoteManifest(deps.storage, deps.key, deps.state.baseline)
 			: Promise.resolve(knownRemote),
 	]);
 	assertVaultCompatibility(deps.state, fetched);
@@ -91,28 +91,11 @@ export async function compare(
 	}
 	const result = diff({
 		local: snapshot,
-		remote: filterManifestForDiff(remote, deps.scope),
-		baseline: remote
-			? filterManifestForDiff(deps.state.baseline, deps.scope)
-			: null,
+		remote,
+		baseline: remote ? deps.state.baseline : null,
+		includes: (path) => deps.scope.includesInDiff(path),
 	});
 	return { snapshot, remote, diff: result, updatedCache };
-}
-
-export function filterManifestForDiff(
-	manifest: Manifest | null,
-	scope: ScopePolicy,
-): Manifest | null {
-	if (!manifest) return null;
-	const files: Record<string, ManifestEntry> = {};
-	for (const [path, entry] of Object.entries(manifest.files)) {
-		if (scope.includesInDiff(path)) files[path] = entry;
-	}
-	// Unfiltered folders could allow a participant to create folders outside the share.
-	const folders = (manifest.folders ?? []).filter((dir) =>
-		scope.canDescend(dir),
-	);
-	return { ...manifest, files, folders };
 }
 
 export async function pushPaths(
