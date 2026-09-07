@@ -27,8 +27,6 @@ export function registerRibbon(
 	});
 	icon.addClass("obsync-ribbon-icon");
 
-	const dot = icon.createSpan({ cls: "obsync-relay-dot" });
-
 	const apply = (snapshot: SyncStatusSnapshot): void => {
 		const pending = snapshot.pendingLocal + snapshot.pendingRemote;
 		const hasConflict = snapshot.conflicts > 0;
@@ -37,8 +35,12 @@ export function registerRibbon(
 		icon.setAttr("aria-label", buildLabel(snapshot));
 	};
 
+	// A class on the button, drawn by CSS. Obsidian's `setIcon` takes the first
+	// child for the icon and appends a new one after removing it, so an element
+	// of ours sitting beside the icon makes a second call throw our element away
+	// and leave two icons behind - which is what a ribbon re-skin does.
 	const applyRelay = (connected: boolean): void => {
-		dot.toggleClass("is-connected", connected);
+		icon.toggleClass("is-relay-connected", connected);
 	};
 
 	apply(controller.getSnapshot());
