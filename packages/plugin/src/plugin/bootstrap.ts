@@ -72,6 +72,14 @@ export async function bootstrapPluginRuntime(
 	};
 }
 
+/** For an onload that has to abandon what it built, see `ObsyncPlugin.onload`. */
+export function disposePluginRuntime(runtime: PluginRuntime): void {
+	runtime.statePersister.dispose();
+	runtime.controller.dispose();
+	runtime.passphraseManager.dispose();
+	runtime.logs.dispose();
+}
+
 async function ensureDeviceNamePersisted(
 	app: App,
 	statePersister: StatePersister,

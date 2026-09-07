@@ -22,7 +22,10 @@ import type { SyncController } from "@/sync/controller";
 import { registerScheduler } from "@/sync/scheduler";
 import type { IndicatorHandle } from "@/ui";
 
-import { bootstrapPluginRuntime } from "./plugin/bootstrap";
+import {
+	bootstrapPluginRuntime,
+	disposePluginRuntime,
+} from "./plugin/bootstrap";
 import {
 	registerFileHistoryMenu,
 	registerIgnoreFileRefresh,
@@ -63,6 +66,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 	private scopeRefreshTimer: number | null = null;
 	private editorSigns: SignsHandle | null = null;
 	private fileIndicators: IndicatorHandle | null = null;
+	private unloaded = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -75,6 +79,13 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 			},
 			persistSettings: () => this.saveSettings(),
 		});
+		// Obsidian can unload a plugin while its onload is still awaiting, and this
+		// one awaits a 3 MB state file. A teardown registered past that point is
+		// never run, so the sockets, timers and views would outlive the plugin.
+		if (this.unloaded) {
+			disposePluginRuntime(runtime);
+			return;
+		}
 		this.logs = runtime.logs;
 		this.statePersister = runtime.statePersister;
 		this.passphrase = runtime.passphraseManager;
@@ -115,6 +126,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 	}
 
 	onunload(): void {
+		this.unloaded = true;
 		if (this.scopeRefreshTimer !== null) {
 			window.clearTimeout(this.scopeRefreshTimer);
 			this.scopeRefreshTimer = null;
