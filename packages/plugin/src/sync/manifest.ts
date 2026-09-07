@@ -4,7 +4,7 @@ import {
 	encryptJson,
 	randomId,
 } from "@/crypto";
-import type { ObjectStorage } from "@/storage/types";
+import type { ConditionalRead, ObjectStorage } from "@/storage/types";
 import {
 	MANIFEST_VERSION,
 	REMOTE_MANIFEST_KEY,
@@ -13,19 +13,82 @@ import {
 import { defaultDeviceName } from "./device";
 import type { LocalSnapshot, Manifest } from "./types";
 
+/**
+ * What the remote manifest object looked like the last time this backend served
+ * it: the validator it came with, and which manifest that validator names.
+ *
+ * Per storage adapter, because the adapter is the identity of the remote. Two
+ * strings rather than the manifest itself - at 20k files that would be another
+ * copy of a structure the state file already holds.
+ */
+const validators = new WeakMap<
+	ObjectStorage,
+	{ etag: string; snapshotId: string }
+>();
+
+/**
+ * @param known A manifest the caller already holds. When the backend confirms
+ * the remote is still the one the validator names, this is returned without
+ * downloading it: a settled refresh otherwise transfers 1 MB, inflates 3.4 MB
+ * and parses 20k entries to learn nothing moved.
+ */
 export async function fetchRemoteManifest(
 	storage: ObjectStorage,
 	key: EncryptionKey,
+	known?: Manifest | null,
 ): Promise<Manifest | null> {
-	const blob = await storage.get(REMOTE_MANIFEST_KEY);
-	if (!blob) return null;
-	const manifest = await decryptJson<Manifest>(key, blob);
+	const validator = validators.get(storage);
+	// Conditional only when a "not modified" can actually be answered. Asking
+	// otherwise buys a round trip that has to be followed by the real read.
+	const revalidate =
+		validator !== undefined &&
+		known != null &&
+		known.snapshotId === validator.snapshotId;
+	const read = await readManifest(storage, revalidate ? validator.etag : null);
+	if (read.status === "unchanged") {
+		// Only ever an answer about the validator we sent. A backend that says it
+		// to an unconditional read is describing nothing we hold, and reading that
+		// as an empty remote would look like a vault that has never been pushed.
+		if (!revalidate || !known) {
+			throw new Error(
+				"Storage answered 'not modified' to a read that carried no validator.",
+			);
+		}
+		return known;
+	}
+	if (read.status === "absent") {
+		validators.delete(storage);
+		return null;
+	}
+	const manifest = await decryptJson<Manifest>(key, read.body);
 	if (manifest.version > MANIFEST_VERSION) {
 		throw new Error(
 			`Remote manifest version ${manifest.version} requires a newer Obsync version.`,
 		);
 	}
+	if (read.etag) {
+		validators.set(storage, {
+			etag: read.etag,
+			snapshotId: manifest.snapshotId,
+		});
+	} else {
+		validators.delete(storage);
+	}
 	return manifest;
+}
+
+function readManifest(
+	storage: ObjectStorage,
+	etag: string | null,
+): Promise<ConditionalRead> {
+	if (storage.getIfChanged) {
+		return storage.getIfChanged(REMOTE_MANIFEST_KEY, etag);
+	}
+	return storage
+		.get(REMOTE_MANIFEST_KEY)
+		.then((body) =>
+			body ? { status: "found", body, etag: null } : { status: "absent" },
+		);
 }
 
 /**
@@ -92,7 +155,7 @@ export async function publishManifestWithGuard(
 	// has to slip through.
 	const blob = await encryptJson(key, manifest);
 	// Stale-read reconciliation prevents a lagging backend from appearing as a competing writer.
-	const fetched = await fetchRemoteManifest(storage, key);
+	const fetched = await fetchRemoteManifest(storage, key, baseline);
 	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
 	const precheckId = precheck?.snapshotId ?? null;
 	if (precheckId !== expectedParentSnapshotId) {

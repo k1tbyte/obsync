@@ -99,6 +99,26 @@ function countingAdapter(adapter: InMemoryAdapter): {
 }
 
 describe("scanVault with a vault index", () => {
+	it("reuses the cache entry a hit was decided against", async () => {
+		const adapter = vault({ "a.md": "one" });
+		const stat = await adapter.asDataAdapter().stat("a.md");
+		const cached = {
+			mtime: stat?.mtime ?? 0,
+			size: stat?.size ?? 0,
+			hash: "hash-a",
+		};
+
+		const { snapshot, updatedCache } = await scanVault(
+			adapter.asDataAdapter(),
+			policy(),
+			{ ...options, index: await indexOf(adapter) },
+			{ "a.md": cached },
+		);
+
+		expect(snapshot.files["a.md"]?.hash).toBe("hash-a");
+		expect(updatedCache["a.md"]).toBe(cached);
+	});
+
 	it("produces the same snapshot as walking the adapter", async () => {
 		const adapter = vault({
 			"a.md": "one",

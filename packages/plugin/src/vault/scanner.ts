@@ -125,17 +125,21 @@ export async function scanVault(
 				});
 				return;
 			}
+			const cached = hashCache[path];
+			const hit = isCacheHit(cached, size, mtime);
 			const entry = await buildEntry(
 				adapter,
 				path,
 				size,
 				mtime,
 				scope.classify(path),
-				hashCache[path],
+				hit ? cached : undefined,
 				size >= LARGE_FILE_BYTES ? gate : undefined,
 			);
 			files[path] = entry;
-			updatedCache[path] = { mtime, size, hash: entry.hash };
+			// The cache entry already holds these three fields; re-boxing them
+			// grows the old generation by one object per file for nothing.
+			updatedCache[path] = hit ? cached : { mtime, size, hash: entry.hash };
 		} catch (err) {
 			skipped.push({ path, reason: `Could not read: ${String(err)}` });
 			return;
@@ -165,9 +169,11 @@ export async function scanVault(
 	}
 
 	// Carry forward cached entries under unreadable directories to avoid re-hashing later.
-	for (const [path, entry] of Object.entries(hashCache)) {
-		if (!updatedCache[path] && isUnderUnreadable(path, unreadable)) {
-			updatedCache[path] = entry;
+	if (unreadable.length > 0) {
+		for (const [path, entry] of Object.entries(hashCache)) {
+			if (!updatedCache[path] && isUnderUnreadable(path, unreadable)) {
+				updatedCache[path] = entry;
+			}
 		}
 	}
 
@@ -191,13 +197,13 @@ async function buildEntry(
 	size: number,
 	mtime: number,
 	kind: ManifestEntry["kind"],
-	cached: HashCacheEntry | undefined,
+	/** A hit the caller settled; re-testing it here can disagree, because a
+	 * future mtime turns racy as the clock catches up. */
+	hit: HashCacheEntry | undefined,
 	/** Present for large files, to keep several of them out of memory at once. */
 	gate?: <T>(run: () => Promise<T>) => Promise<T>,
 ): Promise<ManifestEntry> {
-	if (isCacheHit(cached, size, mtime)) {
-		return { hash: cached.hash, size, mtime, kind };
-	}
+	if (hit) return { hash: hit.hash, size, mtime, kind };
 	// Gated around the read alone: a cache hit reads nothing and must not queue.
 	const read = (): Promise<ArrayBuffer> => adapter.readBinary(path);
 	const buffer = await (gate ? gate(read) : read());

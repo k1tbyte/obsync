@@ -11,6 +11,14 @@ export interface DiffInput {
 	local: LocalSnapshot;
 	remote: Manifest | null;
 	baseline: Manifest | null;
+	/**
+	 * Which remote and baseline paths are in scope. Applied here rather than by
+	 * copying both manifests first, which at 20k files is two records rebuilt
+	 * per compare. The local snapshot is already scoped by the scan, and the
+	 * scan's predicate is the stricter of the two, so a local path is always in
+	 * scope here too.
+	 */
+	includes?: (path: string) => boolean;
 }
 
 export function diff(input: DiffInput): DiffResult {
@@ -22,10 +30,15 @@ export function diff(input: DiffInput): DiffResult {
 	const remoteFiles = input.remote?.files ?? {};
 	const baselineFiles = input.baseline?.files ?? {};
 
+	const includes = input.includes;
 	const paths = new Set<string>();
 	for (const p of Object.keys(localFiles)) paths.add(p);
-	for (const p of Object.keys(remoteFiles)) paths.add(p);
-	for (const p of Object.keys(baselineFiles)) paths.add(p);
+	for (const p of Object.keys(remoteFiles)) {
+		if (!includes || includes(p)) paths.add(p);
+	}
+	for (const p of Object.keys(baselineFiles)) {
+		if (!includes || includes(p)) paths.add(p);
+	}
 
 	const localChanges: FileChange[] = [];
 	const remoteChanges: FileChange[] = [];

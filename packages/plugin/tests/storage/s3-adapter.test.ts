@@ -13,6 +13,7 @@ interface Reply {
 	status: number;
 	text?: string;
 	arrayBuffer?: ArrayBuffer;
+	headers?: Record<string, string>;
 }
 
 const requests: Recorded[] = [];
@@ -28,7 +29,7 @@ vi.mock("obsidian", async (importOriginal) => ({
 			text: reply.text ?? "",
 			arrayBuffer: reply.arrayBuffer ?? new ArrayBuffer(0),
 			json: {},
-			headers: {},
+			headers: reply.headers ?? {},
 		});
 	},
 }));
@@ -197,6 +198,49 @@ describe("S3 adapter over requestUrl", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("S3 conditional reads", () => {
+	it("reports the validator with the body", async () => {
+		const adapter = createS3Adapter(config());
+		replies = [{ status: 200, headers: { ETag: '"abc"' } }];
+
+		const read = await adapter.getIfChanged?.("manifest.json.enc", null);
+
+		expect(read).toMatchObject({ status: "found", etag: '"abc"' });
+		expect(requests[0]?.headers["If-None-Match"]).toBeUndefined();
+	});
+
+	it("sends the validator and reports an unchanged object", async () => {
+		const adapter = createS3Adapter(config());
+		replies = [{ status: 304 }];
+
+		const read = await adapter.getIfChanged?.("manifest.json.enc", '"abc"');
+
+		expect(read).toEqual({ status: "unchanged" });
+		expect(requests[0]?.headers["If-None-Match"]).toBe('"abc"');
+	});
+
+	it("refuses a 304 nobody asked for, rather than reading it as absence", async () => {
+		const adapter = createS3Adapter(config());
+		replies = [{ status: 304 }];
+
+		await expect(adapter.get("manifest.json.enc")).rejects.toThrow("304");
+	});
+
+	it("still reads a plain object", async () => {
+		const adapter = createS3Adapter(config());
+		replies = [{ status: 200, arrayBuffer: new Uint8Array([1, 2]).buffer }];
+
+		expect(await adapter.get("objects/abc")).toEqual(new Uint8Array([1, 2]));
+	});
+
+	it("still reports a missing object as absent", async () => {
+		const adapter = createS3Adapter(config());
+		replies = [{ status: 404, text: "<Error><Code>NoSuchKey</Code></Error>" }];
+
+		expect(await adapter.get("objects/abc")).toBeNull();
 	});
 });
 

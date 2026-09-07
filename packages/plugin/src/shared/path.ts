@@ -14,7 +14,7 @@ export function normalizePath(path: string): string {
  * `.trash`, `.git`) are outside every sync scope.
  */
 export function hasDotSegment(path: string): boolean {
-	return path.split("/").some((segment) => segment.startsWith("."));
+	return path.startsWith(".") || path.includes("/.");
 }
 
 /** Trims surrounding slashes and re-adds a single trailing one: `"/a/b/" → "a/b/"`. */

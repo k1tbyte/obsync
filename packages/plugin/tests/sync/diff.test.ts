@@ -131,4 +131,35 @@ describe("diff", () => {
 		const result = diff(input);
 		expect(result.remoteMoved).toBe(true);
 	});
+
+	it("leaves out-of-scope remote and baseline paths alone", () => {
+		const input: DiffInput = {
+			baseline: mockManifest("v1", { "hidden/a.md": { hash: "base" } }),
+			remote: mockManifest("v2", {
+				"hidden/a.md": { hash: "remote" },
+				"open/b.md": { hash: "remote" },
+			}),
+			local: mockLocal(),
+			includes: (path) => !path.startsWith("hidden/"),
+		};
+		const result = diff(input);
+		expect(result.remoteChanges.map((change) => change.path)).toEqual([
+			"open/b.md",
+		]);
+		// Unfiltered it reads as a conflict: absent locally, moved on both sides.
+		expect(result.conflicts).toHaveLength(0);
+		expect(result.localChanges).toHaveLength(0);
+	});
+
+	it("keeps a local path the scan already admitted", () => {
+		const input: DiffInput = {
+			baseline: null,
+			remote: mockManifest("v2"),
+			local: mockLocal({ "note.md": { hash: "local" } }),
+			includes: () => false,
+		};
+		expect(diff(input).localChanges.map((change) => change.path)).toEqual([
+			"note.md",
+		]);
+	});
 });

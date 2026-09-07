@@ -888,6 +888,279 @@ fixture gap, not a product bug: real callers reach that adapter through
 
 ---
 
+## Phase 7 — Startup memory and the per-file syscall (P1) — DONE
+
+The 2.9 GB startup peak on this vault is mostly not ours: Obsidian's own core
+holds ~850 MB on 20k notes, and the other community plugins add ~1.7 GB to the
+peak. Obsync's share, measured by toggling it off, is ~236 MB of peak and ~95 MB
+after the major GC at 31 s. This phase went after that share and after a
+per-reload leak that only development and BRAT updates ever hit.
+
+Measured on the same 20,211-file vault (767 folders), Obsidian 1.13.7, by
+cold-starting the app under both builds on the same machine within the same
+hour.
+
+| Metric | Before | After |
+|---|---|---|
+| `lstat` calls to answer "is it a link" for one scan | 20,926 | **724 `readdir`** |
+| …costing | 133.7 ms | **38.2 ms** |
+| Same, once the remote holds 20k paths with no local file | 41,109 lstat, 366.5 ms | **724, 45 ms** |
+| First refresh after a cold start | 3,386 ms | **1,170-1,329 ms** |
+| …starting at | 5.2 s | 7.0 s, when the index settles |
+| Warm refresh | 268-324 ms | **171-196 ms** |
+| Heap kept per plugin disable/enable | 17.4 MB | **4.9-5.5 MB** |
+| `state.json` payload pinned for the session | 3.15 MB | **21 B** |
+| `hasDotSegment` over 40,422 calls | 13.7 ms | **1.0 ms** |
+
+### 1. One directory listing, not one `lstat` per file
+
+`isPathAllowed` asks the symlink detector about every path, and the detector
+probed each path prefix with `lstatSync`. Ancestors cache, but the leaf segment
+is unique to each file, so every file cost one syscall and one `fs.Stats` -
+20,926 of them per scan, and every remote path with no local counterpart threw
+an `ENOENT` with a stack for the detector to swallow.
+
+`readdirSync(dir, { withFileTypes: true })` answers for every child of a folder
+at once, so the detector now caches one set of link names per folder and asks
+whether the child is in it. It reports Windows junctions as symbolic links, the
+same as `lstat` does - checked against a real junction rather than assumed - and
+both implementations were run over the whole vault side by side, agreeing on all
+53 links found.
+
+Rejected: the obvious "only probe folders, never files". It is cheaper still,
+but a symlinked *file* is currently excluded from sync and would silently start
+being pushed with its contents. The listing keeps the semantics exactly.
+
+A listing reports the spelling on disk, and `lstat` did not care about spelling
+on Windows and macOS, so on those the names are folded before they are compared.
+Without that a remote path that arrived from another device spelled differently
+would stop being recognised as a link.
+
+A linked folder is never listed, because the ancestor settles the answer before
+the walk reaches it.
+
+The cache is now one entry per folder rather than one per path, so a link
+created after its folder was listed is invisible until the detector is rebuilt.
+That changes nothing in practice: the sync detectors are built per session, and
+the two long-lived ones in the explorer and the status bar are already rebuilt
+on every vault create, delete and rename.
+
+### 2. The first scan waits for Obsidian to finish indexing
+
+Auto-pull on startup ran on a fixed 3 s timer. On this vault Obsidian reports
+layout ready at 2.8 s and the metadata cache resolved at 7.0 s, so the scan
+started at 5.2 s and spent 3,386 ms competing with Obsidian's own indexing for
+the main thread. Waiting for `metadataCache.on("resolved")` starts it at 7.0 s
+and it finishes in 1,170 and 1,329 ms over two runs.
+
+The wait is capped at 60 s, and it is only taken when the cache is not already
+settled - `workspace.layoutReady`, or `metadataCache.initialized`, which is real
+but absent from the typings. A cache that settled first keeps the 3 s timer,
+because `resolved` would not fire again there until something in the vault
+changed: a plugin enabled by hand, and also a vault small enough to finish
+indexing before this code runs.
+
+This did not move the startup peak: 3,044 MB before against 3,008 and 3,021 MB
+after, which is noise. The peak arrives at 21-26 s and is Obsidian's, not ours.
+What the change buys is a first scan that costs a third as much and does not
+land in the middle of the ramp.
+
+### 3. Unload leaves an empty plugin behind
+
+Every disable/enable cycle added 17.4 MB that a forced major GC would not
+reclaim. Both retention paths are outside this codebase - another plugin holds
+our detached ribbon element in its own listener map, and Obsidian's per-plugin
+`require` shim is captured by any closure of ours that outlives unload - so they
+cannot be closed from here. What can be fixed is the weight hanging off them.
+
+`SyncControllerRuntimeState.dispose` now drops the compare result, which is the
+20k-file snapshot, the remote manifest and the diff. The ribbon's click listener
+reaches the app through a holder that unload empties, so the leaked listener no
+longer captures the plugin at all.
+
+The state persister deliberately keeps holding its state, though it is another
+20k-entry cache. An operation still in flight when unload runs finishes by
+merging its session into `getState()`, and that merge reads the other storage
+slots and the share caches from it. Handed a null it writes a state with those
+wiped - the price of ~2.7 MB would have been every other backend's baseline and
+every share's hash cache.
+
+5 MB per cycle remains, and it is not worth chasing: cold start never pays it.
+
+### 4. A digest instead of the payload
+
+The persister kept the last written payload to skip a rewrite that would land
+identical bytes. At 20k files that payload is 3.15 MB, pinned for as long as the
+plugin is loaded. It now keeps a digest - the length plus two independent FNV-1a
+passes, because one 32-bit pass collides often enough over megabytes to skip a
+write that was needed. 21 bytes instead of 3.15 MB, at 4.6 ms of hashing on top
+of the 10.4 ms the serialisation already costs.
+
+### 5. Allocations the scan did not need
+
+On a hash-cache hit the scan built a new entry for `updatedCache` holding the
+three fields the cached entry already held: 20,211 objects per scan for nothing.
+It stores the cached entry itself now. `buildEntry` no longer re-tests the hit
+the caller settled - the two tests can disagree, because a file with a future
+mtime turns racy as the clock catches up, and the scan would then have cached a
+hash it did not compute.
+
+The carry-forward pass over the whole hash cache now runs only when a directory
+really was unreadable, instead of materialising 20k pairs to find nothing.
+
+`hasDotSegment` no longer splits the path. It is called at least twice per path
+by the scope policy, so at 20k files that is 13.7 ms of array building traded
+for 1.0 ms of substring search.
+
+### Review outcome
+
+Eight findings, seven confirmed. Four were acted on, three were disagreed with
+after checking the code, one was refuted by the verifier.
+
+Two were real defects introduced here. The folder listing reports the spelling
+on disk, and `lstat` never cared about spelling on Windows or macOS, so a path
+that arrived from another device with different casing stopped being recognised
+as a link and would have been written into a linked folder. And `joinPath` lost
+the backslash from its trailing-separator pattern, so a vault at a drive root
+built paths like `D:\/share`.
+
+Two more were the same mistake, both from `StatePersister.dispose` dropping the
+state it holds. An operation still in flight when unload runs finishes by
+merging its session into `getState()`, and that merge reads the other storage
+slots and the share caches from what it is handed. Handed a null it publishes a
+state with both wiped, and `onunload` disposes the persister before the
+controller, so the window is real. Reverted; the 2.7 MB it saved is the whole
+reason the per-cycle figure above is 5 MB rather than 2.4 MB.
+
+Reverted for a different reason: asking the live vault whether the index lists a
+path, rather than a set built from the same `index.files()` the scan iterates.
+The reviewer's race needs the index to move between the two, and nothing awaits
+in that stretch, so it cannot happen today. It was reverted anyway - a later
+`await` there would make a path the index gained mid-scan vanish from the
+snapshot, and the next push would carry that out as a remote deletion. The
+finding was wrong about today and right about the shape.
+
+Not taken: `findLink` walking on past a folder it could not list. Each failed
+listing is cached per folder, so the waste is bounded by folder count rather
+than path count, and stopping early would answer "not a link" for a readable
+folder under an unreadable one - a behaviour change for no measurable gain. The
+old code walked past the same failures.
+
+Refuted: `scheduleFirstRun` stalling for 60 s when the cache resolved before it
+registered. That is what the `metadataCache.initialized` check is for, and it is
+pinned by a test.
+
+### Not done, and why
+
+Answering "does the index list this path" from the live vault rather than from a
+set built out of `index.files()`. It saves a 20k-string set per scan and about
+1 ms, and today it is safe: nothing awaits between the two, so the index cannot
+move underneath them. It was still reverted. The set is a snapshot of the same
+listing the scan is built from, and a later `await` slipped into that stretch
+would make a path the index gained mid-scan vanish from the snapshot - which the
+next push carries out as a remote deletion. A millisecond is not worth standing
+that close to it.
+
+`VaultIndex.files()` returning Obsidian's `TFile` objects unchanged, to avoid
+mapping 20k of them. They are not structurally compatible: `IndexedFile` is flat
+and `TFile` carries size and mtime under `stat`. Worth about 2 MB and costing an
+interface change through the scanner, so it stays on the list rather than in
+this phase.
+
+---
+
+## Phase 8 — A refresh that costs nothing when nothing moved (P1) — DONE
+
+Phase 7 left the settled refresh still downloading the whole remote manifest to
+learn that it had not changed. On this vault the remote holds 224 files today,
+so the profile does not show it; once the vault is pushed it is 1.12 MB over the
+wire and 23.8 ms of main thread on every refresh, whether or not anything moved.
+
+Measured against the live backend (Oracle Cloud's S3-compatible endpoint) and
+with a manifest built from the vault's real 20,211 paths and random hashes,
+which is what decides the compressed size.
+
+| Metric | Before | After |
+|---|---|---|
+| Settled refresh, manifest transferred | 1.12 MB | **0 bytes, HTTP 304** |
+| …today's 224-file remote | 40,263 bytes | **0 bytes** |
+| Decrypt, inflate and parse per refresh | 0.7 + 8.1 + 15.0 = 23.8 ms | **0 ms** |
+| Transient garbage from that parse | 3.56 MB | **0** |
+| Building the two diff inputs at 20k | 23.1 ms | **6.0 ms** |
+| …entries copied to do it | 40,422 | **0** |
+
+### 1. The manifest is revalidated, not re-downloaded
+
+`fetchRemoteManifest` now takes the manifest the caller already holds, and the
+storage adapter offers an optional `getIfChanged` that sends `If-None-Match` and
+reports the validator it got back. A backend that answers "not modified" hands
+the caller its own copy back.
+
+What is remembered per backend is two strings - the validator and which
+snapshot id it names - not the manifest. Caching the manifest itself would be
+another 20k-entry structure resident for the life of the plugin, which is the
+weight phase 7 spent its effort removing. The copy that answers a revalidated
+read is the baseline the state file already holds.
+
+The request is only made conditional when a "not modified" can actually be
+answered: the caller passed a manifest, and it is the one the validator names.
+Otherwise the read is unconditional, because a 304 with nothing to answer from
+would have to be followed by the real read anyway.
+
+`If-None-Match` is standard HTTP, so it is implemented for S3 and WebDAV. Google
+Drive's media download has no dependable validator, and the share broker is not
+one, so both leave `getIfChanged` off and fall back to the plain read - the
+capability is optional, and a backend without it behaves exactly as before.
+
+Checked against the real endpoint rather than assumed: an unconditional GET
+returns 200 and 40,263 bytes, the same GET with the validator returns 304 and
+zero. And in the running vault two consecutive refreshes came back holding the
+same manifest object the caller passed in, which is only possible if the body
+was never sent.
+
+A "not modified" that answers a read which carried no validator is refused
+rather than believed, in the adapter and again in `fetchRemoteManifest`. It
+describes nothing the caller holds, and every other thing to return reads as an
+object that is not there - a remote that has never been pushed to, in the
+manifest's case.
+
+The push guard revalidates too. That is safe for the reason it exists: a 304 is
+the server stating the object has not changed, which is exactly what the
+precheck asks. A competing writer changes the object, so the validator stops
+matching and the body arrives.
+
+### Review outcome
+
+Five findings, one confirmed. `get` routes through the same conditional read, so
+a backend answering 304 to a plain unconditional read would have been reported
+as an object that is not there - a content blob or a keyfile, not just the
+manifest. A correct server never does that; a proxy in front of one might. Both
+adapters now refuse it, and `fetchRemoteManifest` keeps its own refusal for a
+backend whose `getIfChanged` does not.
+
+Refuted: two findings about that same unsolicited 304 reaching the manifest
+layer, which the guard there already covers; one about `If-None-Match` breaking
+the SigV4 signature, which it does not because the signer canonicalises every
+header it is handed and an entity tag carries no whitespace; and one claiming
+the workspace lint was failing, which it is not.
+
+### 2. The diff scopes as it reads
+
+`filterManifestForDiff` rebuilt the remote and the baseline into new records so
+`diff` would only see in-scope paths - 40,422 entries copied per compare, twice
+over at 20k. `diff` takes the predicate instead and skips out-of-scope paths
+while collecting the path union.
+
+Only the remote and the baseline are filtered, as before. The local snapshot
+comes out of the scan already scoped, and the scan's predicate is the stricter
+of the two, so a local path is always in scope for the diff as well.
+
+The folder half of that filter was already dead: `diff` never reads folders, and
+`syncFolders` applies `canDescend` to the unfiltered manifest itself, which is
+what actually keeps a share from creating folders outside its root.
+
+---
+
 ## Reproducing the measurements
 
 ```bash

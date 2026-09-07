@@ -8,7 +8,7 @@ import {
 	EFieldKind,
 	type SettingsFieldSpec,
 } from "@/storage/field-spec";
-import type { StorageAdapter } from "@/storage/types";
+import type { ConditionalRead, StorageAdapter } from "@/storage/types";
 import { toArrayBuffer } from "@/utils/bytes";
 import {
 	createS3Signer,
@@ -18,6 +18,7 @@ import {
 import { parseErrorCode, parseListObjects } from "./s3-xml";
 import {
 	assertOk,
+	headerValue,
 	isRetryableStatus,
 	STORAGE_TIMEOUT_MS,
 	StorageHttpError,
@@ -26,6 +27,7 @@ import {
 } from "./util";
 
 const HTTP_NOT_FOUND = 404;
+const HTTP_NOT_MODIFIED = 304;
 const HTTP_PRECONDITION_FAILED = 412;
 /** Stored with every object, as the SDK adapter did. */
 const OBJECT_CACHE_CONTROL = "no-cache, no-store, must-revalidate";
@@ -97,6 +99,40 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	const fullKey = (key: string): string => `${prefix}${key}`;
 	const send = createSender(sign);
 
+	const readObject = async (
+		key: string,
+		etag: string | null,
+	): Promise<ConditionalRead> => {
+		const res = await send({
+			method: "GET",
+			key: fullKey(key),
+			// The manifest moves under us, and a revalidated read is what the
+			// stale-read reconciliation in sync/manifest.ts assumes.
+			headers: {
+				"Cache-Control": "no-cache",
+				...(etag ? { "If-None-Match": etag } : {}),
+			},
+		});
+		if (res.status === HTTP_NOT_MODIFIED) {
+			// Only ever an answer about the validator we sent. Unsolicited it
+			// describes nothing, and the caller of a plain read would take it for
+			// an object that is not there.
+			if (!etag) {
+				throw new Error(
+					`S3 answered 304 to an unconditional read of "${key}".`,
+				);
+			}
+			return { status: "unchanged" };
+		}
+		if (isAbsent(res)) return { status: "absent" };
+		assertOk(res, "read", key);
+		return {
+			status: "found",
+			body: new Uint8Array(res.arrayBuffer),
+			etag: headerValue(res.headers, "etag"),
+		};
+	};
+
 	return {
 		identity() {
 			return s3Identity(config);
@@ -108,17 +144,10 @@ export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 			return true;
 		},
 		async get(key) {
-			const res = await send({
-				method: "GET",
-				key: fullKey(key),
-				// The manifest moves under us, and a revalidated read is what the
-				// stale-read reconciliation in sync/manifest.ts assumes.
-				headers: { "Cache-Control": "no-cache" },
-			});
-			if (isAbsent(res)) return null;
-			assertOk(res, "read", key);
-			return new Uint8Array(res.arrayBuffer);
+			const read = await readObject(key, null);
+			return read.status === "found" ? read.body : null;
 		},
+		getIfChanged: readObject,
 		async put(key, body, contentType) {
 			const res = await sendPut(send, fullKey(key), body, contentType);
 			assertOk(res, "write", key);
