@@ -2,7 +2,7 @@ import type { App } from "obsidian";
 
 import { ESyncLogOperation } from "@/logs/store";
 import type { ObsyncSettings } from "@/settings/model";
-import { writeBinary } from "@/vault/io";
+import { clearEnsuredDirs, writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
 import { clearRemoteTextCache, textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
@@ -150,13 +150,14 @@ export class SyncController {
 		this.runtimeState.dispose();
 		this.fileDiffs.clear();
 		clearRemoteTextCache();
+		clearEnsuredDirs();
 	}
 
 	getStatusForPath(path: string): PathStatus | null {
 		return this.fileDiffs.getStatusForPath(path);
 	}
 
-	getChangedPathStatuses(): Map<string, EChangeType | "conflict"> {
+	getChangedPathStatuses(): ReadonlyMap<string, EChangeType | "conflict"> {
 		return this.fileDiffs.getChangedPathStatuses();
 	}
 

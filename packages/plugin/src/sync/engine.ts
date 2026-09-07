@@ -221,12 +221,16 @@ export async function pullPaths(
 		deps.signal,
 	);
 
-	for (const change of deletions) {
-		if (deps.signal?.aborted) break;
-		await deletePath(deps.adapter, change.path);
-		written.set(change.path, null);
-		onProgress?.(++done, total);
-	}
+	await runWithConcurrency(
+		deletions,
+		concurrency,
+		async (change) => {
+			await deletePath(deps.adapter, change.path);
+			written.set(change.path, null);
+			onProgress?.(++done, total);
+		},
+		deps.signal,
+	);
 
 	// Unlike a push there is nothing atomic to withhold: every file already
 	// written is correct on its own, and the baseline only advances for those.

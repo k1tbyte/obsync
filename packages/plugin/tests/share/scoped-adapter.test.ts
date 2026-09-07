@@ -30,6 +30,9 @@ describe("ScopedVaultAdapter", () => {
 		const vault = new InMemoryAdapter();
 		await vault.mkdir("Root");
 		const scoped = new ScopedVaultAdapter(vault.asDataAdapter(), "Root");
+		// The adapter only maps paths; callers reach it through `vault/io.ts`,
+		// which has already created the folder.
+		await scoped.mkdir("new");
 		await scoped.write("new/note.md", "hi");
 		expect(vault.readText("Root/new/note.md")).toBe("hi");
 		await scoped.remove("new/note.md");

@@ -758,22 +758,133 @@ name is now available on the flattened row if it should change.
 
 ---
 
-## Phase 6 — Redundant IPC and sequential loops (P2)
+## Phase 6 — Redundant IPC and sequential loops (P2) — DONE
 
-Confirmed by review, each cheap to fix:
+Measured on the same 20,211-file vault, Obsidian 1.13.7, settled machine. Per
+call: `adapter.exists` 0.044 ms, `adapter.stat` 0.041 ms, `adapter.mkdir` on an
+existing folder 0.192 ms.
 
-| Site | Problem |
-|---|---|
-| `sync/operations/revert.ts:22` | `.find()` over the change array inside a loop: O(N²). Measured 103 ms vs 3.2 ms at 5k. |
-| `sync/operations/revert.ts:21` | Sequential revert loop; use `runWithConcurrency`. |
-| `sync/engine.ts:182` | Sequential remote-deletion loop. |
-| `sync/operations/push.ts:155` | `batchKeepLocalOp` sequential. |
-| `sync/operations/pull.ts:145` | `batchAcceptRemoteOp` sequential. |
-| `vault/io.ts:34` | `ensureDir` calls `exists` per path segment on every write. Cache created directories per operation. |
-| `vault/io.ts:26`, `vault/io.ts:50`, `sync/content.ts:24`, `vault/atomic-write.ts:10` | `exists()` before an operation that already tolerates absence. |
-| `sync/engine.ts:191` | `adapter.stat` after every pulled file, only to read mtime. |
-| `sync/runtime/file-diff-service.ts:36-38` | Three `.find()` scans over the full change array per call. |
-| `sync/operations/push.ts:47` | Per-file synchronous progress broadcast; batch operations already use the coalesced `reportProgressSoon`. |
+| Metric | Before | After |
+|---|---|---|
+| `exists` calls to place 20,211 files | 60,739 | **686** |
+| …costing | 2,786 ms | **33 ms** |
+| Revert of 5,000 paths, change lookup | 75.8 ms | **1.2 ms** |
+| `getStatusForPath` at 20k changes | 0.13 ms | **0.0005 ms** |
+| `getChangedPathStatuses` at 20k changes | 0.72 ms per call | **1.3 ms once, then 0** |
+| Progress reporting per file | 0.16 ms, synchronous | **coalesced to a frame** |
+| …over a 20k-file push | 3.2 s of main thread | **~0** |
+
+### 1. One probe per folder, not one per path segment
+
+`ensureDir` walked the path segment by segment and asked `exists` for each,
+every time a file was written. Placing 20,211 files that way is 60,739 round
+trips to learn the same 686 folders.
+
+Two facts settle it, both measured against the real adapter: `mkdir` creates
+intermediate folders, and it resolves rather than throwing when the folder is
+already there. So a miss costs one probe plus at most one create, and a
+directory already seen costs nothing.
+
+The cache is per adapter, in a `WeakMap`. `ScopedVaultAdapter` rewrites paths -
+a share mounted at `Root/` answers for `notes` with the vault's `Root/notes` -
+and one shared set would let it vouch for a folder the vault adapter has never
+seen.
+
+Only `writeBinary` reads it, because only `writeBinary` finds out when it is
+wrong: the write into a folder removed behind the cache fails, and the retry
+repairs both the folder and the entry. `ensureDir` always probes. Its other
+caller is `syncFolders`, which reconciles the folder set against disk with no
+write behind it - a cached yes there would leave an externally deleted empty
+folder gone, and the next scan would read that as a local deletion and drop the
+folder from the manifest for every device.
+
+The retry is narrow in both directions: a write that did its own probe rethrows
+at once, and a write that trusted the cache only retries if the folder really
+had gone missing. Anything else is the write's own failure and a second attempt
+would just wait twice.
+
+A single recursive `mkdir` is the fast path; an adapter whose `mkdir` is not
+recursive falls back to the segment walk this replaced. Desktop is measured,
+mobile is not.
+
+### 2. Sequential loops that were waiting on the network
+
+`revert`, the remote-deletion pass in `pullPaths`, `batchKeepLocalOp`,
+`batchAcceptRemoteOp` and the auto-merge pass each awaited one file at a time
+while the work was a download or an upload. All five now run through
+`runWithConcurrency` at the same bound as the rest of the engine.
+
+Cancellation semantics are unchanged: the deletion pass still stops pulling new
+work when the signal aborts, and revert - which never had a cancellation check -
+still runs to completion. Auto-merge writes into a pre-sized array indexed by
+conflict position, so its log keeps diff order whichever download lands first.
+
+### 3. One index instead of a scan per lookup
+
+`getStatusForPath` scanned three arrays per call and `getChangedPathStatuses`
+rebuilt a 20k-entry map ~40 times a refresh. Both now read one index memoised on
+the compare result's identity.
+
+The two disagreed about precedence and still do: a single-path lookup prefers
+the local change, the explorer's status map prefers the remote one, and a
+conflict outranks both there. The index preserves each, and tests pin them.
+
+### 4. Progress that nobody can read
+
+A push reported progress with a synchronous broadcast per file - 0.16 ms of main
+thread each, 3.2 s spread across a 20k push, to paint counters faster than a
+screen refreshes. Both the push and the pull now use the same rAF-coalesced
+reporter the batch operations already used.
+
+### Not done, and why
+
+- **`sync/content.ts` `loadLocalBytes`**: the `exists` probe stays. Dropping it
+  means catching the read error, and `batchKeepLocalOp` reads a null as "the
+  local side is a deletion" and publishes one. A transient read error would
+  delete a file on the remote to save one round trip on a cold path.
+- **`vault/atomic-write.ts`**: measured, not assumed. Replacing each `exists`
+  with a `remove` that tolerates absence is the same number of round trips, and
+  a rejected `remove` costs 0.06 ms against 0.044 ms for the probe. Phase 3
+  already made state writes rare.
+- **`sync/engine.ts` post-pull `adapter.stat`**: the mtime it reads is what
+  stops the next scan re-hashing the file. Trading it for `Date.now()` saves
+  ~200 ms on a 20k pull and buys a full re-hash of the vault.
+
+### Review outcome
+
+One swarm review, 8 findings confirmed, 2 refuted. Acted on:
+
+- **`ensureDir` defeated `syncFolders`** (major). The fix above; mutation-checked
+  by putting the cache read back and watching the test go red.
+- **`deletePath` swallowed every failure** (major, and older than this phase).
+  A locked file was reported as deleted, so the pull advanced the baseline and
+  evicted the hash cache while the file sat on disk - the next scan read it as a
+  local add and pushed it back to the remote. It now probes only when `remove`
+  failed, and rethrows if the file is still there: zero extra round trips on the
+  path that runs 20k times, one on the path that was already broken.
+- The retry evicted a good cache entry on any write failure, revert could put two
+  workers on a duplicated path, `getConflictThreeWay` still scanned for its
+  conflict, and the vault-restore removal pass was still sequential.
+- The test adapter's `rename` resolved on a missing source, hiding ENOENT.
+
+Refuted: the shared status map (the `ReadonlyMap` return type is the guard, and
+its one caller iterates), and the deliberate refusal to retry a write that did
+its own probe.
+
+Not taken: `pushHunksOp`'s two `.some()` scans. They short-circuit, run once per
+click, and cost ~0.1 ms at 20k - an index in that layer would be more code for
+nothing. And `removeEmptyDir` evicts even when the folder turned out not to be
+empty: one wasted probe later beats an entry claiming a folder is there when it
+is not.
+
+### Test harness
+
+The in-memory adapter now behaves like Obsidian where these paths depend on it:
+`remove` rejects on a missing file, `rename` refuses to clobber, and writes and
+renames reject when the folder is missing. The stricter stub surfaced one test
+that wrote through `ScopedVaultAdapter` into a folder it never created - a
+fixture gap, not a product bug: real callers reach that adapter through
+`vault/io.ts`, which creates the folder first.
 
 ---
 
