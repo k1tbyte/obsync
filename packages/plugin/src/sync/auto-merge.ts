@@ -1,5 +1,7 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "@/sync/constants";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { tryAutoMergeConflict } from "./conflict-merge";
 import { hasKnownBinaryExtension, textToBytes } from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
@@ -12,37 +14,46 @@ export async function autoMergeOp(
 	result: CompareResult,
 	ctx: OperationContext,
 ): Promise<OperationOutcome> {
-	const mergedPaths: string[] = [];
 	const localEntries = new Map<string, ManifestEntry | null>();
 	const hashCache = { ...result.updatedCache };
+	// Indexed by conflict position so the log and the baseline pass stay in diff
+	// order no matter which download finishes first.
+	const merged: Array<string | null> = new Array(
+		result.diff.conflicts.length,
+	).fill(null);
 
-	for (const conflict of result.diff.conflicts) {
-		// No common ancestor: nothing to merge against, and no reason to stat.
-		if (!conflict.baselineHash) continue;
-		// Rules out binary/oversized files via path and manifest sizes - never
-		// downloads megabytes just to discover the file can't be merged.
-		const mergeable = await isTextMergeCandidate(
-			deps,
-			conflict.path,
-			result.remote,
-			deps.state.baseline,
-		);
-		if (!mergeable) continue;
-		const merged = await tryAutoMergeConflict(deps, conflict);
-		if (merged === null) continue;
-		const entry = await writeLocalFile(
-			deps,
-			conflict.path,
-			textToBytes(merged),
-		);
-		hashCache[conflict.path] = {
-			mtime: entry.mtime,
-			size: entry.size,
-			hash: entry.hash,
-		};
-		localEntries.set(conflict.path, entry);
-		mergedPaths.push(conflict.path);
-	}
+	await runWithConcurrency(
+		result.diff.conflicts,
+		deps.concurrency ?? DEFAULT_CONCURRENCY,
+		async (conflict, index) => {
+			// No common ancestor: nothing to merge against, and no reason to stat.
+			if (!conflict.baselineHash) return;
+			// Rules out binary/oversized files via path and manifest sizes - never
+			// downloads megabytes just to discover the file can't be merged.
+			const mergeable = await isTextMergeCandidate(
+				deps,
+				conflict.path,
+				result.remote,
+				deps.state.baseline,
+			);
+			if (!mergeable) return;
+			const text = await tryAutoMergeConflict(deps, conflict);
+			if (text === null) return;
+			const entry = await writeLocalFile(
+				deps,
+				conflict.path,
+				textToBytes(text),
+			);
+			hashCache[conflict.path] = {
+				mtime: entry.mtime,
+				size: entry.size,
+				hash: entry.hash,
+			};
+			localEntries.set(conflict.path, entry);
+			merged[index] = conflict.path;
+		},
+	);
+	const mergedPaths = merged.filter((path): path is string => path !== null);
 
 	if (mergedPaths.length === 0) {
 		return { newRemote: result.remote, touchedPaths: new Set() };

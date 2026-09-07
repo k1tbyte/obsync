@@ -57,6 +57,15 @@ export class InMemoryAdapter {
 		if (slash > 0) this.addDir(n.slice(0, slash));
 	}
 
+	/** Obsidian writes and renames fail with ENOENT when the folder is missing. */
+	private missingParent(n: string): Error | null {
+		const slash = n.lastIndexOf("/");
+		if (slash <= 0) return null;
+		const parent = n.slice(0, slash);
+		if (this.dirs.has(parent)) return null;
+		return new Error(`ENOENT: no such directory: ${parent}`);
+	}
+
 	private addDir(n: string): void {
 		let cur = n;
 		while (cur) {
@@ -119,7 +128,10 @@ export class InMemoryAdapter {
 	}
 
 	writeBinary(path: string, data: ArrayBuffer): Promise<void> {
-		this.writeFile(norm(path), new Uint8Array(data), this.nextMtime());
+		const n = norm(path);
+		const missing = this.missingParent(n);
+		if (missing) return Promise.reject(missing);
+		this.writeFile(n, new Uint8Array(data), this.nextMtime());
 		return Promise.resolve();
 	}
 
@@ -130,7 +142,10 @@ export class InMemoryAdapter {
 	}
 
 	write(path: string, data: string): Promise<void> {
-		this.writeFile(norm(path), new TextEncoder().encode(data), Date.now());
+		const n = norm(path);
+		const missing = this.missingParent(n);
+		if (missing) return Promise.reject(missing);
+		this.writeFile(n, new TextEncoder().encode(data), Date.now());
 		return Promise.resolve();
 	}
 
@@ -155,17 +170,31 @@ export class InMemoryAdapter {
 	}
 
 	remove(path: string): Promise<void> {
-		this.files.delete(norm(path));
+		const n = norm(path);
+		// Obsidian rejects with ENOENT here, and callers rely on that to skip a
+		// separate existence probe.
+		if (!this.files.has(n)) {
+			return Promise.reject(new Error(`ENOENT: no such file: ${path}`));
+		}
+		this.files.delete(n);
 		return Promise.resolve();
 	}
 
 	rename(oldPath: string, newPath: string): Promise<void> {
 		const from = norm(oldPath);
+		const to = norm(newPath);
 		const entry = this.files.get(from);
-		if (entry) {
-			this.files.delete(from);
-			this.writeFile(norm(newPath), entry.data, entry.mtime);
+		if (!entry) {
+			return Promise.reject(new Error(`ENOENT: no such file: ${oldPath}`));
 		}
+		// Obsidian refuses to clobber, so an atomic write has to clear the way.
+		if (this.files.has(to)) {
+			return Promise.reject(new Error("Destination file already exists!"));
+		}
+		const missing = this.missingParent(to);
+		if (missing) return Promise.reject(missing);
+		this.files.delete(from);
+		this.writeFile(to, entry.data, entry.mtime);
 		return Promise.resolve();
 	}
 

@@ -1,3 +1,4 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
 import { encryptBytes, sha256Hex } from "@/crypto";
 import { ESyncLogOperation } from "@/logs/store";
 import { formatBytes, sumBytes } from "@/shared/format";
@@ -19,6 +20,7 @@ import {
 import { applyHunks, computeHunks } from "@/sync/hunks";
 import { objectKey } from "@/sync/manifest";
 import type { Manifest, ManifestEntry } from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
 import {
 	assertSidesUnchanged,
 	EHunkPair,
@@ -46,8 +48,10 @@ export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 		);
 	}
 	const bytesUploaded = sumBytes(paths, result.snapshot.files);
+	// Coalesced: a synchronous broadcast per file costs 0.16 ms of main thread,
+	// which is 3.2 s of jank spread across a 20k-file push.
 	const manifest = await pushPaths(deps, result, paths, (done, total) => {
-		ctx.setProgress(`Pushing ${done}/${total}…`);
+		ctx.reportProgressSoon(`Pushing ${done}/${total}…`);
 	});
 	ctx.setProgress(null);
 	const state = advanceSessionAfterPush(deps.state, result, manifest);
@@ -138,26 +142,30 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	const nextHashCache = { ...result.updatedCache };
 	const localEntries = new Map<string, ManifestEntry | null>();
 	let done = 0;
-	for (const path of conflictPaths) {
-		const localBytes = await loadLocalBytes(deps.adapter, path);
-		if (!localBytes) {
-			// Delete vs edit, keeping local: the local side is the deletion, so
-			// publish it instead of failing on the missing file.
-			delete baseFiles[path];
-			delete nextHashCache[path];
-			localEntries.set(path, null);
-		} else {
-			const entry = await uploadLocalAsObject(deps, path, localBytes);
-			baseFiles[path] = entry;
-			nextHashCache[path] = {
-				mtime: entry.mtime,
-				size: entry.size,
-				hash: entry.hash,
-			};
-			localEntries.set(path, entry);
-		}
-		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
-	}
+	await runWithConcurrency(
+		conflictPaths,
+		deps.concurrency ?? DEFAULT_CONCURRENCY,
+		async (path) => {
+			const localBytes = await loadLocalBytes(deps.adapter, path);
+			if (!localBytes) {
+				// Delete vs edit, keeping local: the local side is the deletion, so
+				// publish it instead of failing on the missing file.
+				delete baseFiles[path];
+				delete nextHashCache[path];
+				localEntries.set(path, null);
+			} else {
+				const entry = await uploadLocalAsObject(deps, path, localBytes);
+				baseFiles[path] = entry;
+				nextHashCache[path] = {
+					mtime: entry.mtime,
+					size: entry.size,
+					hash: entry.hash,
+				};
+				localEntries.set(path, entry);
+			}
+			ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
+		},
+	);
 	const manifest = await publishFileMap(deps, result, baseFiles);
 	const baseline = advanceBaselineForPaths(
 		deps.state.baseline,

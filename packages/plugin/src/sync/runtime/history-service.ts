@@ -94,9 +94,13 @@ export class HistoryService {
 					await writeRemoteObject(session, item.path, item.entry.hash);
 				},
 			);
-			for (const path of plan.remove) {
-				await deletePath(session.adapter, path);
-			}
+			await runWithConcurrency(
+				plan.remove,
+				session.concurrency ?? DEFAULT_CONCURRENCY,
+				async (path) => {
+					await deletePath(session.adapter, path);
+				},
+			);
 			await this.deps.refresh();
 			return plan;
 		});

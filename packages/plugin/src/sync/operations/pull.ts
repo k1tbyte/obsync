@@ -1,3 +1,4 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { formatBytes, sumBytes } from "@/shared/format";
 import {
@@ -10,6 +11,7 @@ import { textToBytes, writeRemoteObject } from "@/sync/content";
 import { pullPaths } from "@/sync/engine";
 import { applyHunks, computeHunks } from "@/sync/hunks";
 import type { Manifest, ManifestEntry } from "@/sync/types";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath } from "@/vault/io";
 import { writeLocalFile } from "./local-write";
 import {
@@ -33,8 +35,10 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 		throw new Error("Cannot pull: conflicts must be resolved first");
 	}
 	const bytesDownloaded = sumBytes(paths, result.remote.files);
+	// Coalesced for the same reason as the push: one synchronous broadcast per
+	// file is 0.16 ms of main thread that nobody can read at 20k files.
 	const pulled = await pullPaths(deps, result, paths, (done, total) => {
-		ctx.setProgress(`Pulling ${done}/${total}…`);
+		ctx.reportProgressSoon(`Pulling ${done}/${total}…`);
 	});
 	ctx.setProgress(null);
 	const hashCache = mergeWrittenIntoCache(pulled.written, result.updatedCache);
@@ -142,33 +146,37 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 	const nextHashCache = { ...result.updatedCache };
 	const localEntries = new Map<string, ManifestEntry | null>();
 	let done = 0;
-	for (const path of conflictPaths) {
-		const remoteEntry = remote.files[path];
-		if (!remoteEntry) {
-			// Edit vs delete, accepting remote: the remote side is the deletion.
-			await deletePath(deps.adapter, path);
-			delete baselineFiles[path];
-			delete nextHashCache[path];
-			localEntries.set(path, null);
-		} else {
-			const size = await writeRemoteObject(deps, path, remoteEntry.hash);
-			const stat = await deps.adapter.stat(path).catch(() => null);
-			const entry: ManifestEntry = {
-				hash: remoteEntry.hash,
-				size,
-				mtime: stat?.mtime ?? Date.now(),
-				kind: remoteEntry.kind,
-			};
-			baselineFiles[path] = remoteEntry;
-			nextHashCache[path] = {
-				mtime: entry.mtime,
-				size: entry.size,
-				hash: entry.hash,
-			};
-			localEntries.set(path, entry);
-		}
-		ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
-	}
+	await runWithConcurrency(
+		conflictPaths,
+		deps.concurrency ?? DEFAULT_CONCURRENCY,
+		async (path) => {
+			const remoteEntry = remote.files[path];
+			if (!remoteEntry) {
+				// Edit vs delete, accepting remote: the remote side is the deletion.
+				await deletePath(deps.adapter, path);
+				delete baselineFiles[path];
+				delete nextHashCache[path];
+				localEntries.set(path, null);
+			} else {
+				const size = await writeRemoteObject(deps, path, remoteEntry.hash);
+				const stat = await deps.adapter.stat(path).catch(() => null);
+				const entry: ManifestEntry = {
+					hash: remoteEntry.hash,
+					size,
+					mtime: stat?.mtime ?? Date.now(),
+					kind: remoteEntry.kind,
+				};
+				baselineFiles[path] = remoteEntry;
+				nextHashCache[path] = {
+					mtime: entry.mtime,
+					size: entry.size,
+					hash: entry.hash,
+				};
+				localEntries.set(path, entry);
+			}
+			ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
+		},
+	);
 	const baseline: Manifest = {
 		...remote,
 		files: baselineFiles,
