@@ -11,6 +11,8 @@ import type * as Party from "partykit/server";
 /** Presence fields are attacker-controlled; cap them before they are stored. */
 const MAX_DEVICE_FIELD = 64;
 
+const SYNC_MESSAGE = JSON.stringify({ type: "sync" });
+
 interface PresenceDevice {
 	id: string;
 	name: string;
@@ -55,7 +57,7 @@ export default class SyncRelay implements Party.Server {
 		if (message === "ping") return; // Keepalive, ignore.
 
 		if (message === "sync") {
-			this.room.broadcast(JSON.stringify({ type: "sync" }), [sender.id]);
+			this.room.broadcast(SYNC_MESSAGE, [sender.id]);
 		}
 	}
 
@@ -67,9 +69,9 @@ export default class SyncRelay implements Party.Server {
 		if (request.method === "POST") {
 			// The poster may also hold an open socket in this room; excluding it
 			// keeps a device from waking itself up.
-			const from = new URL(request.url).searchParams.get("from");
+			const from = clampField(new URL(request.url).searchParams.get("from"));
 			this.room.broadcast(
-				JSON.stringify({ type: "sync" }),
+				SYNC_MESSAGE,
 				from ? connectionIdsForDevice(this.room, from) : [],
 			);
 			return new Response("ok");

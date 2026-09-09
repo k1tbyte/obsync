@@ -166,6 +166,11 @@ export class DiffView extends ItemView {
 		this.cancelStatusDebounce = null;
 		this.destroyViews();
 		this.contentEl.empty();
+		// A refreshModel still in flight resumes after this; the null elements
+		// stop it mounting a MergeView, or header listeners, that nothing will
+		// ever destroy.
+		this.bodyEl = null;
+		this.headerEl = null;
 	}
 
 	private async refreshModel(): Promise<void> {

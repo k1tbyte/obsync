@@ -1,9 +1,10 @@
 import type { EncryptionKey } from "@/crypto";
+import { entryAt } from "@/shared/records";
 import type { ObjectStorage } from "@/storage/types";
 import { loadRemoteBytes } from "@/sync/content";
 import { fetchRemoteManifest } from "@/sync/manifest";
 import type { Manifest, ManifestEntry } from "@/sync/types";
-import { contiguousLength, entryAt, undoChangesForPath } from "./changes";
+import { contiguousLength, undoChangesForPath } from "./changes";
 import { readHistoryLog, readPinManifest } from "./store";
 import type {
 	DeletedFile,
@@ -230,8 +231,8 @@ async function applyPins(
 			if (entryAt(head.files, path)) continue;
 			const existing = found.get(path);
 			if (existing) {
-				// The pin keeps the file reachable; only this exact version can age out.
-				existing.rank = null;
+				// The pin only holds its own hash reachable; a newer death still ages out.
+				if (existing.entry.hash === entry.hash) existing.rank = null;
 				continue;
 			}
 			found.set(path, {

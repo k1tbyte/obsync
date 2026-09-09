@@ -16,10 +16,10 @@ import {
 import type { HashCacheEntry, Manifest, SessionState } from "@/sync/types";
 import { writeBinary } from "@/vault/io";
 
-/** Shares log more often (every cycle), so they attach fewer paths. */
 /** Guard against an endless "(conflict from X) N" chain on one file. */
 const CONFLICT_COPY_LIMIT = 100;
 
+/** Shares log more often (every cycle), so they attach fewer paths. */
 const SHARE_LOG_PATH_LIMIT = 25;
 
 export interface ShareCycleHooks {
@@ -218,9 +218,13 @@ async function freeConflictCopyPath(
 ): Promise<string> {
 	const base = conflictCopyPath(path, remoteDeviceName);
 	if (!(await deps.adapter.exists(base))) return base;
-	const dot = base.lastIndexOf(".");
-	const stem = dot > 0 ? base.slice(0, dot) : base;
-	const ext = dot > 0 ? base.slice(dot) : "";
+	// Read off the original path: `base` also carries the device name, and a
+	// dotted folder or a dotted device name must not be mistaken for an extension.
+	const slash = path.lastIndexOf("/");
+	const file = slash >= 0 ? path.slice(slash + 1) : path;
+	const dot = file.lastIndexOf(".");
+	const ext = dot > 0 ? file.slice(dot) : "";
+	const stem = ext ? base.slice(0, -ext.length) : base;
 	for (let n = 2; n < CONFLICT_COPY_LIMIT; n++) {
 		const candidate = `${stem} ${n}${ext}`;
 		if (!(await deps.adapter.exists(candidate))) return candidate;

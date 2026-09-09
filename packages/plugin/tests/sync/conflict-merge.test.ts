@@ -28,6 +28,21 @@ describe("buildMergedConflict", () => {
 		expect(hasUnresolvedMarkers(merged.text)).toBe(true);
 	});
 
+	it("normalises CRLF so a Windows local side is not one whole conflict", () => {
+		const base = "a\nb\nc\nd\ne";
+		const local = "a\r\nLOCAL\r\nc\r\nd\r\ne";
+		const remote = "a\nb\nc\nREMOTE\ne";
+		const merged = buildMergedConflict(base, local, remote);
+		expect(merged.hasConflicts).toBe(false);
+		// Compared on LF, written back with the endings the local file had.
+		expect(merged.text).toBe("a\r\nLOCAL\r\nc\r\nREMOTE\r\ne");
+	});
+
+	it("leaves an LF file on LF", () => {
+		const merged = buildMergedConflict("a\nb", "a\nb", "a\nb");
+		expect(merged.text).toBe("a\nb");
+	});
+
 	it("hasUnresolvedMarkers is false once markers are removed", () => {
 		expect(hasUnresolvedMarkers("a\nLOCAL\nc")).toBe(false);
 	});
