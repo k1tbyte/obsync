@@ -13,9 +13,9 @@ import {
 	FILE_HISTORY_MIN_SNAPSHOTS,
 } from "@/sync/history";
 
-const AUTO_PULL_MIN_MINUTES = 0;
+const AUTO_SYNC_MIN_MINUTES = 0;
 
-const AUTO_PULL_MAX_MINUTES = 1440;
+const AUTO_SYNC_MAX_MINUTES = 1440;
 
 const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
@@ -28,10 +28,18 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Number,
 		name: "Auto-pull interval (minutes)",
-		desc: `Set to ${AUTO_PULL_MIN_MINUTES} to disable. Max ${AUTO_PULL_MAX_MINUTES}.`,
+		desc: `Set to ${AUTO_SYNC_MIN_MINUTES} to disable. Max ${AUTO_SYNC_MAX_MINUTES}.`,
 		get: (s) => String(s.autoPullIntervalMinutes),
-		parse: clampAutoPullMinutes,
+		parse: clampAutoSyncMinutes,
 		set: (v) => ({ autoPullIntervalMinutes: v }),
+	},
+	{
+		kind: EFieldKind.Number,
+		name: "Auto-push interval (minutes)",
+		desc: `Push pending local changes every N minutes. Set to ${AUTO_SYNC_MIN_MINUTES} to disable. Max ${AUTO_SYNC_MAX_MINUTES}. Skips conflicted files and files with incoming remote changes.`,
+		get: (s) => String(s.autoPushIntervalMinutes),
+		parse: clampAutoSyncMinutes,
+		set: (v) => ({ autoPushIntervalMinutes: v }),
 	},
 	{
 		kind: EFieldKind.Toggle,
@@ -166,11 +174,11 @@ function restartRelay(plugin: PluginHost): void {
 	plugin.realtime.restart();
 }
 
-function clampAutoPullMinutes(raw: string): number {
+function clampAutoSyncMinutes(raw: string): number {
 	const parsed = Number.parseInt(raw, 10);
 	return Math.max(
-		AUTO_PULL_MIN_MINUTES,
-		Math.min(AUTO_PULL_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
+		AUTO_SYNC_MIN_MINUTES,
+		Math.min(AUTO_SYNC_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
 	);
 }
 

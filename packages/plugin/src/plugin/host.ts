@@ -6,6 +6,7 @@ import type { SettingsTransferController } from "@/settings/transfer-controller"
 import type { SharedFolderConfig, ShareSyncService } from "@/share";
 import type { SyncController } from "@/sync/controller";
 
+import type { IgnoreStateHandle } from "./ignore-state";
 import type { PluginRealtime } from "./realtime";
 
 /**
@@ -23,6 +24,7 @@ export interface PluginHost {
 	readonly device: DeviceName;
 	readonly transfer: SettingsTransferController;
 	readonly shares: ShareSyncService;
+	readonly ignoreState: IgnoreStateHandle;
 
 	saveSettings(): Promise<void>;
 	scheduleScopeRefresh(reason?: string): void;
@@ -31,4 +33,5 @@ export interface PluginHost {
 	removeSharedFolder(shareId: string): Promise<void>;
 	refreshEditorSigns(enabled: boolean): void;
 	refreshFileIndicators(enabled: boolean): void;
+	refreshSourceControlView(): void;
 }

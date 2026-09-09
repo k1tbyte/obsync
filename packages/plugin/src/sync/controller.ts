@@ -2,8 +2,9 @@ import type { App } from "obsidian";
 
 import { ESyncLogOperation } from "@/logs/store";
 import type { ObsyncSettings } from "@/settings/model";
-import { clearEnsuredDirs, writeBinary } from "@/vault/io";
+import { writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
+import { selectAutoPushPaths } from "./auto-push";
 import { clearRemoteTextCache, textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
 import type { EngineDependencies } from "./engine";
@@ -150,7 +151,6 @@ export class SyncController {
 		this.runtimeState.dispose();
 		this.fileDiffs.clear();
 		clearRemoteTextCache();
-		clearEnsuredDirs();
 	}
 
 	getStatusForPath(path: string): PathStatus | null {
@@ -185,6 +185,24 @@ export class SyncController {
 		if (afterMerge.diff.localChanges.length > 0) return;
 		if (afterMerge.diff.remoteChanges.length === 0) return;
 		await this.pullPaths(afterMerge.diff.remoteChanges.map((c) => c.path));
+	}
+
+	async refreshAndAutoPush(): Promise<void> {
+		await this.refresh();
+		await this.autoPushFromSnapshot();
+	}
+
+	/**
+	 * Pushes pending local changes from the current snapshot. Conflicts and
+	 * files with incoming remote changes are left for the user to settle.
+	 */
+	async autoPushFromSnapshot(only?: ReadonlySet<string>): Promise<void> {
+		if (this.runtimeState.getSnapshot().error) return;
+		const result = this.runtimeState.getResult();
+		if (!result) return;
+		const paths = selectAutoPushPaths(result.diff, only);
+		if (paths.length === 0) return;
+		await this.pushPaths(paths);
 	}
 
 	private async autoMerge(): Promise<void> {

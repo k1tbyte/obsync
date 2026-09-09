@@ -24,23 +24,21 @@ export async function resetRemoteStorage(
 		storage.list(REMOTE_PINS_PREFIX),
 		storage.list(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
 	]);
-	const keys = uniqueKeys([
-		REMOTE_MANIFEST_KEY,
-		REMOTE_HISTORY_LOG_KEY,
-		...objectKeys.filter((key) => key.startsWith(REMOTE_OBJECTS_PREFIX)),
-		...pinKeys.filter((key) => key.startsWith(REMOTE_PINS_PREFIX)),
-		...legacyKeys.filter((key) =>
-			key.startsWith(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
-		),
-	]);
+	const keys = Array.from(
+		new Set([
+			REMOTE_MANIFEST_KEY,
+			REMOTE_HISTORY_LOG_KEY,
+			...objectKeys.filter((key) => key.startsWith(REMOTE_OBJECTS_PREFIX)),
+			...pinKeys.filter((key) => key.startsWith(REMOTE_PINS_PREFIX)),
+			...legacyKeys.filter((key) =>
+				key.startsWith(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
+			),
+		]),
+	);
 	let done = 0;
 	await runWithConcurrency(keys, concurrency, async (key) => {
 		await storage.delete(key);
 		onProgress?.(++done, keys.length);
 	});
 	return { deletedKeys: keys };
-}
-
-function uniqueKeys(keys: readonly string[]): string[] {
-	return Array.from(new Set(keys));
 }

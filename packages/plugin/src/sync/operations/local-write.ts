@@ -1,7 +1,7 @@
 import { sha256Hex } from "@/crypto";
 import type { EngineDependencies } from "@/sync/engine";
 import type { ManifestEntry } from "@/sync/types";
-import { deletePath, writeBinary } from "@/vault/io";
+import { writeBinary } from "@/vault/io";
 
 /**
  * Writes file and returns manifest entry. `mtime` comes from `stat` to avoid
@@ -20,11 +20,4 @@ export async function writeLocalFile(
 		mtime: stat?.mtime ?? Date.now(),
 		kind: deps.scope.classify(path),
 	};
-}
-
-export async function removeLocalFile(
-	deps: EngineDependencies,
-	path: string,
-): Promise<void> {
-	await deletePath(deps.adapter, path);
 }

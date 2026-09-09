@@ -109,7 +109,7 @@ const EXPORT_TOGGLES: ReadonlyArray<ExportToggle> = [
 	},
 ];
 
-export class SettingsTransferExportModal extends Modal {
+class SettingsTransferExportModal extends Modal {
 	private readonly createPackage: SettingsTransferExportModalOptions["createPackage"];
 	private options: SettingsTransferExportOptions = {
 		...DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
@@ -257,7 +257,7 @@ export class SettingsTransferExportModal extends Modal {
 	}
 }
 
-export class SettingsTransferImportModal extends Modal {
+class SettingsTransferImportModal extends Modal {
 	private readonly resolveValue: (value: string | null) => void;
 	private value = "";
 	private settled = false;
@@ -318,7 +318,7 @@ export class SettingsTransferImportModal extends Modal {
 	}
 }
 
-export class SettingsTransferConfirmModal extends Modal {
+class SettingsTransferConfirmModal extends Modal {
 	private readonly settings: ObsyncSettings;
 	private readonly resolveValue: (confirmed: boolean) => void;
 	private settled = false;

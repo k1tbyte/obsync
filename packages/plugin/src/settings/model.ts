@@ -41,6 +41,7 @@ export interface ObsyncSettings {
 	maxFileBytes: number;
 	autoPullOnStartup: boolean;
 	autoPullIntervalMinutes: number;
+	autoPushIntervalMinutes: number;
 	autoRefreshOnFileChange: boolean;
 	autoPushOnSave: boolean;
 	autoPushOnSaveCurrentFileOnly: boolean;
@@ -65,6 +66,7 @@ export interface ObsyncSettings {
 	showRibbonIcon: boolean;
 	showFileExplorerIndicators: boolean;
 	showEditorChangeSigns: boolean;
+	showFileSizes: boolean;
 	uiLayout: "tree" | "flat";
 }
 
@@ -79,6 +81,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	maxFileBytes: DEFAULT_MAX_FILE_BYTES,
 	autoPullOnStartup: true,
 	autoPullIntervalMinutes: 0,
+	autoPushIntervalMinutes: 0,
 	autoRefreshOnFileChange: true,
 	autoPushOnSave: false,
 	autoPushOnSaveCurrentFileOnly: false,
@@ -97,6 +100,7 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	showRibbonIcon: true,
 	showFileExplorerIndicators: true,
 	showEditorChangeSigns: true,
+	showFileSizes: true,
 	uiLayout: "tree",
 };
 
@@ -125,6 +129,7 @@ export function isShareStorageConfigured(settings: ObsyncSettings): boolean {
 const NUMERIC_BOUNDS = {
 	maxFileBytes: { min: 1, max: 2 * 1024 * 1024 * 1024 },
 	autoPullIntervalMinutes: { min: 0, max: 24 * 60 },
+	autoPushIntervalMinutes: { min: 0, max: 24 * 60 },
 	fileHistoryMaxSnapshots: { min: 1, max: 1000 },
 } as const satisfies Partial<Record<keyof ObsyncSettings, Bounds>>;
 

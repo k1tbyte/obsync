@@ -1,4 +1,4 @@
-import type { ChangeDesc, Text } from "@codemirror/state";
+import type { ChangeDesc } from "@codemirror/state";
 import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { debounce } from "obsidian";
 
@@ -119,5 +119,3 @@ function changeSize(changes: ChangeDesc): number {
 	});
 	return total;
 }
-
-export type CompareText = Text;

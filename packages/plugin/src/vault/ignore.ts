@@ -20,7 +20,12 @@ export async function loadSharedIgnoreMatcher(
 export async function loadLocalIgnoreMatcher(
 	extraPatterns: string,
 ): Promise<IgnoreMatcher> {
-	return buildIgnoreMatcher(mergePatterns(extraPatterns));
+	return createIgnoreMatcher(extraPatterns);
+}
+
+/** Sync build for callers that already hold the pattern text in memory. */
+export function createIgnoreMatcher(patternsText: string): IgnoreMatcher {
+	return buildIgnoreMatcher(mergePatterns(patternsText));
 }
 
 function buildIgnoreMatcher(patterns: ReadonlyArray<string>): IgnoreMatcher {

@@ -197,6 +197,13 @@ async function runPullAll(plugin: Plugin & PluginHost): Promise<void> {
 			return;
 		}
 		await plugin.controller.pullPaths(paths);
+		// runOperation records the failure on the snapshot instead of throwing,
+		// so reporting success without looking would be a lie.
+		const error = plugin.controller.getSnapshot().error;
+		if (error) {
+			notifyError("Pull all failed", new Error(error));
+			return;
+		}
 		notifyInfo(`Pulled ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Pull all failed", err);

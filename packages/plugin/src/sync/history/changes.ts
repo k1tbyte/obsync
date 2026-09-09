@@ -1,13 +1,7 @@
 import { entryAt } from "@/shared/records";
 import type { Manifest, ManifestEntry } from "@/sync/types";
 
-export { entryAt };
-
 import type { SnapshotChanges, SnapshotEntry } from "./types";
-
-function emptyChanges(): SnapshotChanges {
-	return { added: {}, modified: {}, deleted: {} };
-}
 
 function sameEntry(a: ManifestEntry, b: ManifestEntry): boolean {
 	return (
@@ -26,7 +20,7 @@ export function diffManifests(
 	parent: Manifest | null,
 	next: Manifest,
 ): SnapshotChanges {
-	const changes = emptyChanges();
+	const changes: SnapshotChanges = { added: {}, modified: {}, deleted: {} };
 	const parentFiles = parent?.files ?? {};
 	for (const [path, entry] of Object.entries(next.files)) {
 		const before = entryAt(parentFiles, path);

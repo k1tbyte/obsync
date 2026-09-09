@@ -1,4 +1,10 @@
-import { type App, ItemView, Platform, type WorkspaceLeaf } from "obsidian";
+import {
+	type App,
+	ItemView,
+	Platform,
+	setIcon,
+	type WorkspaceLeaf,
+} from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
 import type { PluginHost } from "@/plugin/host";
 import type { SyncStatusSnapshot } from "@/sync/controller";
@@ -18,6 +24,19 @@ const ESourceTab = {
 	Timeline: "timeline",
 } as const;
 type ESourceTab = (typeof ESourceTab)[keyof typeof ESourceTab];
+
+const SOURCE_TAB_PANEL_ID = "obsync-source-tab-panel";
+
+const SOURCE_TABS: ReadonlyArray<{
+	tab: ESourceTab;
+	label: string;
+	icon: string;
+}> = [
+	{ tab: ESourceTab.Changes, label: "Changes", icon: "list-tree" },
+	{ tab: ESourceTab.History, label: "History", icon: "history" },
+	{ tab: ESourceTab.Deleted, label: "Deleted", icon: "trash-2" },
+	{ tab: ESourceTab.Timeline, label: "Timeline", icon: "clock-3" },
+];
 
 export async function openSourceControlHistory(
 	plugin: PluginHost,
@@ -147,7 +166,7 @@ export class SourceControlView extends ItemView {
 	async onClose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = null;
-		// Windowed lists listen on contentEl, which survives emptying it.
+		// Windowed lists listen on the active panel, which is about to be removed.
 		this.changes.dispose();
 		// A load still in flight will call back; without this it rebuilds a dead view.
 		this.root = null;
@@ -185,59 +204,102 @@ export class SourceControlView extends ItemView {
 		this.render(this.plugin.controller.getSnapshot(), true);
 	}
 
+	refreshDisplaySettings(): void {
+		this.changes.invalidate();
+		this.render(this.plugin.controller.getSnapshot(), true);
+	}
+
 	private render(snapshot: SyncStatusSnapshot, force = false): void {
 		if (!this.root) return;
 		const root = this.root;
 		if (this.tab !== ESourceTab.Changes) {
 			if (!force) return;
-			// Another tab's content replaces the pane, but the windowed lists
-			// listen on the pane itself and would keep answering for it.
 			this.changes.dispose();
 			this.changes.invalidate();
 			root.empty();
 			this.renderTabBar(root);
-			this.renderActiveTab(root);
+			this.renderActiveTab(this.renderTabPanel(root));
 			return;
 		}
 		if (!force && !this.changes.needsRebuild(snapshot)) {
 			this.changes.refreshInPlace(snapshot);
 			return;
 		}
-		const scrollTop = root.scrollTop;
+		const scrollTop =
+			root.querySelector<HTMLElement>(".obsync-source-tab-panel")?.scrollTop ??
+			0;
 		root.empty();
 		this.renderTabBar(root);
-		this.changes.render(root, snapshot);
+		const panel = this.renderTabPanel(root);
+		this.changes.render(panel, snapshot);
 		// Emptying the pane clamped the scroll to nothing, so the lists mounted
 		// against the top. Restoring it moves them without a scroll event.
-		root.scrollTop = scrollTop;
+		panel.scrollTop = scrollTop;
 		this.changes.refreshLists();
 	}
 
+	private renderTabPanel(parent: HTMLElement): HTMLElement {
+		const panel = parent.createDiv({ cls: "obsync-source-tab-panel" });
+		panel.id = SOURCE_TAB_PANEL_ID;
+		panel.setAttr("role", "tabpanel");
+		panel.setAttr("aria-labelledby", `obsync-source-tab-${this.tab}`);
+		return panel;
+	}
+
 	private renderTabBar(parent: HTMLElement): void {
-		const bar = parent.createDiv({ cls: "obsync-settings-tabs" });
-		const make = (tab: ESourceTab, label: string): void => {
+		const bar = parent.createDiv({
+			cls: "obsync-settings-tabs obsync-source-tabs",
+		});
+		bar.setAttr("role", "tablist");
+		bar.setAttr("aria-label", "Source control views");
+		const make = (tab: ESourceTab, label: string, icon: string): void => {
 			const btn = bar.createEl("button", {
 				cls: "obsync-settings-tab-button",
-				text: label,
 			});
 			btn.type = "button";
+			btn.setAttr("role", "tab");
+			btn.setAttr("aria-label", label);
+			btn.setAttr("aria-selected", String(tab === this.tab));
+			btn.setAttr("aria-controls", SOURCE_TAB_PANEL_ID);
+			btn.setAttr("tabindex", tab === this.tab ? "0" : "-1");
+			btn.id = `obsync-source-tab-${tab}`;
+			btn.setAttr("data-obsync-tab", tab);
+			btn.setAttr("title", label);
+			const iconEl = btn.createSpan({ cls: "obsync-source-tab-icon" });
+			setIcon(iconEl, icon);
+			btn.createSpan({ cls: "obsync-source-tab-label", text: label });
 			if (tab === this.tab) btn.addClass("is-active");
-			// Re-renders even on the active tab, so a settings change can be picked up.
-			btn.addEventListener("click", () => {
-				// Only an actual switch invalidates the change tree and its previews.
-				if (this.tab !== tab) this.changes.invalidate();
-				this.tab = tab;
-				if (tab === ESourceTab.History && !this.historyTab.hasPath) {
-					const active = this.plugin.app.workspace.getActiveFile();
-					if (active) this.historyTab.setPath(active.path);
-				}
-				this.render(this.plugin.controller.getSnapshot(), true);
+			btn.addEventListener("click", () => this.activateTab(tab));
+			btn.addEventListener("keydown", (event: KeyboardEvent) => {
+				const current = SOURCE_TABS.findIndex((item) => item.tab === tab);
+				let next = current;
+				if (event.key === "ArrowLeft") next = current - 1;
+				else if (event.key === "ArrowRight") next = current + 1;
+				else if (event.key === "Home") next = 0;
+				else if (event.key === "End") next = SOURCE_TABS.length - 1;
+				else return;
+				event.preventDefault();
+				const target =
+					SOURCE_TABS[(next + SOURCE_TABS.length) % SOURCE_TABS.length];
+				if (target) this.activateTab(target.tab, true);
 			});
 		};
-		make(ESourceTab.Changes, "Changes");
-		make(ESourceTab.History, "History");
-		make(ESourceTab.Deleted, "Deleted");
-		make(ESourceTab.Timeline, "Timeline");
+		for (const { tab, label, icon } of SOURCE_TABS) make(tab, label, icon);
+	}
+
+	private activateTab(tab: ESourceTab, restoreFocus = false): void {
+		if (this.tab === tab) return;
+		this.changes.invalidate();
+		this.tab = tab;
+		if (tab === ESourceTab.History && !this.historyTab.hasPath) {
+			const active = this.plugin.app.workspace.getActiveFile();
+			if (active) this.historyTab.setPath(active.path);
+		}
+		this.render(this.plugin.controller.getSnapshot(), true);
+		if (!restoreFocus) return;
+		this.root
+			?.querySelector<HTMLButtonElement>(`[data-obsync-tab="${tab}"]`)
+			?.focus();
 	}
 }
 

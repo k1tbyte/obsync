@@ -3,8 +3,8 @@ import {
 	formatTimestamp,
 	pluralize,
 } from "@/shared/format";
-import { deviceLabel } from "@/sync/device";
 import type { SnapshotSummary, VaultRestorePlan } from "@/sync/history";
+import { deviceText } from "./row-formatter";
 
 export interface TimelineRow {
 	snapshotId: string;
@@ -85,12 +85,4 @@ export function samplePaths(paths: readonly string[], limit = 5): string[] {
 	const shown = paths.slice(0, limit).map((path) => `• ${path}`);
 	if (paths.length > limit) shown.push(`• …and ${paths.length - limit} more`);
 	return shown;
-}
-
-function deviceText(
-	snapshot: SnapshotSummary,
-	current: { id: string; name: string } | null | undefined,
-): string {
-	if (current && current.id === snapshot.deviceId) return current.name;
-	return deviceLabel(snapshot.deviceId, snapshot.deviceName);
 }

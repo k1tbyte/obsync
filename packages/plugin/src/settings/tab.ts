@@ -112,6 +112,14 @@ const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 			plugin.refreshEditorSigns(plugin.settings.showEditorChangeSigns),
 	},
 	{
+		kind: EFieldKind.Toggle,
+		name: "File sizes in changes",
+		desc: "Show current sizes and size changes in the Changes list.",
+		get: (s) => s.showFileSizes,
+		set: (v) => ({ showFileSizes: v }),
+		after: (plugin) => plugin.refreshSourceControlView(),
+	},
+	{
 		kind: EFieldKind.Number,
 		name: "Max file size (MB)",
 		desc: "Files larger than this are skipped.",
@@ -278,6 +286,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					this.plugin.settings.ignorePatterns = v;
 					void this.plugin
 						.saveSettings()
+						.then(() => this.plugin.ignoreState.refresh())
 						.then(() => this.plugin.scheduleScopeRefresh(SCOPE_CHANGED));
 				});
 			})

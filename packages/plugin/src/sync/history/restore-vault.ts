@@ -1,5 +1,5 @@
+import { entryAt } from "@/shared/records";
 import type { LocalSnapshot, Manifest, ManifestEntry } from "@/sync/types";
-import { entryAt } from "./changes";
 
 export interface VaultRestoreWrite {
 	path: string;

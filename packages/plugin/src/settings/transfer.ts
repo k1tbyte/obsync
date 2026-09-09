@@ -1,5 +1,9 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "@/crypto";
-import { getDescriptor } from "@/storage";
+import {
+	type CompactStorageConfig,
+	compactStorageConfig,
+	storageDefaults,
+} from "@/storage";
 import { EStorageBackend, type StorageAdapterConfig } from "@/storage/config";
 import { base64UrlToBytes, bytesToBase64Url } from "@/utils/base64";
 import { deflateBytes, inflateBytes } from "@/utils/compress";
@@ -82,7 +86,6 @@ export const DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS: SettingsTransferExportOpt
 	};
 
 const ETransferSection = {
-	Storage: "s",
 	Scope: "q",
 	Automation: "a",
 	Realtime: "l",
@@ -134,6 +137,12 @@ const TRANSFER_FIELDS = [
 		section: ETransferSection.Automation,
 		settingsKey: "autoPullIntervalMinutes",
 		transferKey: "n",
+		kind: ETransferFieldKind.Num,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPushIntervalMinutes",
+		transferKey: "b",
 		kind: ETransferFieldKind.Num,
 	},
 	{
@@ -192,16 +201,11 @@ const TRANSFER_FIELDS = [
 	},
 ] as const satisfies ReadonlyArray<FieldSpec>;
 
-type TransferStorageConfig = { kind: EStorageBackend } & Record<
-	string,
-	unknown
->;
-
 type SectionPayload = Record<string, unknown>;
 
 interface TransferStoragePayload {
 	a: EStorageBackend;
-	c: Record<string, TransferStorageConfig>;
+	c: Record<string, CompactStorageConfig>;
 }
 
 interface SettingsTransferPayload {
@@ -520,7 +524,7 @@ function isOptionalStoragePayload(value: unknown): boolean {
 	if (!isPlainObject(payload.c)) return false;
 	// The active backend must be included in the transfer payload.
 	if (!(payload.a in payload.c)) return false;
-	return Object.values(payload.c).every(isTransferStorageConfig);
+	return Object.values(payload.c).every(isCompactStorageConfig);
 }
 
 function isOptionalScopePayload(value: unknown): boolean {
@@ -583,7 +587,7 @@ function createStoragePayload(
 		mode === ESettingsTransferStorageMode.All
 			? settings.storageConfigs
 			: { [active.kind]: active };
-	const compactConfigs: Record<string, TransferStorageConfig> = {};
+	const compactConfigs: Record<string, CompactStorageConfig> = {};
 	for (const [kind, config] of Object.entries(storageConfigs)) {
 		if (!STORAGE_BACKENDS.has(kind)) continue;
 		compactConfigs[kind] = compactStorageConfig(config);
@@ -594,39 +598,24 @@ function createStoragePayload(
 	return { a: active.kind, c: compactConfigs };
 }
 
-function compactStorageConfig(
-	config: StorageAdapterConfig,
-): TransferStorageConfig {
-	const defaults = getStorageDefaults(config.kind);
-	const compact: TransferStorageConfig = { kind: config.kind };
-	for (const [key, value] of Object.entries(config)) {
-		if (key === "kind") continue;
-		if (defaults[key] === value) continue;
-		compact[key] = value;
-	}
-	return compact;
-}
-
 function expandStorageConfigs(
-	configs: Record<string, TransferStorageConfig>,
+	configs: Record<string, CompactStorageConfig>,
 ): Record<string, StorageAdapterConfig> {
 	const expanded: Record<string, StorageAdapterConfig> = {};
 	for (const [kind, config] of Object.entries(configs)) {
 		expanded[kind] = {
-			...getStorageDefaults(config.kind),
+			...storageDefaults(config.kind),
 			...config,
 		} as unknown as StorageAdapterConfig;
 	}
 	return expanded;
 }
 
-function isTransferStorageConfig(
-	value: unknown,
-): value is TransferStorageConfig {
+function isCompactStorageConfig(value: unknown): value is CompactStorageConfig {
 	if (!isPlainObject(value)) return false;
 	const config = value as Record<string, unknown>;
 	if (!isStorageBackend(config.kind)) return false;
-	const defaults = getStorageDefaults(config.kind);
+	const defaults = storageDefaults(config.kind);
 	for (const [key, entry] of Object.entries(config)) {
 		if (key === "kind") continue;
 		if (!(key in defaults)) return false;
@@ -639,8 +628,4 @@ function isTransferStorageConfig(
 
 function isStorageBackend(value: unknown): value is EStorageBackend {
 	return typeof value === "string" && STORAGE_BACKENDS.has(value);
-}
-
-function getStorageDefaults(kind: EStorageBackend): Record<string, unknown> {
-	return getDescriptor(kind).defaults() as unknown as Record<string, unknown>;
 }

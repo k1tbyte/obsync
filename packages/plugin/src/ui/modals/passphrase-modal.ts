@@ -2,7 +2,7 @@ import { type App, Modal, Setting } from "obsidian";
 
 import { openPromiseModal } from "./promise-modal";
 
-export class PassphraseModal extends Modal {
+class PassphraseModal extends Modal {
 	private readonly resolveValue: (value: string | null) => void;
 	private value = "";
 	private errorEl: HTMLElement | null = null;

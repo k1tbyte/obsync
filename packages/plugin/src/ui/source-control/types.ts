@@ -13,6 +13,8 @@ export interface SectionState {
 
 export interface FileRow {
 	path: string;
+	size?: number;
+	sizeDelta?: number;
 	statusLetter: string;
 	statusClass: string;
 	isConflict: boolean;

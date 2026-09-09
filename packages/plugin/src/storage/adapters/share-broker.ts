@@ -328,7 +328,7 @@ function decodeCharRef(entity: string): string {
 }
 
 function normalizeUrl(url: string): string {
-	return url.replace(/\/+$/, "");
+	return url.trim().replace(/\/+$/, "");
 }
 
 function assertConfig(config: ShareBrokerStorageConfig): void {

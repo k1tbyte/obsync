@@ -30,6 +30,7 @@ interface PathDecoration {
 	change?: ChangeIndicatorClass;
 	share?: ShareDecoration;
 	linkRoot?: string;
+	ignored?: boolean;
 }
 
 export interface AppliedDecoration {
@@ -62,6 +63,9 @@ export function computeDecorations(
 	for (const [path, linkRoot] of directLinks) {
 		patchDecoration(out, path, { linkRoot });
 	}
+	for (const path of plugin.ignoreState.ignoredPaths()) {
+		patchDecoration(out, path, { ignored: true });
+	}
 	for (const share of plugin.settings.sharedFolders) {
 		const status = plugin.shares.getStatus(share.id);
 		if (!status) continue;
@@ -85,6 +89,7 @@ export function renderDecoration(
 	decoration: PathDecoration,
 ): void {
 	if (decoration.change) target.addClass(decoration.change);
+	if (decoration.ignored) target.addClass("obsync-explorer-ignored");
 	if (decoration.share || decoration.linkRoot) {
 		target.addClass("obsync-has-path-badge");
 	}
@@ -94,6 +99,7 @@ export function renderDecoration(
 
 export function clearDecoration(target: HTMLElement): void {
 	for (const cls of CHANGE_CLASSES) target.removeClass(cls);
+	target.removeClass("obsync-explorer-ignored");
 	target.removeClass("obsync-has-path-badge");
 	target.removeClass("obsync-share-root");
 	for (const badge of target.querySelectorAll(".obsync-path-badge")) {

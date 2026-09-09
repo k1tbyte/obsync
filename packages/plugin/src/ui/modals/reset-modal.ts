@@ -8,7 +8,7 @@ export interface RemoteResetTarget {
 	description: string;
 }
 
-export class RemoteResetModal extends Modal {
+class RemoteResetModal extends Modal {
 	private readonly target: RemoteResetTarget;
 	private readonly resolveValue: (confirmed: boolean) => void;
 	private settled = false;

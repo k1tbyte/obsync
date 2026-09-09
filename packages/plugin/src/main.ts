@@ -27,16 +27,21 @@ import {
 	disposePluginRuntime,
 } from "./plugin/bootstrap";
 import {
-	registerFileHistoryMenu,
 	registerIgnoreFileRefresh,
 	registerStatePersistenceFlush,
+	registerWorkspaceMenus,
 } from "./plugin/events";
 import type { PluginHost } from "./plugin/host";
+import {
+	type IgnoreStateHandle,
+	registerIgnoreState,
+} from "./plugin/ignore-state";
 import { registerProtocolHandlers } from "./plugin/protocols";
 import { PluginRealtime } from "./plugin/realtime";
 import { registerShares } from "./plugin/shares";
 import {
 	refreshOpenHistoryViewsAfterPush,
+	refreshOpenSourceControlViews,
 	registerPluginUi,
 } from "./plugin/ui";
 import { registerVaultAdoptionPrompt } from "./plugin/vault-adoption";
@@ -61,6 +66,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 	device!: DeviceName;
 	transfer!: SettingsTransferController;
 	shares!: ShareSyncService;
+	ignoreState!: IgnoreStateHandle;
 	private settingsTab?: ObsyncSettingTab;
 	private statePersister!: StatePersister;
 	private scopeRefreshTimer: number | null = null;
@@ -106,6 +112,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 			logs: this.logs,
 			statePersister: this.statePersister,
 		});
+		this.ignoreState = registerIgnoreState(this);
 
 		registerVaultAdoptionPrompt(this, this.controller);
 
@@ -116,7 +123,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
-		registerFileHistoryMenu(this);
+		registerWorkspaceMenus(this);
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
 
@@ -184,6 +191,10 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 		this.fileIndicators?.refresh(enabled);
 	}
 
+	refreshSourceControlView(): void {
+		refreshOpenSourceControlViews(this);
+	}
+
 	scheduleScopeRefresh(reason = "Sync scope changed."): void {
 		const snapshot = this.controller.getSnapshot();
 		if (!snapshot.result && snapshot.lastCompareAt === null) return;
@@ -204,10 +215,12 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 	 * Obsidian is restarted.
 	 */
 	private onSettingsReplaced(): void {
+		void this.ignoreState.refresh();
 		this.realtime.restart();
 		this.shares.refresh();
 		this.refreshEditorSigns(this.settings.showEditorChangeSigns);
 		this.refreshFileIndicators(this.settings.showFileExplorerIndicators);
+		this.refreshSourceControlView();
 		this.settingsTab?.display();
 		this.scheduleScopeRefresh("Settings imported.");
 	}

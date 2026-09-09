@@ -135,6 +135,31 @@ export function getDescriptor<K extends EStorageBackend>(
 	return STORAGE_REGISTRY[kind];
 }
 
+/** A storage config with every field still at its adapter default dropped. */
+export type CompactStorageConfig = { kind: EStorageBackend } & Record<
+	string,
+	unknown
+>;
+
+export function storageDefaults(
+	kind: EStorageBackend,
+): Record<string, unknown> {
+	return getDescriptor(kind).defaults() as unknown as Record<string, unknown>;
+}
+
+export function compactStorageConfig(
+	config: StorageAdapterConfig,
+): CompactStorageConfig {
+	const defaults = storageDefaults(config.kind);
+	const compact: CompactStorageConfig = { kind: config.kind };
+	for (const [key, value] of Object.entries(config)) {
+		if (key === "kind") continue;
+		if (defaults[key] === value) continue;
+		compact[key] = value;
+	}
+	return compact;
+}
+
 export function listBackends(): ReadonlyArray<{
 	kind: EStorageBackend;
 	label: string;

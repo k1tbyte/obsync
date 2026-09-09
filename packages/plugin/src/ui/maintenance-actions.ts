@@ -9,8 +9,6 @@ import { openConfirmModal } from "./source-control/modals";
 
 const NO_STORAGE = "Configure a storage backend first.";
 
-/** Maintenance operations shared by command palette and settings tab. */
-
 export async function verifyRemoteIntegrity(plugin: PluginHost): Promise<void> {
 	try {
 		const result = await plugin.controller.verifyRemote(true);

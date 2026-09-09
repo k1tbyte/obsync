@@ -5,7 +5,7 @@ import type { DeletedFilesResult } from "@/sync/history";
 import { notifyError, notifyInfo } from "@/ui/notices";
 
 import { openPromptModal } from "./modals";
-import { confirmRestore } from "./restore-modal";
+import { confirmBulkRestore, confirmRestore } from "./restore-modal";
 import {
 	buildTrashRows,
 	resolveRestoreTarget,
@@ -19,6 +19,10 @@ export class TrashTab {
 	private loading = false;
 	/** Invalidations race in-flight loads; only the current generation may land. */
 	private generation = 0;
+	/** Selected row paths; pruned to the rows the latest render produced. */
+	private readonly selected = new Set<string>();
+	private rows: TrashRow[] = [];
+	private bulkButton: HTMLButtonElement | null = null;
 
 	constructor(
 		private readonly plugin: PluginHost,
@@ -55,7 +59,46 @@ export class TrashTab {
 			this.clear();
 			this.onRerender();
 		});
+		this.renderBulkActions(head);
 		this.renderBody(pane.createDiv({ cls: "obsync-history-list" }));
+	}
+
+	private renderBulkActions(head: HTMLElement): void {
+		const selectAll = head.createEl("button", {
+			text: "Select all",
+			cls: "obsync-history-refresh",
+		});
+		selectAll.setAttr("aria-label", "Select or deselect every deleted file");
+		selectAll.addEventListener("click", () => {
+			if (this.selected.size === this.rows.length) this.selected.clear();
+			else for (const row of this.rows) this.selected.add(row.path);
+			this.onRerender();
+		});
+		this.bulkButton = head.createEl("button", {
+			text: "Restore selected",
+			cls: "obsync-history-refresh mod-cta",
+		});
+		this.bulkButton.addEventListener(
+			"click",
+			() => void this.restoreSelected(),
+		);
+		this.updateBulkButton();
+	}
+
+	private updateBulkButton(): void {
+		const button = this.bulkButton;
+		if (!button) return;
+		const count = this.selected.size;
+		button.disabled = count === 0;
+		button.setText(
+			count === 0 ? "Restore selected" : `Restore selected (${count})`,
+		);
+		button.setAttr(
+			"aria-label",
+			count === 0
+				? "Select deleted files to restore them"
+				: `Restore ${count} selected deleted file(s)`,
+		);
 	}
 
 	private renderBody(body: HTMLElement): void {
@@ -88,6 +131,8 @@ export class TrashTab {
 			maxSnapshots: this.plugin.settings.fileHistoryMaxSnapshots,
 			currentDevice: this.plugin.controller.currentDevice(),
 		});
+		this.rows = rows;
+		this.pruneSelection();
 		if (rows.length === 0) {
 			// The warnings above already say why the list is short; do not contradict them.
 			if (!incomplete) {
@@ -99,6 +144,15 @@ export class TrashTab {
 			return;
 		}
 		for (const row of rows) this.renderRow(body, row);
+	}
+
+	/** A selection outliving its row (restored or pushed away) must not linger. */
+	private pruneSelection(): void {
+		const valid = new Set(this.rows.map((row) => row.path));
+		for (const path of Array.from(this.selected)) {
+			if (!valid.has(path)) this.selected.delete(path);
+		}
+		this.updateBulkButton();
 	}
 
 	/** Loads into state, never into a captured node: a re-render discards that node. */
@@ -126,7 +180,19 @@ export class TrashTab {
 
 	private renderRow(body: HTMLElement, row: TrashRow): void {
 		const item = body.createDiv({ cls: "obsync-history-row" });
-		const title = item.createDiv({
+		const head = item.createDiv({ cls: "obsync-history-row-head" });
+		const checkbox = head.createEl("input", {
+			type: "checkbox",
+			cls: "obsync-file-checkbox",
+		});
+		checkbox.checked = this.selected.has(row.path);
+		checkbox.setAttr("aria-label", `Select ${row.path}`);
+		checkbox.addEventListener("change", () => {
+			if (checkbox.checked) this.selected.add(row.path);
+			else this.selected.delete(row.path);
+			this.updateBulkButton();
+		});
+		const title = head.createDiv({
 			cls: "obsync-history-row-title",
 			text: row.title,
 		});
@@ -225,5 +291,48 @@ export class TrashTab {
 			return false;
 		}
 		return true;
+	}
+
+	private async restoreSelected(): Promise<void> {
+		const rows = this.rows.filter((row) => this.selected.has(row.path));
+		if (rows.length === 0) return;
+		const confirmed = await confirmBulkRestore(
+			this.plugin,
+			rows.map((row) => ({
+				path: row.path,
+				label: row.label,
+				size: row.size,
+			})),
+		);
+		if (!confirmed) return;
+		let restored = 0;
+		const failures: string[] = [];
+		for (const row of rows) {
+			// Same guard as a single restore, collected instead of one notice each.
+			if (
+				this.plugin.app.vault.getAbstractFileByPath(row.path) instanceof TFolder
+			) {
+				failures.push(row.path);
+				continue;
+			}
+			try {
+				await this.plugin.controller.restoreFileVersion(row.path, row.hash);
+				// Failures stay selected so the user can retry them.
+				this.selected.delete(row.path);
+				restored++;
+			} catch {
+				failures.push(row.path);
+			}
+		}
+		if (restored > 0) {
+			notifyInfo(`Restored ${restored} file(s). Review and push when ready.`);
+		}
+		if (failures.length > 0) {
+			notifyError(
+				"Could not restore some files",
+				new Error(failures.join(", ")),
+			);
+		}
+		this.onRerender();
 	}
 }

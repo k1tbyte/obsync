@@ -43,7 +43,7 @@ export function gcExcessBuffer(maxSnapshots: number): number {
 
 export function shouldRunGc(entryCount: number, maxSnapshots: number): boolean {
 	const max = clampMaxSnapshots(maxSnapshots);
-	return entryCount - max > gcExcessBuffer(max);
+	return entryCount - max > gcExcessBuffer(maxSnapshots);
 }
 
 export interface GcInput {

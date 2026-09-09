@@ -96,6 +96,10 @@ export class SectionStateManager {
 		const counts = this.refs[section].counts;
 		if (!counts) return;
 		const selected = this.sectionState[section].selected.size;
-		counts.setText(selected > 0 ? `${selected}/${rowsLen}` : `${rowsLen}`);
+		counts.setText(
+			selected > 0
+				? `${selected.toLocaleString()}/${rowsLen.toLocaleString()}`
+				: rowsLen.toLocaleString(),
+		);
 	}
 }
