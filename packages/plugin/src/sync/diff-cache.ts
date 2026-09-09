@@ -54,6 +54,12 @@ export class DiffCache {
 		};
 		const model = await buildModel(projection, input.status, forceText);
 		if (model) {
+			// A concurrent miss on the same key already charged for its own model.
+			const raced = this.entries.get(cacheKey);
+			if (raced) {
+				this.retainedBytes -= modelBytes(raced);
+				this.entries.delete(cacheKey);
+			}
 			this.entries.set(cacheKey, model);
 			this.retainedBytes += modelBytes(model);
 			this.evict();

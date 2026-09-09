@@ -269,6 +269,19 @@ describe("HTTP fallback", () => {
 		]);
 	});
 
+	it("still recognises the poster when its id needed trimming", async () => {
+		const target = room();
+		const token = await roomToken();
+		const poster = connection("c1");
+		await connect(target, poster, { token, deviceId: "  poster  " });
+		target.broadcasts.length = 0;
+
+		// The socket stored the clamped id, so the raw query value would miss.
+		await relay(target).onRequest(post({ token, from: "  poster  " }));
+
+		expect(target.broadcasts[0]?.without).toEqual(["c1"]);
+	});
+
 	it("wakes everyone when the poster does not identify itself", async () => {
 		const target = room();
 		const token = await roomToken();

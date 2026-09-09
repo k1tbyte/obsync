@@ -1,5 +1,6 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
+import { sortedByPath } from "@/shared/records";
 import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "@/sync/constants";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { tryAutoMergeConflict } from "./conflict-merge";
@@ -72,7 +73,7 @@ export async function autoMergeOp(
 		await ctx.persistState({
 			...freshState,
 			baseline: { ...baseline, files },
-			hashCache,
+			hashCache: sortedByPath(hashCache),
 		});
 	}
 

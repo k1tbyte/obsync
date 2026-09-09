@@ -30,16 +30,14 @@ export function buildMergedConflict(
 	local: string,
 	remote: string,
 ): MergedConflict {
-	const result = mergeDiff3(
-		local.split("\n"),
-		base.split("\n"),
-		remote.split("\n"),
-		{
-			excludeFalseConflicts: true,
-			label: { a: LOCAL_LABEL, o: BASE_LABEL, b: REMOTE_LABEL },
-		},
-	);
-	return { text: result.result.join("\n"), hasConflicts: result.conflict };
+	const result = mergeDiff3(toLines(local), toLines(base), toLines(remote), {
+		excludeFalseConflicts: true,
+		label: { a: LOCAL_LABEL, o: BASE_LABEL, b: REMOTE_LABEL },
+	});
+	return {
+		text: result.result.join(eolOf(local)),
+		hasConflicts: result.conflict,
+	};
 }
 
 /** True if the text still contains an unresolved conflict marker. */
@@ -76,7 +74,12 @@ export async function tryAutoMergeConflict(
 	if (regions.some((region) => "conflict" in region)) return null;
 	return regions
 		.flatMap((region) => ("ok" in region ? region.ok : []))
-		.join("\n");
+		.join(eolOf(localText));
+}
+
+/** The merge compares on LF, so the file's own endings have to be put back. */
+function eolOf(value: string): string {
+	return value.includes("\r\n") ? "\r\n" : "\n";
 }
 
 /**
