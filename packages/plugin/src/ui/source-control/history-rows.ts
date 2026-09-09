@@ -3,8 +3,8 @@ import {
 	formatRelativeTime,
 	formatTimestamp,
 } from "@/shared/format";
-import { deviceLabel } from "@/sync/device";
 import type { FileVersion } from "@/sync/history";
+import { deviceText } from "./row-formatter";
 
 export interface HistoryRowVersion {
 	hash: string;
@@ -81,12 +81,4 @@ export function sizeDelta(
 	const delta = size - previousSize;
 	if (delta === 0) return null;
 	return `${delta > 0 ? "+" : "−"}${formatBytes(Math.abs(delta))}`;
-}
-
-function deviceText(
-	version: FileVersion,
-	current: { id: string; name: string } | null | undefined,
-): string {
-	if (current && current.id === version.deviceId) return current.name;
-	return deviceLabel(version.deviceId, version.deviceName);
 }

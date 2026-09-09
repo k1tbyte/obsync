@@ -1,6 +1,9 @@
+import { setIcon } from "obsidian";
 import type { PluginHost } from "@/plugin/host";
+import { formatBytes, formatRelativeTime } from "@/shared/format";
 import { EConflictStrategy, type SyncStatusSnapshot } from "@/sync/controller";
 import type { DiffResult } from "@/sync/types";
+import { notifyError } from "@/ui/notices";
 
 import type { SourceControlActions } from "./actions";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
@@ -65,6 +68,9 @@ export class ChangesTab {
 	/** The pane scrolls, not the lists; every window is computed against it. */
 	private scroller: HTMLElement | null = null;
 	private readonly lists = new Map<ESection, VirtualListHandle>();
+	private activePath: string | null = null;
+	private openingPath: string | null = null;
+	private openGeneration = 0;
 
 	constructor(
 		private readonly plugin: PluginHost,
@@ -83,6 +89,8 @@ export class ChangesTab {
 
 	/** Virtual lists listen on the scroller, which outlives their own rows. */
 	dispose(): void {
+		this.openGeneration++;
+		this.openingPath = null;
 		for (const list of this.lists.values()) list.destroy();
 		this.lists.clear();
 	}
@@ -127,7 +135,8 @@ export class ChangesTab {
 		this.renderStatusLine(root, snapshot);
 		this.renderFilter(root);
 
-		const diff = snapshot.result?.diff;
+		const result = snapshot.result;
+		const diff = result?.diff;
 		if (!diff) {
 			root.createDiv({
 				cls: "obsync-status-line",
@@ -135,6 +144,9 @@ export class ChangesTab {
 			});
 			return;
 		}
+		const localFiles = result.snapshot.files;
+		const remoteFiles = result.remote?.files;
+		const showFileSizes = this.plugin.settings.showFileSizes;
 		// Pruned against the unfiltered lists: a filter must not drop a selection.
 		this.sections.pruneSelection(
 			ESection.Conflicts,
@@ -153,23 +165,55 @@ export class ChangesTab {
 			root,
 			ESection.Conflicts,
 			"Conflicts",
-			this.applyFilter(diff.conflicts.map(rowFromConflict)),
+			this.applyFilter(
+				diff.conflicts.map((conflict) =>
+					rowFromConflict(
+						conflict,
+						showFileSizes
+							? (localFiles[conflict.path]?.size ??
+									remoteFiles?.[conflict.path]?.size)
+							: undefined,
+					),
+				),
+			),
 			snapshot,
 			"none",
 		);
 		this.renderSection(
 			root,
 			ESection.Local,
-			"Local changes (will push)",
-			this.applyFilter(diff.localChanges.map(rowFromChange)),
+			"Local changes",
+			this.applyFilter(
+				diff.localChanges.map((change) =>
+					rowFromChange(
+						change,
+						showFileSizes
+							? (localFiles[change.path]?.size ??
+									remoteFiles?.[change.path]?.size)
+							: undefined,
+						showFileSizes ? remoteFiles?.[change.path]?.size : undefined,
+					),
+				),
+			),
 			snapshot,
 			"push",
 		);
 		this.renderSection(
 			root,
 			ESection.Remote,
-			"Remote changes (will pull)",
-			this.applyFilter(diff.remoteChanges.map(rowFromChange)),
+			"Remote changes",
+			this.applyFilter(
+				diff.remoteChanges.map((change) =>
+					rowFromChange(
+						change,
+						showFileSizes
+							? (remoteFiles?.[change.path]?.size ??
+									localFiles[change.path]?.size)
+							: undefined,
+						showFileSizes ? localFiles[change.path]?.size : undefined,
+					),
+				),
+			),
 			snapshot,
 			"pull",
 		);
@@ -199,7 +243,7 @@ export class ChangesTab {
 			this.invalidate();
 			this.rerender();
 			// The re-render replaced this node; carry focus and caret to the new one.
-			const next = parent.querySelector<HTMLInputElement>(
+			const next = this.scroller?.querySelector<HTMLInputElement>(
 				".obsync-history-search",
 			);
 			if (!next) return;
@@ -233,8 +277,15 @@ export class ChangesTab {
 		parent: HTMLElement,
 		snapshot: SyncStatusSnapshot,
 	): void {
-		const bar = parent.createDiv({ cls: "obsync-toolbar" });
-		const refresh = bar.createEl("button", { text: "Refresh" });
+		const bar = parent.createDiv({
+			cls: "obsync-toolbar obsync-main-toolbar",
+		});
+		const refresh = bar.createEl("button", {
+			cls: "obsync-toolbar-icon",
+		});
+		setIcon(refresh, "refresh-cw");
+		refresh.setAttr("aria-label", "Refresh changes");
+		refresh.setAttr("title", "Refresh changes");
 		refresh.addEventListener(
 			"click",
 			() => void this.plugin.controller.refresh(),
@@ -250,10 +301,16 @@ export class ChangesTab {
 		cancel.addEventListener("click", () => this.plugin.controller.cancel());
 		cancel.toggleClass("obsync-hidden", !snapshot.cancellable);
 		this.cancelButtonEl = cancel;
-		this.setBulkButtonState(snapshot);
 
-		const pushAll = bar.createEl("button", { text: "Push all" });
-		pushAll.addClass("is-primary");
+		const pushAll = bar.createEl("button", {
+			cls: "obsync-bulk-action is-primary",
+		});
+		pushAll.createSpan({ text: "Push" });
+		pushAll.createSpan({
+			cls: "obsync-toolbar-count",
+			text: formatActionCount(snapshot.pendingLocal),
+		});
+		pushAll.setAttr("aria-label", `Push all ${snapshot.pendingLocal} changes`);
 		this.pushAllButtonEl = pushAll;
 		// Reads the snapshot at click time: the one captured at render is stale the
 		// moment anything syncs, and acting on it would push the wrong paths.
@@ -261,16 +318,30 @@ export class ChangesTab {
 			void this.getActions().pushAll(this.plugin.controller.getSnapshot());
 		});
 
-		const pullAll = bar.createEl("button", { text: "Pull all" });
-		pullAll.addClass("is-primary");
+		const pullAll = bar.createEl("button", {
+			cls: "obsync-bulk-action is-primary",
+		});
+		pullAll.createSpan({ text: "Pull" });
+		pullAll.createSpan({
+			cls: "obsync-toolbar-count",
+			text: formatActionCount(snapshot.pendingRemote),
+		});
+		pullAll.setAttr("aria-label", `Pull all ${snapshot.pendingRemote} changes`);
 		this.pullAllButtonEl = pullAll;
 		pullAll.addEventListener("click", () => {
 			void this.getActions().pullAll(this.plugin.controller.getSnapshot());
 		});
 
+		this.setBulkButtonState(snapshot);
+
 		const layoutToggle = bar.createEl("button", {
-			text: this.layout === "tree" ? "Flat" : "Tree",
+			cls: "obsync-toolbar-icon",
 		});
+		const layoutLabel =
+			this.layout === "tree" ? "Show flat list" : "Show folder tree";
+		setIcon(layoutToggle, this.layout === "tree" ? "list" : "list-tree");
+		layoutToggle.setAttr("aria-label", layoutLabel);
+		layoutToggle.setAttr("title", layoutLabel);
 		layoutToggle.addEventListener("click", () => {
 			this.layout = this.layout === "tree" ? "flat" : "tree";
 			this.plugin.settings.uiLayout = this.layout;
@@ -322,19 +393,31 @@ export class ChangesTab {
 			line.setText(snapshot.staleReason);
 			return;
 		}
-		const last = snapshot.lastCompareAt
-			? new Date(snapshot.lastCompareAt).toLocaleTimeString()
-			: "never";
 		line.setText(
-			`Last compared: ${last} · ↑ ${snapshot.pendingLocal} · ↓ ${snapshot.pendingRemote} · ⚠ ${snapshot.conflicts}`,
+			snapshot.lastCompareAt
+				? `Compared ${formatRelativeTime(snapshot.lastCompareAt)}`
+				: "Not compared yet",
 		);
+		if (snapshot.conflicts > 0) {
+			line.createSpan({
+				cls: "obsync-status-conflicts",
+				text: ` · ${formatActionCount(snapshot.conflicts)} conflicts`,
+			});
+		}
 		const ignoredPaths = snapshot.result?.snapshot.ignoredPaths ?? [];
 		if (ignoredPaths.length > 0) {
-			const ignoredBtn = line.createEl("button", {
-				cls: "obsync-ignored-count",
-				text: ` · ${ignoredPaths.length} ignored`,
+			const ignoredBadge = line.createEl("button", {
+				cls: "obsync-ignored-badge",
 			});
-			ignoredBtn.addEventListener("click", () =>
+			setIcon(ignoredBadge, "eye-off");
+			ignoredBadge.createSpan({
+				text: formatActionCount(ignoredPaths.length),
+			});
+			ignoredBadge.setAttr(
+				"aria-label",
+				`Show ${ignoredPaths.length} ignored files`,
+			);
+			ignoredBadge.addEventListener("click", () =>
 				showIgnoredFiles(this.plugin.app, ignoredPaths),
 			);
 		}
@@ -354,11 +437,16 @@ export class ChangesTab {
 		if (this.sections.isCollapsed(section)) sectionEl.addClass("is-collapsed");
 
 		const header = sectionEl.createDiv({ cls: "obsync-section-header" });
-		const titleEl = header.createSpan({
+		const disclosure = header.createSpan({ cls: "obsync-section-disclosure" });
+		setIcon(
+			disclosure,
+			this.sections.isCollapsed(section) ? "chevron-right" : "chevron-down",
+		);
+		header.createSpan({
 			cls: "obsync-section-title",
 			text: title,
 		});
-		titleEl.setAttr(
+		header.setAttr(
 			"aria-expanded",
 			String(!this.sections.isCollapsed(section)),
 		);
@@ -366,17 +454,20 @@ export class ChangesTab {
 		this.sections.bindCounts(section, counts);
 		this.renderedCounts.set(section, rows.length);
 		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-		makeActivatable(titleEl, `${title} section`, () => {
+		makeActivatable(header, `${title} section`, () => {
 			const collapsed = this.sections.toggleCollapsed(section);
 			sectionEl.toggleClass("is-collapsed", collapsed);
-			titleEl.setAttr("aria-expanded", String(!collapsed));
+			header.setAttr("aria-expanded", String(!collapsed));
+			setIcon(disclosure, collapsed ? "chevron-right" : "chevron-down");
 			// Hiding a body moves every section under it, and a windowed list
 			// reads its own position to decide which rows to hold.
 			this.refreshLists();
 		});
 
 		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
-		const actions = body.createDiv({ cls: "obsync-toolbar" });
+		const actions = body.createDiv({
+			cls: "obsync-toolbar obsync-section-actions",
+		});
 
 		if (actionKind !== "none") {
 			const label = actionKind === "push" ? "Push selected" : "Pull selected";
@@ -419,13 +510,23 @@ export class ChangesTab {
 			);
 		}
 
-		const selectAll = actions.createEl("button", { text: "Select all" });
+		const selectAll = actions.createEl("button", {
+			cls: "obsync-section-icon-action",
+		});
+		setIcon(selectAll, "list-checks");
+		selectAll.setAttr("aria-label", "Select all");
+		selectAll.setAttr("title", "Select all");
 		selectAll.addEventListener("click", () => {
 			this.sections.selectAll(section, rows);
 			this.afterSelectionChange(section, rows.length);
 			this.rerender();
 		});
-		const selectNone = actions.createEl("button", { text: "Clear" });
+		const selectNone = actions.createEl("button", {
+			cls: "obsync-section-icon-action",
+		});
+		setIcon(selectNone, "x");
+		selectNone.setAttr("aria-label", "Clear selection");
+		selectNone.setAttr("title", "Clear selection");
 		selectNone.addEventListener("click", () => {
 			this.sections.clearSelection(section);
 			this.afterSelectionChange(section, rows.length);
@@ -516,11 +617,23 @@ export class ChangesTab {
 		const folder = parent.createDiv({ cls: "obsync-tree-folder" });
 		setDepth(folder, visual.depth);
 		if (collapsed) folder.addClass("is-collapsed");
-		folder.setText(`${collapsed ? "▸" : "▾"} ${visual.name}`);
+		const toggle = folder.createSpan({ cls: "obsync-tree-folder-toggle" });
+		setIcon(toggle, collapsed ? "chevron-right" : "chevron-down");
+		const icon = folder.createSpan({ cls: "obsync-tree-folder-icon" });
+		setIcon(icon, collapsed ? "folder" : "folder-open");
+		folder.createSpan({
+			cls: "obsync-tree-folder-name",
+			text: visual.name,
+		});
+		folder.setAttr("title", folderPath);
 		folder.setAttr("aria-expanded", String(!collapsed));
 		makeActivatable(folder, `${visual.name} folder`, () => {
 			this.sections.toggleFolder(section, folderPath);
 			relayout();
+		});
+		folder.addEventListener("contextmenu", (event) => {
+			event.preventDefault();
+			this.getActions().showFolderContextMenu(event, folderPath);
 		});
 		return folder;
 	}
@@ -535,16 +648,29 @@ export class ChangesTab {
 		const item = parent.createDiv({ cls: "obsync-file-row" });
 		setDepth(item, depth);
 		if (row.isConflict) item.addClass("is-conflict");
+		if (this.openingPath === row.path) {
+			item.addClass("is-opening");
+			item.setAttr("aria-busy", "true");
+		}
+		if (this.activePath === row.path) {
+			item.addClass("is-active");
+			item.setAttr("aria-current", "true");
+		}
 		item.setAttr("role", "button");
 		item.setAttr("tabindex", "0");
+		item.setAttr("data-obsync-path", row.path);
 		item.setAttr("aria-label", `Open diff for ${row.path}`);
 		item.addEventListener("keydown", (event: KeyboardEvent) => {
 			if (event.key !== "Enter" && event.key !== " ") return;
+			if (event.target !== item) return;
 			event.preventDefault();
-			void this.openDiff(row.path);
+			this.openFileDiff(item, row.path);
 		});
 
-		const checkbox = item.createEl("input", { type: "checkbox" });
+		const checkbox = item.createEl("input", {
+			type: "checkbox",
+			cls: "obsync-file-checkbox",
+		});
 		checkbox.checked = this.sections.isSelected(section, row.path);
 		checkbox.addEventListener("click", (e) => e.stopPropagation());
 		checkbox.addEventListener("change", () => {
@@ -552,24 +678,93 @@ export class ChangesTab {
 			this.afterSelectionChange(section, rowsLen);
 		});
 
+		const display = splitDisplayPath(row.path);
+		const copy = item.createSpan({ cls: "obsync-file-copy" });
+		copy.createSpan({ cls: "obsync-file-name", text: display.name });
+		if (this.layout === "flat" && display.parent) {
+			copy.createSpan({
+				cls: "obsync-file-parent",
+				text: display.parent,
+			});
+		}
+		copy.setAttr("title", row.path);
+
+		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
+
+		if (row.size !== undefined) {
+			const size = item.createSpan({
+				cls: [
+					"obsync-file-size",
+					...(row.sizeDelta === undefined ? [] : ["has-delta"]),
+				],
+			});
+			if (row.sizeDelta !== undefined) {
+				size.createSpan({
+					cls: `obsync-file-size-delta ${sizeDeltaClass(row.sizeDelta)}`,
+					text: formatSizeDelta(row.sizeDelta),
+				});
+			}
+			size.createSpan({
+				cls: "obsync-file-size-current",
+				text: formatBytes(row.size),
+			});
+		}
 		item.createSpan({
 			cls: `obsync-file-status ${row.statusClass}`,
 			text: row.statusLetter,
 		});
-		const name = item.createSpan({ cls: "obsync-file-name", text: row.path });
-		// The row is one line high, so a path the pane cannot fit is elided.
-		name.setAttr("title", row.path);
-
-		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
 
 		item.addEventListener("click", () => {
-			void this.openDiff(row.path);
+			this.openFileDiff(item, row.path);
 		});
 		item.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			this.getActions().showContextMenu(e, row.path, section);
 		});
 		return item;
+	}
+
+	private openFileDiff(item: HTMLElement, path: string): void {
+		if (this.openingPath === path) return;
+		const generation = ++this.openGeneration;
+		this.openingPath = path;
+		item.addClass("is-opening");
+		item.setAttr("aria-busy", "true");
+		void this.openDiff(path)
+			.then(() => {
+				if (generation !== this.openGeneration) return;
+				this.activePath = path;
+				this.scroller
+					?.querySelectorAll(".obsync-file-row.is-active")
+					.forEach((row) => {
+						row.removeClass("is-active");
+						row.removeAttribute("aria-current");
+					});
+				const current = this.findRenderedFileRow(path);
+				current?.addClass("is-active");
+				current?.setAttr("aria-current", "true");
+			})
+			.catch((err: unknown) => {
+				if (generation === this.openGeneration) {
+					notifyError("Could not open diff", err);
+				}
+			})
+			.finally(() => {
+				if (generation !== this.openGeneration) return;
+				this.openingPath = null;
+				const current = this.findRenderedFileRow(path);
+				current?.removeClass("is-opening");
+				current?.removeAttribute("aria-busy");
+			});
+	}
+
+	private findRenderedFileRow(path: string): HTMLElement | null {
+		const rows =
+			this.scroller?.querySelectorAll<HTMLElement>(".obsync-file-row") ?? [];
+		for (const row of rows) {
+			if (row.dataset.obsyncPath === path) return row;
+		}
+		return null;
 	}
 
 	private renderConflictRowControls(
@@ -651,6 +846,30 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 	const d = snapshot.result?.diff;
 	if (!d) return false;
 	return d.conflicts.length === 0 && d.remoteChanges.length > 0;
+}
+
+function formatActionCount(count: number): string {
+	return count.toLocaleString();
+}
+
+function formatSizeDelta(delta: number): string {
+	const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+	return `${sign}${formatBytes(Math.abs(delta))}`;
+}
+
+function sizeDeltaClass(delta: number): string {
+	if (delta > 0) return "is-positive";
+	if (delta < 0) return "is-negative";
+	return "is-neutral";
+}
+
+function splitDisplayPath(path: string): { name: string; parent: string } {
+	const separator = path.lastIndexOf("/");
+	if (separator < 0) return { name: path, parent: "" };
+	return {
+		name: path.slice(separator + 1),
+		parent: path.slice(0, separator),
+	};
 }
 
 /** Indentation the flattened tree no longer gets from nested containers. */

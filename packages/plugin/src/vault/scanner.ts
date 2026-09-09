@@ -2,6 +2,7 @@ import type { DataAdapter } from "obsidian";
 import { Platform } from "obsidian";
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { sha256Hex } from "@/crypto";
+import { stripTrailingSlash } from "@/shared/path";
 import { sortedByPath } from "@/shared/records";
 import type {
 	HashCacheEntry,
@@ -369,11 +370,6 @@ function hasPrunedAncestor(path: string, pruned: ReadonlySet<string>): boolean {
 		cut = path.lastIndexOf("/", cut - 1);
 	}
 	return false;
-}
-
-function stripTrailingSlash(value: string): string {
-	const normalized = value.replace(/\\/g, "/");
-	return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
 async function listAllFiles(

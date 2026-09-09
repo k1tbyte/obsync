@@ -191,6 +191,7 @@ export function registerFileExplorerIndicators(
 	const unsub = controller.subscribe(() => schedule());
 	plugin.register(unsub);
 	if (plugin.shares) plugin.register(plugin.shares.subscribe(() => schedule()));
+	plugin.register(plugin.ignoreState.subscribe(() => schedule()));
 	plugin.registerEvent(plugin.app.vault.on("create", resetLinks));
 	plugin.registerEvent(plugin.app.vault.on("delete", resetLinks));
 	plugin.registerEvent(plugin.app.vault.on("rename", resetLinks));

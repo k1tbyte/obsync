@@ -8,12 +8,12 @@ const AUTO_PULL_STARTUP_DELAY_MS = 3_000;
 /** Cap on waiting for the metadata cache, so a vault that never reports it settled still syncs. */
 const AUTO_PULL_INDEX_WAIT_MS = 60_000;
 
-const AUTO_PULL_BUSY_COOLDOWN_MS = 30_000;
+const AUTO_SYNC_BUSY_COOLDOWN_MS = 30_000;
 
 const VAULT_EVENT_DEBOUNCE_MS = 1_500;
 
-/** How often the auto-pull timer wakes up to check whether it is due. */
-const SCHEDULER_HEARTBEAT_MS = 30_000;
+/** How often the auto-sync timer wakes up to check what is due. */
+export const SCHEDULER_HEARTBEAT_MS = 30_000;
 
 const SCHEDULER_BACKOFF_THRESHOLD = 3;
 
@@ -35,15 +35,21 @@ export function registerScheduler(
 	let consecutiveFailures = 0;
 	let backoffUntil = 0;
 
-	const tick = async (): Promise<void> => {
+	const tick = async (doPull: boolean, doPush: boolean): Promise<void> => {
 		if (!navigator.onLine) return;
 		if (!isStorageConfigured(host.settings)) return;
 		const now = Date.now();
-		if (now - lastRun < AUTO_PULL_BUSY_COOLDOWN_MS) return;
+		if (now - lastRun < AUTO_SYNC_BUSY_COOLDOWN_MS) return;
 		if (now < backoffUntil) return;
 		lastRun = now;
-		// refreshAndAutoPull reports failures via error state, not throws. Read state for backoff.
-		await controller.refreshAndAutoPull();
+		if (doPull) await controller.refreshAndAutoPull();
+		if (doPush) {
+			// The pull above already refreshed, so push from that snapshot;
+			// a push that runs alone refreshes for itself.
+			if (doPull) await controller.autoPushFromSnapshot();
+			else await controller.refreshAndAutoPush();
+		}
+		// The flows report failures via error state, not throws. Read it for backoff.
 		if (!controller.getSnapshot().error) {
 			consecutiveFailures = 0;
 			backoffUntil = 0;
@@ -61,29 +67,38 @@ export function registerScheduler(
 	};
 
 	if (host.settings.autoPullOnStartup)
-		scheduleFirstRun(host, () => void tick());
+		scheduleFirstRun(host, () => void tick(true, false));
 
-	// Read interval on every wake-up so setting changes apply without restart.
-	let minutesInEffect = host.settings.autoPullIntervalMinutes;
-	let nextDue = dueAfter(minutesInEffect);
+	// Read both intervals on every wake-up so setting changes apply without restart.
+	let pullMinutesInEffect = host.settings.autoPullIntervalMinutes;
+	let pullDueAt = dueAfter(pullMinutesInEffect);
+	let pushMinutesInEffect = host.settings.autoPushIntervalMinutes;
+	let pushDueAt = dueAfter(pushMinutesInEffect);
 	host.registerInterval(
 		window.setInterval(() => {
-			const minutes = host.settings.autoPullIntervalMinutes;
-			if (minutes <= 0) {
-				nextDue = 0;
-				minutesInEffect = 0;
-				return;
+			const pullMinutes = host.settings.autoPullIntervalMinutes;
+			if (pullMinutes !== pullMinutesInEffect) {
+				pullMinutesInEffect = pullMinutes;
+				pullDueAt = dueAfter(pullMinutes);
 			}
-			// Do not wait out old interval if shortened.
-			if (nextDue === 0 || minutes !== minutesInEffect) {
-				nextDue = dueAfter(minutes);
-				minutesInEffect = minutes;
+			const pushMinutes = host.settings.autoPushIntervalMinutes;
+			if (pushMinutes !== pushMinutesInEffect) {
+				pushMinutesInEffect = pushMinutes;
+				pushDueAt = dueAfter(pushMinutes);
 			}
-			if (Date.now() < nextDue) return;
-			nextDue = dueAfter(minutes);
-			// Realtime replaces polling only while connected.
-			if (host.settings.realtimeSync && host.isRealtimeConnected?.()) return;
-			void tick();
+			const now = Date.now();
+			const pullDue = pullMinutes > 0 && pullDueAt > 0 && now >= pullDueAt;
+			const pushDue = pushMinutes > 0 && pushDueAt > 0 && now >= pushDueAt;
+			if (!pullDue && !pushDue) return;
+			if (pullDue) pullDueAt = dueAfter(pullMinutes);
+			if (pushDue) pushDueAt = dueAfter(pushMinutes);
+			// Realtime replaces pull polling only while connected; nothing
+			// pushes for this device, so the push interval is never skipped.
+			const doPull =
+				pullDue &&
+				!(host.settings.realtimeSync && host.isRealtimeConnected?.());
+			if (!doPull && !pushDue) return;
+			void tick(doPull, pushDue);
 		}, SCHEDULER_HEARTBEAT_MS),
 	);
 
@@ -152,19 +167,7 @@ async function runVaultSync(
 	if (!host.settings.autoRefreshOnFileChange) return;
 	await controller.refresh();
 	if (!host.settings.autoPushOnSave) return;
-	const snap = controller.getSnapshot();
-	if (!snap.result || snap.error) return;
-	const { localChanges, conflicts, remoteChanges } = snap.result.diff;
-	if (conflicts.length > 0) return;
-	const remoteChangedPaths = new Set(remoteChanges.map((c) => c.path));
-	const pushable = localChanges
-		.filter((c) => !remoteChangedPaths.has(c.path))
-		.filter(
-			(c) =>
-				!host.settings.autoPushOnSaveCurrentFileOnly ||
-				trackedPaths.has(c.path),
-		)
-		.map((c) => c.path);
-	if (pushable.length === 0) return;
-	await controller.pushPaths(pushable);
+	await controller.autoPushFromSnapshot(
+		host.settings.autoPushOnSaveCurrentFileOnly ? trackedPaths : undefined,
+	);
 }

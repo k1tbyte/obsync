@@ -1,5 +1,9 @@
 import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "@/crypto";
-import { getDescriptor } from "@/storage";
+import {
+	type CompactStorageConfig,
+	compactStorageConfig,
+	storageDefaults,
+} from "@/storage";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
@@ -40,7 +44,7 @@ interface InvitePayload {
 	id: string;
 	n: string;
 	k: string;
-	s: Record<string, unknown> & { kind: EStorageBackend };
+	s: CompactStorageConfig;
 	r?: { u: string; t?: string };
 }
 
@@ -161,19 +165,6 @@ function extractInviteToken(input: string): string {
 }
 
 /** Drops default-valued fields so the token stays QR-sized. */
-function compactStorageConfig(
-	config: StorageAdapterConfig,
-): InvitePayload["s"] {
-	const defaults = storageDefaults(config.kind);
-	const compact: InvitePayload["s"] = { kind: config.kind };
-	for (const [key, value] of Object.entries(config)) {
-		if (key === "kind") continue;
-		if (defaults[key] === value) continue;
-		compact[key] = value;
-	}
-	return compact;
-}
-
 function expandStorageConfig(
 	compact: InvitePayload["s"],
 ): StorageAdapterConfig {
@@ -181,10 +172,6 @@ function expandStorageConfig(
 		...storageDefaults(compact.kind),
 		...compact,
 	} as unknown as StorageAdapterConfig;
-}
-
-function storageDefaults(kind: EStorageBackend): Record<string, unknown> {
-	return getDescriptor(kind).defaults() as unknown as Record<string, unknown>;
 }
 
 function isInvitePayload(value: unknown): value is InvitePayload {

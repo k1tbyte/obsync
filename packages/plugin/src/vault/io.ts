@@ -16,12 +16,7 @@ import { toArrayBuffer } from "@/utils/bytes";
  * `Root/` answers for `notes` with the vault's `Root/notes`, and one shared set
  * would let it vouch for a folder the vault adapter has never seen.
  */
-let ensuredDirs = new WeakMap<DataAdapter, Set<string>>();
-
-/** Drops every folder cache; call when the vaults behind them go away. */
-export function clearEnsuredDirs(): void {
-	ensuredDirs = new WeakMap();
-}
+const ensuredDirs = new WeakMap<DataAdapter, Set<string>>();
 
 export async function readBinary(
 	adapter: DataAdapter,

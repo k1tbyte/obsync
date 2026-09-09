@@ -48,6 +48,8 @@ export const chunksField = StateField.define<ChunksData>({
 
 export function pathFromState(state: EditorState): string | null {
 	try {
+		// `editorInfoField` is undefined wherever the real Obsidian module is not
+		// loaded, and `field` dereferences it before it can honour `require: false`.
 		return state.field(editorInfoField, false)?.file?.path ?? null;
 	} catch {
 		return null;

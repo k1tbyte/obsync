@@ -1,28 +1,57 @@
-import { type Menu, type Plugin, type TAbstractFile, TFile } from "obsidian";
+import {
+	type Menu,
+	type Plugin,
+	type TAbstractFile,
+	TFile,
+	TFolder,
+} from "obsidian";
 import { IGNORE_FILE_NAME } from "@/constants";
 import type { StatePersister } from "@/core";
 import type { PluginHost } from "@/plugin/host";
-import { openSourceControlDeleted, openSourceControlHistory } from "@/ui";
+import {
+	addIgnoreMenuItem,
+	addPushMenuItem,
+	openSourceControlDeleted,
+	openSourceControlHistory,
+} from "@/ui";
 
 /**
  * History is only discoverable from the side panel otherwise, and a deleted file
  * has no menu of its own - so the entry rides on whatever the user right-clicks.
  */
-export function registerFileHistoryMenu(plugin: Plugin & PluginHost): void {
+export function registerWorkspaceMenus(plugin: Plugin & PluginHost): void {
 	plugin.registerEvent(
 		plugin.app.workspace.on("file-menu", (menu, file) => {
-			if (!plugin.settings.fileHistoryEnabled) return;
-			if (file instanceof TFile) addHistoryItem(menu, plugin, file.path);
-			addDeletedItem(menu, plugin);
+			addIgnoreItem(menu, plugin, file);
+			addPushMenuItem(menu, plugin, file.path, file instanceof TFolder);
+			if (plugin.settings.fileHistoryEnabled) {
+				if (file instanceof TFile) addHistoryItem(menu, plugin, file.path);
+				addDeletedItem(menu, plugin);
+			}
 		}),
 	);
 	plugin.registerEvent(
 		plugin.app.workspace.on("editor-menu", (menu, _editor, view) => {
-			if (!plugin.settings.fileHistoryEnabled) return;
 			const path = view.file?.path;
+			if (path) addPushMenuItem(menu, plugin, path, false);
+			if (!plugin.settings.fileHistoryEnabled) return;
 			if (path) addHistoryItem(menu, plugin, path);
 			addDeletedItem(menu, plugin);
 		}),
+	);
+}
+
+function addIgnoreItem(
+	menu: Menu,
+	plugin: Plugin & PluginHost,
+	file: TAbstractFile,
+): void {
+	addIgnoreMenuItem(
+		menu,
+		plugin,
+		file.path,
+		file instanceof TFolder,
+		"Obsync: ",
 	);
 }
 

@@ -1,6 +1,10 @@
 import { IGNORE_FILE_NAME, PLUGIN_ID } from "@/constants";
 import type { SettingsSyncCategories } from "@/settings/model";
-import { hasDotSegment, normalizePath } from "@/shared/path";
+import {
+	hasDotSegment,
+	normalizePath,
+	stripTrailingSlash,
+} from "@/shared/path";
 import { EFileKind } from "@/sync/types";
 import type { IgnoreMatcher } from "./ignore";
 import type { SymlinkDetector } from "./symlinks";
@@ -208,11 +212,6 @@ function isInVaultDenylist(path: string): boolean {
 /** Config directory starts with a dot; everything below needs dot segment checking. */
 function stripConfigPrefix(path: string, configPrefix: string): string {
 	return path.startsWith(configPrefix) ? path.slice(configPrefix.length) : path;
-}
-
-function stripTrailingSlash(value: string): string {
-	const normalized = value.replace(/\\/g, "/");
-	return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
 function isIgnoredDir(

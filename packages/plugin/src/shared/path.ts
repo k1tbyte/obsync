@@ -17,6 +17,12 @@ export function hasDotSegment(path: string): boolean {
 	return path.startsWith(".") || path.includes("/.");
 }
 
+/** Drops one trailing slash, after normalising separators: `"a/b/" -> "a/b"`. */
+export function stripTrailingSlash(value: string): string {
+	const normalized = value.replace(/\\/g, "/");
+	return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+}
+
 /** Trims surrounding slashes and re-adds a single trailing one: `"/a/b/" → "a/b/"`. */
 export function normalizeKeyPrefix(prefix: string): string {
 	const trimmed = prefix.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");

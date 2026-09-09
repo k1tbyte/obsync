@@ -22,7 +22,9 @@ export {
 	type ToggleFieldSpec,
 } from "./field-spec";
 export {
+	type CompactStorageConfig,
 	canHostShares,
+	compactStorageConfig,
 	createStorageAdapter,
 	describeStorageTarget,
 	getDescriptor,
@@ -31,6 +33,7 @@ export {
 	listBackends,
 	listShareBackends,
 	type StorageDescriptor,
+	storageDefaults,
 	storageIdentity,
 } from "./registry";
 export type {

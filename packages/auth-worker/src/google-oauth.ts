@@ -95,7 +95,7 @@ export async function handleAuthCallback(
 	) {
 		return new Response("This sign-in link is invalid or expired.", {
 			status: 400,
-			headers: { "Set-Cookie": clearedStateCookie() },
+			headers: { "Set-Cookie": CLEARED_STATE_COOKIE },
 		});
 	}
 
@@ -107,14 +107,14 @@ export async function handleAuthCallback(
 	if (!token?.access_token) {
 		return new Response("Authentication failed. Please try again.", {
 			status: 400,
-			headers: { "Set-Cookie": clearedStateCookie() },
+			headers: { "Set-Cookie": CLEARED_STATE_COOKIE },
 		});
 	}
 	return new Response(null, {
 		status: 302,
 		headers: {
 			Location: callbackUrl(token),
-			"Set-Cookie": clearedStateCookie(),
+			"Set-Cookie": CLEARED_STATE_COOKIE,
 		},
 	});
 }
@@ -124,9 +124,7 @@ function stateCookie(state: string): string {
 	return `${STATE_COOKIE}=${state}; Path=/auth; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
-function clearedStateCookie(): string {
-	return `${STATE_COOKIE}=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
-}
+const CLEARED_STATE_COOKIE = `${STATE_COOKIE}=; Path=/auth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 
 /** The consent round trip has to come back in the browser that started it. */
 function matchesCookie(request: Request, state: string): boolean {

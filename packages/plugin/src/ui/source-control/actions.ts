@@ -1,7 +1,9 @@
 import { Menu } from "obsidian";
 
+import { IGNORE_FILE_NAME } from "@/constants";
 import type { PluginHost } from "@/plugin/host";
 import type { EConflictStrategy, SyncStatusSnapshot } from "@/sync/controller";
+import { addIgnoreMenuItem } from "@/ui/ignore-action";
 import { notifyError, notifyInfo, runWithNotice } from "@/ui/notices";
 import { openInEditor, revealInFileExplorer } from "@/ui/obsidian-helpers";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
@@ -89,6 +91,10 @@ export class SourceControlActions {
 					.onClick(() => this.showHistory(path)),
 			);
 		}
+		if (path !== IGNORE_FILE_NAME) {
+			menu.addSeparator();
+			addIgnoreMenuItem(menu, this.plugin, path, false);
+		}
 		if (section === ESection.Local) {
 			menu.addSeparator();
 			menu.addItem((item) =>
@@ -113,6 +119,32 @@ export class SourceControlActions {
 					.onClick(() => void this.resolveAcceptRemote(path)),
 			);
 		}
+		menu.showAtMouseEvent(event);
+	}
+
+	showFolderContextMenu(event: MouseEvent, path: string): void {
+		const menu = new Menu();
+		menu.addItem((item) =>
+			item
+				.setTitle("Reveal in file explorer")
+				.setIcon("folder")
+				.onClick(() => void revealInFileExplorer(this.plugin.app, path)),
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Copy path")
+				.setIcon("clipboard")
+				.onClick(
+					() =>
+						void runWithNotice(
+							() => navigator.clipboard.writeText(path),
+							"Path copied.",
+							"Could not copy the path",
+						),
+				),
+		);
+		menu.addSeparator();
+		addIgnoreMenuItem(menu, this.plugin, path, true);
 		menu.showAtMouseEvent(event);
 	}
 

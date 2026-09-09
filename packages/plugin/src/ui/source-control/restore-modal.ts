@@ -15,6 +15,13 @@ export interface RestoreConfirmOptions {
 	target: string;
 }
 
+export interface BulkRestoreEntry {
+	path: string;
+	/** "deleted 3 days ago" / "last seen …", pre-built by the trash rows. */
+	label: string;
+	size: number;
+}
+
 const NO_HUNK_CALLBACKS = {
 	onPushHunk: () => {},
 	onPullHunk: () => {},
@@ -89,6 +96,47 @@ async function loadPreview(
 		left: { current: true },
 		right: { version: options.version },
 	});
+}
+
+/**
+ * Names every file a bulk restore would bring back. No diff preview here:
+ * the trash rows offer Preview per file, and a wall of hunks is not a summary.
+ */
+export function confirmBulkRestore(
+	plugin: PluginHost,
+	entries: readonly BulkRestoreEntry[],
+): Promise<boolean> {
+	return openPromiseModal<boolean>((answer) => {
+		const modal = new Modal(plugin.app);
+		const finish = (confirmed: boolean): void => {
+			answer(confirmed);
+			modal.close();
+		};
+		modal.titleEl.setText(
+			entries.length === 1
+				? `Bring back "${entries[0]?.path}"?`
+				: `Bring back ${entries.length} deleted files?`,
+		);
+		modal.contentEl.createEl("p", {
+			cls: "obsync-restore-summary",
+			text: "Writes each version below back into the vault. Nothing is pushed until you say so. Use a row's Preview to inspect a file first.",
+		});
+		const list = modal.contentEl.createDiv({ cls: "obsync-bulk-restore-list" });
+		for (const entry of entries) {
+			list.createDiv({
+				text: `${entry.path} - ${entry.label} (${formatBytes(entry.size)})`,
+			});
+		}
+		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
+		const cancel = buttons.createEl("button", { text: "Cancel" });
+		cancel.addEventListener("click", () => finish(false));
+		const confirm = buttons.createEl("button", { text: "Restore" });
+		confirm.addClass("mod-cta");
+		confirm.addEventListener("click", () => finish(true));
+		// Cancel, not Restore: a stray Enter must not write to the vault.
+		window.setTimeout(() => cancel.focus(), 0);
+		return modal;
+	}, false);
 }
 
 function renderPreview(body: HTMLElement, model: FileDiffModel | null): void {

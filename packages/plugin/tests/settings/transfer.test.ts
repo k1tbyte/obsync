@@ -25,6 +25,7 @@ describe("settings transfer", () => {
 			realtimeServerUrl: "wss://relay.example.com",
 			realtimeToken: "relay-secret",
 			autoPushOnSave: true,
+			autoPushIntervalMinutes: 25,
 			fileHistoryEnabled: true,
 			storageConfigs: {
 				[EStorageBackend.S3]: {
@@ -54,6 +55,7 @@ describe("settings transfer", () => {
 		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
 		expect(imported.realtimeToken).toBe("relay-secret");
 		expect(imported.autoPushOnSave).toBe(true);
+		expect(imported.autoPushIntervalMinutes).toBe(25);
 		expect(imported.fileHistoryEnabled).toBe(true);
 	});
 

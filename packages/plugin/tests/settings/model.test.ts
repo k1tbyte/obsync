@@ -26,6 +26,11 @@ describe("mergeSettings", () => {
 		).toBe(false);
 	});
 
+	it("shows file sizes by default and preserves an explicit false", () => {
+		expect(mergeSettings(null).showFileSizes).toBe(true);
+		expect(mergeSettings({ showFileSizes: false }).showFileSizes).toBe(false);
+	});
+
 	it("backfills missing per-storage concurrency from backend defaults", () => {
 		const merged = mergeSettings({
 			activeStorageKind: EStorageBackend.GoogleDrive,
@@ -121,6 +126,20 @@ describe("mergeSettings clamps", () => {
 		expect(
 			mergeSettings({ autoPullIntervalMinutes: 15 }).autoPullIntervalMinutes,
 		).toBe(15);
+	});
+
+	it("defaults autoPushIntervalMinutes to disabled and clamps it", () => {
+		expect(mergeSettings(null).autoPushIntervalMinutes).toBe(0);
+		expect(
+			mergeSettings({ autoPushIntervalMinutes: -5 }).autoPushIntervalMinutes,
+		).toBe(0);
+		expect(
+			mergeSettings({ autoPushIntervalMinutes: 999_999 })
+				.autoPushIntervalMinutes,
+		).toBe(24 * 60);
+		expect(
+			mergeSettings({ autoPushIntervalMinutes: 20 }).autoPushIntervalMinutes,
+		).toBe(20);
 	});
 });
 

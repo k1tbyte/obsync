@@ -36,10 +36,6 @@ export function shareObjectKey(
 	const base = shareBasePrefix(prefix, shareId);
 	assertSafeKey(key, { allowEmpty: false });
 	const resolved = `${base}${key}`;
-	// Fallback: the resolved key must still sit inside the share.
-	if (!resolved.startsWith(base)) {
-		throw new InvalidShareKeyError("Key escapes the share");
-	}
 	return resolved;
 }
 

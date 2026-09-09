@@ -26,7 +26,7 @@ export function brokerAdmin(plugin: PluginHost): BrokerAdmin {
 }
 
 /** Returns the share whose root equals or nests the given root, if any. */
-export function findShareOverlap(
+function findShareOverlap(
 	shares: ReadonlyArray<SharedFolderConfig>,
 	root: string,
 ): SharedFolderConfig | undefined {

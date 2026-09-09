@@ -5,7 +5,7 @@ import {
 	DEVICE_KEY_FILE_NAME,
 	PASSPHRASE_CACHE_FILE_NAME,
 } from "@/crypto/constants";
-import { readBinary, writeBinary } from "@/vault/io";
+import { deletePath, readBinary, writeBinary } from "@/vault/io";
 import {
 	decryptJson,
 	type EncryptionKey,
@@ -57,10 +57,7 @@ export async function clearCachedPassphrase(
 	adapter: DataAdapter,
 	configDir: string,
 ): Promise<void> {
-	const path = cachePath(configDir);
-	if (await adapter.exists(path)) {
-		await adapter.remove(path);
-	}
+	await deletePath(adapter, cachePath(configDir));
 }
 
 async function loadDeviceKey(

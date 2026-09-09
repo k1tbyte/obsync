@@ -1,7 +1,7 @@
 import { formatBytes, formatRelativeTime } from "@/shared/format";
 import { normalizePath } from "@/shared/path";
-import { deviceLabel } from "@/sync/device";
 import type { DeletedFile } from "@/sync/history";
+import { deviceText } from "./row-formatter";
 
 export interface TrashRow {
 	path: string;
@@ -89,12 +89,4 @@ export function retentionText(
 	if (remaining <= 0) return "Drops out of history at the next cleanup";
 	if (remaining === 1) return "Drops out of history after 1 more push";
 	return `Drops out of history after ${remaining} more pushes`;
-}
-
-function deviceText(
-	file: DeletedFile,
-	current: { id: string; name: string } | null | undefined,
-): string {
-	if (current && current.id === file.deviceId) return current.name;
-	return deviceLabel(file.deviceId, file.deviceName);
 }
