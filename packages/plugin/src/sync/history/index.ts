@@ -8,8 +8,6 @@ export {
 export {
 	clampMaxSnapshots,
 	collectHashes,
-	FILE_HISTORY_MAX_SNAPSHOTS,
-	FILE_HISTORY_MIN_SNAPSHOTS,
 	gcExcessBuffer,
 	shouldRunGc,
 } from "./gc";

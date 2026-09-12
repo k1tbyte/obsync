@@ -13,6 +13,7 @@ interface Harness {
 function harness(state: {
 	layoutReady: boolean;
 	initialized?: boolean;
+	autosync?: boolean;
 }): Harness {
 	let refreshes = 0;
 	const teardown: Array<() => void> = [];
@@ -20,8 +21,8 @@ function harness(state: {
 	const host = {
 		settings: {
 			...DEFAULT_SETTINGS,
-			autoPullOnStartup: true,
-			autoPullIntervalMinutes: 0,
+			autoSyncEnabled: state.autosync ?? true,
+			autoSyncIntervalMinutes: 10,
 			storageConfigs: {
 				[DEFAULT_SETTINGS.activeStorageKind]: {
 					...DEFAULT_SETTINGS.storageConfigs[
@@ -49,10 +50,11 @@ function harness(state: {
 		registerEvent: () => undefined,
 	} as unknown as SchedulerHost;
 	const controller = {
-		refreshAndAutoPull: async () => {
+		refreshAndAutoSync: async () => {
 			refreshes++;
 		},
 		getSnapshot: () => ({ error: null }),
+		subscribe: () => () => undefined,
 	} as unknown as SyncController;
 	registerScheduler(host, controller);
 	return {
@@ -67,7 +69,7 @@ function harness(state: {
 	};
 }
 
-describe("startup auto-pull", () => {
+describe("startup autosync", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		vi.stubGlobal("navigator", { onLine: true });
@@ -113,6 +115,16 @@ describe("startup auto-pull", () => {
 	it("does not run after unload", async () => {
 		const h = harness({ layoutReady: false, initialized: false });
 		h.unload();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(h.refreshes()).toBe(0);
+	});
+
+	it("skips the startup run when autosync is off", async () => {
+		const h = harness({
+			layoutReady: true,
+			initialized: true,
+			autosync: false,
+		});
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(h.refreshes()).toBe(0);
 	});

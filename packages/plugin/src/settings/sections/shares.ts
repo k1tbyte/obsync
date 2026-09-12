@@ -132,7 +132,7 @@ function renderShareStorage(
 	// editing surface for the same values that goes stale on every keystroke.
 	if (settings.shareStorageKind === settings.activeStorageKind) {
 		new Setting(parent).setDesc(
-			"Shares reuse the credentials from Backend above, under their own prefix.",
+			"Shares reuse the credentials from the Connection tab, under their own prefix.",
 		);
 		return;
 	}

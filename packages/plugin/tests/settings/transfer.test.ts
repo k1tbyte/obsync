@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { deriveKey, encryptBytes } from "@/crypto";
 import { DEFAULT_SETTINGS, type ObsyncSettings } from "@/settings/model";
 import {
 	createSettingsTransferPackage,
@@ -14,6 +15,7 @@ import {
 	defaultWebDAVConfig,
 	EStorageBackend,
 } from "@/storage";
+import { bytesToBase64Url } from "@/utils/base64";
 
 const PASSPHRASE = "correct horse battery staple";
 
@@ -24,8 +26,9 @@ describe("settings transfer", () => {
 			realtimeSync: true,
 			realtimeServerUrl: "wss://relay.example.com",
 			realtimeToken: "relay-secret",
-			autoPushOnSave: true,
-			autoPushIntervalMinutes: 25,
+			autoPushAfterChange: true,
+			autoSyncEnabled: true,
+			autoSyncIntervalMinutes: 25,
 			fileHistoryEnabled: true,
 			storageConfigs: {
 				[EStorageBackend.S3]: {
@@ -54,8 +57,9 @@ describe("settings transfer", () => {
 		expect(imported.realtimeSync).toBe(true);
 		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
 		expect(imported.realtimeToken).toBe("relay-secret");
-		expect(imported.autoPushOnSave).toBe(true);
-		expect(imported.autoPushIntervalMinutes).toBe(25);
+		expect(imported.autoPushAfterChange).toBe(true);
+		expect(imported.autoSyncEnabled).toBe(true);
+		expect(imported.autoSyncIntervalMinutes).toBe(25);
 		expect(imported.fileHistoryEnabled).toBe(true);
 	});
 
@@ -107,7 +111,7 @@ describe("settings transfer", () => {
 			realtimeSync: true,
 			realtimeServerUrl: "wss://relay.example.com",
 			realtimeToken: "relay-secret",
-			autoPushOnSave: true,
+			autoPushAfterChange: true,
 			ignorePatterns: "*.tmp",
 			ignoreSymlinks: false,
 		});
@@ -125,7 +129,7 @@ describe("settings transfer", () => {
 		expect(imported.settingsSync).toBeUndefined();
 		expect(imported.ignorePatterns).toBeUndefined();
 		expect(imported.ignoreSymlinks).toBeUndefined();
-		expect(imported.autoPushOnSave).toBeUndefined();
+		expect(imported.autoPushAfterChange).toBeUndefined();
 		expect(imported.realtimeSync).toBe(true);
 		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
 		expect(imported.realtimeToken).toBe("relay-secret");
@@ -145,12 +149,12 @@ describe("settings transfer", () => {
 			ignorePatterns: "*.tmp\n*.swp",
 			ignoreSymlinks: !DEFAULT_SETTINGS.ignoreSymlinks,
 			maxFileBytes: DEFAULT_SETTINGS.maxFileBytes + 1024,
-			autoPullOnStartup: !DEFAULT_SETTINGS.autoPullOnStartup,
-			autoPullIntervalMinutes: DEFAULT_SETTINGS.autoPullIntervalMinutes + 5,
-			autoRefreshOnFileChange: !DEFAULT_SETTINGS.autoRefreshOnFileChange,
-			autoPushOnSave: !DEFAULT_SETTINGS.autoPushOnSave,
-			autoPushOnSaveCurrentFileOnly:
-				!DEFAULT_SETTINGS.autoPushOnSaveCurrentFileOnly,
+			autoSyncEnabled: !DEFAULT_SETTINGS.autoSyncEnabled,
+			autoSyncIntervalMinutes: DEFAULT_SETTINGS.autoSyncIntervalMinutes + 5,
+			autoPushAfterSync: !DEFAULT_SETTINGS.autoPushAfterSync,
+			autoPushAfterChange: !DEFAULT_SETTINGS.autoPushAfterChange,
+			autoPushSettleSeconds: DEFAULT_SETTINGS.autoPushSettleSeconds - 3,
+			autoPushChangedFilesOnly: !DEFAULT_SETTINGS.autoPushChangedFilesOnly,
 			fileHistoryEnabled: !DEFAULT_SETTINGS.fileHistoryEnabled,
 			fileHistoryMaxSnapshots: DEFAULT_SETTINGS.fileHistoryMaxSnapshots + 7,
 			historyAutoRefresh: !DEFAULT_SETTINGS.historyAutoRefresh,
@@ -179,16 +183,15 @@ describe("settings transfer", () => {
 		expect(imported.ignorePatterns).toBe(settings.ignorePatterns);
 		expect(imported.ignoreSymlinks).toBe(settings.ignoreSymlinks);
 		expect(imported.maxFileBytes).toBe(settings.maxFileBytes);
-		expect(imported.autoPullOnStartup).toBe(settings.autoPullOnStartup);
-		expect(imported.autoPullIntervalMinutes).toBe(
-			settings.autoPullIntervalMinutes,
+		expect(imported.autoSyncEnabled).toBe(settings.autoSyncEnabled);
+		expect(imported.autoSyncIntervalMinutes).toBe(
+			settings.autoSyncIntervalMinutes,
 		);
-		expect(imported.autoRefreshOnFileChange).toBe(
-			settings.autoRefreshOnFileChange,
-		);
-		expect(imported.autoPushOnSave).toBe(settings.autoPushOnSave);
-		expect(imported.autoPushOnSaveCurrentFileOnly).toBe(
-			settings.autoPushOnSaveCurrentFileOnly,
+		expect(imported.autoPushAfterSync).toBe(settings.autoPushAfterSync);
+		expect(imported.autoPushAfterChange).toBe(settings.autoPushAfterChange);
+		expect(imported.autoPushSettleSeconds).toBe(settings.autoPushSettleSeconds);
+		expect(imported.autoPushChangedFilesOnly).toBe(
+			settings.autoPushChangedFilesOnly,
 		);
 		expect(imported.fileHistoryEnabled).toBe(settings.fileHistoryEnabled);
 		expect(imported.fileHistoryMaxSnapshots).toBe(
@@ -201,21 +204,54 @@ describe("settings transfer", () => {
 	});
 
 	it("clamps a crafted token that carries an out-of-range number", async () => {
-		const settings = buildSettings({ autoPullIntervalMinutes: 15 });
+		const settings = buildSettings({ autoSyncIntervalMinutes: 15 });
 		const url = await createSettingsTransferUrl(settings, PASSPHRASE);
 		const imported = await readSettingsTransfer(url, PASSPHRASE);
 		const tampered = {
 			...imported,
-			autoPullIntervalMinutes: -5,
+			autoSyncIntervalMinutes: -5,
 			maxFileBytes: 0,
 		};
 
 		const merged = mergeTransferredSettings(buildSettings({}), tampered);
 
-		expect(merged.autoPullIntervalMinutes).toBe(
-			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		expect(merged.autoSyncIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoSyncIntervalMinutes,
 		);
 		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
+	});
+
+	it("imports the shortest interval from a legacy v4 automation payload", async () => {
+		const url = await createLegacyAutomationTransfer({
+			n: 30,
+			b: 10,
+			p: 1,
+			c: 1,
+			u: 0,
+		});
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+
+		expect(imported.autoSyncIntervalMinutes).toBe(10);
+		expect(imported.autoSyncEnabled).toBe(true);
+		expect(imported.autoPushAfterSync).toBe(true);
+		expect(imported.autoPushAfterChange).toBe(true);
+		expect(imported.autoPushChangedFilesOnly).toBe(true);
+	});
+
+	it("imports a legacy pull-only device as autosync without push", async () => {
+		const url = await createLegacyAutomationTransfer({ n: 15 });
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+
+		expect(imported.autoSyncEnabled).toBe(true);
+		expect(imported.autoSyncIntervalMinutes).toBe(15);
+		expect(imported.autoPushAfterSync).toBe(false);
+	});
+
+	it("keeps legacy queued push disabled when file refresh was off", async () => {
+		const url = await createLegacyAutomationTransfer({ p: 1, f: 0 });
+		const imported = await readSettingsTransfer(url, PASSPHRASE);
+
+		expect(imported.autoPushAfterChange).toBe(false);
 	});
 
 	it("names an active backend the payload actually carries", async () => {
@@ -310,4 +346,20 @@ function buildLargeValue(): string {
 	)
 		.join("|")
 		.slice(0, 1800);
+}
+
+async function createLegacyAutomationTransfer(
+	automation: Record<string, unknown>,
+): Promise<string> {
+	const salt = new Uint8Array(16);
+	const key = await deriveKey(PASSPHRASE, salt);
+	const bytes = new TextEncoder().encode(JSON.stringify({ a: automation }));
+	const ciphertext = await encryptBytes(key, bytes);
+	const token = [
+		"4",
+		"p",
+		bytesToBase64Url(salt),
+		bytesToBase64Url(ciphertext),
+	].join(".");
+	return `obsidian://obsync?d=${token}`;
 }

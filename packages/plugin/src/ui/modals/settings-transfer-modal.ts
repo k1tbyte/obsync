@@ -97,7 +97,7 @@ const EXPORT_TOGGLES: ReadonlyArray<ExportToggle> = [
 	},
 	{
 		name: "Automation and history",
-		desc: "Include auto-pull, auto-push, file history, and related automation settings.",
+		desc: "Include autosync, queued push, file history, and related automation settings.",
 		get: (o) => o.includeAutomation,
 		set: (value, o) => ({ ...o, includeAutomation: value }),
 	},
