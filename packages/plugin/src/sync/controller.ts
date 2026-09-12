@@ -7,7 +7,7 @@ import { autoMergeOp } from "./auto-merge";
 import { selectAutoPushPaths } from "./auto-push";
 import { clearRemoteTextCache, textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
-import type { EngineDependencies } from "./engine";
+import type { CompareResult, EngineDependencies } from "./engine";
 import type {
 	DeletedFilesResult,
 	FileVersion,
@@ -171,20 +171,24 @@ export class SyncController {
 	}
 
 	async refreshAndAutoPull(): Promise<void> {
-		await this.refresh();
-		const result = this.runtimeState.getResult();
-		if (!result) return;
-
-		if (result.diff.conflicts.length > 0) {
-			await this.autoMerge();
-		}
-
-		const afterMerge = this.runtimeState.getResult();
+		const afterMerge = await this.refreshAndAutoMerge();
 		if (!afterMerge) return;
 		if (afterMerge.diff.conflicts.length > 0) return;
 		if (afterMerge.diff.localChanges.length > 0) return;
 		if (afterMerge.diff.remoteChanges.length === 0) return;
 		await this.pullPaths(afterMerge.diff.remoteChanges.map((c) => c.path));
+	}
+
+	async refreshAndAutoSync(push = true): Promise<void> {
+		const afterMerge = await this.refreshAndAutoMerge();
+		if (!afterMerge || afterMerge.diff.conflicts.length > 0) return;
+		if (afterMerge.diff.remoteChanges.length > 0) {
+			await this.pullPaths(afterMerge.diff.remoteChanges.map((c) => c.path));
+		}
+		const snapshot = this.runtimeState.getSnapshot();
+		if (snapshot.error || snapshot.staleReason) return;
+		if (!push) return;
+		await this.autoPushFromSnapshot();
 	}
 
 	async refreshAndAutoPush(): Promise<void> {
@@ -210,6 +214,14 @@ export class SyncController {
 			ESyncLogOperation.Compare,
 			(deps, result, ctx) => autoMergeOp(deps, result, ctx),
 		);
+	}
+
+	private async refreshAndAutoMerge(): Promise<CompareResult | null> {
+		await this.refresh();
+		const result = this.runtimeState.getResult();
+		if (!result) return null;
+		if (result.diff.conflicts.length > 0) await this.autoMerge();
+		return this.runtimeState.getResult();
 	}
 
 	async resetRemoteStorage(): Promise<boolean> {

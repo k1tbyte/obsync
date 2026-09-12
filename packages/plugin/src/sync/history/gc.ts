@@ -1,3 +1,7 @@
+import {
+	FILE_HISTORY_MAX_SNAPSHOTS,
+	FILE_HISTORY_MIN_SNAPSHOTS,
+} from "@/constants";
 import type { EncryptionKey } from "@/crypto";
 import { reportWarning } from "@/shared/diagnostics";
 import type { ObjectStorage } from "@/storage/types";
@@ -10,10 +14,6 @@ import type { HistoryLog, SnapshotEntry } from "./types";
 
 /** Deletes are network round trips; a serial sweep of thousands of them crawls. */
 const GC_DELETE_CONCURRENCY = 4;
-
-export const FILE_HISTORY_MIN_SNAPSHOTS = 1;
-
-export const FILE_HISTORY_MAX_SNAPSHOTS = 1000;
 
 /** GC fires only when retained snapshots exceed max by this fraction... */
 export const FILE_HISTORY_GC_EXCESS_RATIO = 0.3;

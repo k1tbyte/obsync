@@ -1,5 +1,13 @@
 import { Setting } from "obsidian";
 
+import {
+	AUTO_PUSH_SETTLE_MAX_SECONDS,
+	AUTO_PUSH_SETTLE_MIN_SECONDS,
+	AUTO_SYNC_MAX_MINUTES,
+	AUTO_SYNC_MIN_MINUTES,
+	FILE_HISTORY_MAX_SNAPSHOTS,
+	FILE_HISTORY_MIN_SNAPSHOTS,
+} from "@/constants";
 import type { PluginHost } from "@/plugin/host";
 import {
 	type FieldContext,
@@ -7,63 +15,64 @@ import {
 	type SettingsField,
 } from "@/settings/fields";
 import { EFieldKind } from "@/storage/field-spec";
-import {
-	clampMaxSnapshots,
-	FILE_HISTORY_MAX_SNAPSHOTS,
-	FILE_HISTORY_MIN_SNAPSHOTS,
-} from "@/sync/history";
-
-const AUTO_SYNC_MIN_MINUTES = 0;
-
-const AUTO_SYNC_MAX_MINUTES = 1440;
+import { clampMaxSnapshots } from "@/sync/history";
 
 const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Toggle,
-		name: "Auto-pull on startup",
-		desc: "Compare with remote shortly after Obsidian launches and pull non-conflicting changes.",
-		get: (s) => s.autoPullOnStartup,
-		set: (v) => ({ autoPullOnStartup: v }),
-	},
-	{
-		kind: EFieldKind.Number,
-		name: "Auto-pull interval (minutes)",
-		desc: `Set to ${AUTO_SYNC_MIN_MINUTES} to disable. Max ${AUTO_SYNC_MAX_MINUTES}.`,
-		get: (s) => String(s.autoPullIntervalMinutes),
-		parse: clampAutoSyncMinutes,
-		set: (v) => ({ autoPullIntervalMinutes: v }),
-	},
-	{
-		kind: EFieldKind.Number,
-		name: "Auto-push interval (minutes)",
-		desc: `Push pending local changes every N minutes. Set to ${AUTO_SYNC_MIN_MINUTES} to disable. Max ${AUTO_SYNC_MAX_MINUTES}. Skips conflicted files and files with incoming remote changes.`,
-		get: (s) => String(s.autoPushIntervalMinutes),
-		parse: clampAutoSyncMinutes,
-		set: (v) => ({ autoPushIntervalMinutes: v }),
-	},
-	{
-		kind: EFieldKind.Toggle,
-		name: "Auto-refresh on file change",
-		desc: "Recompare with the remote shortly after a file changes, keeping the Changes list current. Disable to refresh only when you click compare. (Auto-push on save also requires this.)",
-		get: (s) => s.autoRefreshOnFileChange,
-		set: (v) => ({ autoRefreshOnFileChange: v }),
-	},
-	{
-		kind: EFieldKind.Toggle,
-		name: "Auto-push on save",
-		desc: "Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
-		get: (s) => s.autoPushOnSave,
-		set: (v) => ({ autoPushOnSave: v }),
+		name: "Autosync",
+		desc: "Sync automatically: once after startup and on a schedule. Pulls remote changes; conflicts that cannot be merged safely stop the cycle.",
+		get: (s) => s.autoSyncEnabled,
+		set: (v) => ({ autoSyncEnabled: v }),
 		rerender: true,
 	},
 	{
-		kind: EFieldKind.Toggle,
-		name: "Push only the saved file",
-		desc: "When a file is saved, push just that file instead of every pending local change.",
-		when: (s) => s.autoPushOnSave,
+		kind: EFieldKind.Number,
+		name: "Interval (minutes)",
+		desc: `How often to sync. 0 means only once after startup. Max ${AUTO_SYNC_MAX_MINUTES}.`,
+		when: (s) => s.autoSyncEnabled,
 		sub: true,
-		get: (s) => s.autoPushOnSaveCurrentFileOnly,
-		set: (v) => ({ autoPushOnSaveCurrentFileOnly: v }),
+		get: (s) => String(s.autoSyncIntervalMinutes),
+		parse: clampAutoSyncMinutes,
+		set: (v) => ({ autoSyncIntervalMinutes: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push after successful pull",
+		desc: "After a pull with no conflicts, also push local changes. Disable to only pull and review incoming changes.",
+		when: (s) => s.autoSyncEnabled,
+		sub: true,
+		get: (s) => s.autoPushAfterSync,
+		set: (v) => ({ autoPushAfterSync: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push after changes settle",
+		desc: "Queue changed files and push once the vault has been quiet for the delay below. Rapid saves are combined into one compare and push. Never pulls: conflicts and incoming changes are left untouched.",
+		get: (s) => s.autoPushAfterChange,
+		set: (v) => ({ autoPushAfterChange: v }),
+		rerender: true,
+	},
+	{
+		kind: EFieldKind.Slider,
+		name: "Quiet period (seconds)",
+		desc: `How long the vault must stay quiet after a change before the queued push runs (${AUTO_PUSH_SETTLE_MIN_SECONDS}–${AUTO_PUSH_SETTLE_MAX_SECONDS}). Shorter pushes sooner, longer batches more saves.`,
+		when: (s) => s.autoPushAfterChange,
+		sub: true,
+		min: AUTO_PUSH_SETTLE_MIN_SECONDS,
+		max: AUTO_PUSH_SETTLE_MAX_SECONDS,
+		step: 1,
+		get: (s) => s.autoPushSettleSeconds,
+		set: (v) => ({ autoPushSettleSeconds: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push only queued files",
+		desc: "Push only files changed during the quiet period. Disable to also push other pending local changes.",
+		when: (s) => s.autoPushAfterChange,
+		sub: true,
+		get: (s) => s.autoPushChangedFilesOnly,
+		set: (v) => ({ autoPushChangedFilesOnly: v }),
 	},
 	{
 		kind: EFieldKind.Toggle,

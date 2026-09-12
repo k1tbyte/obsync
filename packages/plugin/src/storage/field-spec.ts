@@ -5,6 +5,7 @@ export const EFieldKind = {
 	Password: "password",
 	Toggle: "toggle",
 	Number: "number",
+	Slider: "slider",
 } as const;
 export type EFieldKind = (typeof EFieldKind)[keyof typeof EFieldKind];
 

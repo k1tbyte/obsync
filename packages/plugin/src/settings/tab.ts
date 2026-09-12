@@ -30,16 +30,26 @@ import {
 } from "./sections";
 
 const ESettingsViewTab = {
-	Settings: "settings",
+	Connection: "connection",
+	Sync: "sync",
+	Sharing: "sharing",
+	Interface: "interface",
+	Maintenance: "maintenance",
 	Logs: "logs",
 } as const;
 type ESettingsViewTab =
 	(typeof ESettingsViewTab)[keyof typeof ESettingsViewTab];
 
 const SETTINGS_TAB_LABELS: Record<ESettingsViewTab, string> = {
-	[ESettingsViewTab.Settings]: "Settings",
+	[ESettingsViewTab.Connection]: "Connection",
+	[ESettingsViewTab.Sync]: "Sync",
+	[ESettingsViewTab.Sharing]: "Sharing",
+	[ESettingsViewTab.Interface]: "Interface",
+	[ESettingsViewTab.Maintenance]: "Maintenance",
 	[ESettingsViewTab.Logs]: "Logs",
 };
+
+const SETTINGS_TABS = Object.values(ESettingsViewTab);
 
 interface SettingsSyncRow {
 	key: keyof SettingsSyncCategories;
@@ -80,6 +90,26 @@ const SCOPE_CHANGED = "Sync scope settings changed.";
 const BYTES_PER_MB = 1024 * 1024;
 const MIN_MAX_FILE_MB = 1;
 
+const EXCLUSION_FIELDS: ReadonlyArray<SettingsField> = [
+	{
+		kind: EFieldKind.Toggle,
+		name: "Ignore symlinks",
+		desc: "Skip symbolic links, Windows junctions and directory links. They point outside the vault and exist only on this device.",
+		get: (s) => s.ignoreSymlinks,
+		set: (v) => ({ ignoreSymlinks: v }),
+		refreshScope: true,
+	},
+	{
+		kind: EFieldKind.Number,
+		name: "Max file size (MB)",
+		desc: "Files larger than this are skipped.",
+		get: (s) => String(Math.round(s.maxFileBytes / BYTES_PER_MB)),
+		parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
+		set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
+		refreshScope: true,
+	},
+];
+
 const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Toggle,
@@ -119,20 +149,11 @@ const INTERFACE_FIELDS: ReadonlyArray<SettingsField> = [
 		set: (v) => ({ showFileSizes: v }),
 		after: (plugin) => plugin.refreshSourceControlView(),
 	},
-	{
-		kind: EFieldKind.Number,
-		name: "Max file size (MB)",
-		desc: "Files larger than this are skipped.",
-		get: (s) => String(Math.round(s.maxFileBytes / BYTES_PER_MB)),
-		parse: (raw) => Math.max(MIN_MAX_FILE_MB, Number.parseInt(raw, 10) || 0),
-		set: (mb) => ({ maxFileBytes: mb * BYTES_PER_MB }),
-		refreshScope: true,
-	},
 ];
 
 export class ObsyncSettingTab extends PluginSettingTab {
 	private readonly plugin: Plugin & PluginHost;
-	private activeTab: ESettingsViewTab = ESettingsViewTab.Settings;
+	private activeTab: ESettingsViewTab = ESettingsViewTab.Connection;
 	private sectionUnsubs: Array<() => void> = [];
 
 	constructor(app: App, plugin: Plugin & PluginHost) {
@@ -150,31 +171,26 @@ export class ObsyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		this.renderTabBar(containerEl);
 
-		if (this.activeTab === ESettingsViewTab.Logs) {
-			renderLogsView(containerEl, this.plugin, () => this.display());
-			return;
+		switch (this.activeTab) {
+			case ESettingsViewTab.Connection:
+				this.renderConnectionTab(containerEl);
+				break;
+			case ESettingsViewTab.Sync:
+				this.renderSyncTab(containerEl);
+				break;
+			case ESettingsViewTab.Sharing:
+				this.renderSharingTab(containerEl);
+				break;
+			case ESettingsViewTab.Interface:
+				this.renderUiSection(containerEl);
+				break;
+			case ESettingsViewTab.Maintenance:
+				renderMaintenanceSection(containerEl, this.plugin);
+				break;
+			case ESettingsViewTab.Logs:
+				renderLogsView(containerEl, this.plugin, () => this.display());
+				break;
 		}
-
-		renderBackendSection(containerEl, this.plugin, () => this.display());
-		// Passphrase sits with the backend: together they are what a new device needs.
-		renderSecuritySection(containerEl, this.plugin, () => this.display());
-		this.renderTransferSection(containerEl);
-		this.renderSettingsSyncSection(containerEl);
-		const sharesUnsub = renderSharesSection(containerEl, this.plugin, () =>
-			this.display(),
-		);
-		if (sharesUnsub) this.sectionUnsubs.push(sharesUnsub);
-		this.renderIgnoreSection(containerEl);
-		const automationUnsub = renderAutomationSection(
-			containerEl,
-			this.plugin,
-			() => this.display(),
-		);
-		if (automationUnsub) this.sectionUnsubs.push(automationUnsub);
-		this.renderUiSection(containerEl);
-		this.renderAdvancedSection(containerEl);
-		// Last: everything here is destructive or diagnostic.
-		renderMaintenanceSection(containerEl, this.plugin);
 	}
 
 	private fieldContext(): FieldContext {
@@ -187,9 +203,12 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	}
 
 	private renderTabBar(parent: HTMLElement): void {
-		const bar = parent.createDiv({ cls: "obsync-settings-tabs" });
-		this.renderTabButton(bar, ESettingsViewTab.Settings);
-		this.renderTabButton(bar, ESettingsViewTab.Logs);
+		const bar = parent.createDiv({
+			cls: "obsync-settings-tabs obsync-settings-nav",
+		});
+		bar.setAttr("role", "tablist");
+		bar.setAttr("aria-label", "Obsync settings sections");
+		for (const tab of SETTINGS_TABS) this.renderTabButton(bar, tab);
 	}
 
 	private renderTabButton(parent: HTMLElement, tab: ESettingsViewTab): void {
@@ -198,6 +217,8 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			text: SETTINGS_TAB_LABELS[tab],
 		});
 		button.type = "button";
+		button.setAttr("role", "tab");
+		button.setAttr("aria-selected", String(tab === this.activeTab));
 		if (tab === this.activeTab) {
 			button.addClass("is-active");
 		}
@@ -206,6 +227,29 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			this.activeTab = tab;
 			this.display();
 		});
+	}
+
+	private renderConnectionTab(parent: HTMLElement): void {
+		renderBackendSection(parent, this.plugin, () => this.display());
+		renderSecuritySection(parent, this.plugin, () => this.display());
+		this.renderTransferSection(parent);
+		this.renderAdvancedSection(parent);
+	}
+
+	private renderSyncTab(parent: HTMLElement): void {
+		const automationUnsub = renderAutomationSection(parent, this.plugin, () =>
+			this.display(),
+		);
+		if (automationUnsub) this.sectionUnsubs.push(automationUnsub);
+		this.renderSettingsSyncSection(parent);
+		this.renderIgnoreSection(parent);
+	}
+
+	private renderSharingTab(parent: HTMLElement): void {
+		const sharesUnsub = renderSharesSection(parent, this.plugin, () =>
+			this.display(),
+		);
+		if (sharesUnsub) this.sectionUnsubs.push(sharesUnsub);
 	}
 
 	private renderTransferSection(parent: HTMLElement): void {
@@ -265,16 +309,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 			"Applied only on this device, in addition to the shared syncignore.md note in the vault root.",
 		);
 
-		renderFields(parent, this.fieldContext(), [
-			{
-				kind: EFieldKind.Toggle,
-				name: "Ignore symlinks",
-				desc: "Skip symbolic links, Windows junctions and directory links. They point outside the vault and exist only on this device.",
-				get: (s) => s.ignoreSymlinks,
-				set: (v) => ({ ignoreSymlinks: v }),
-				refreshScope: true,
-			},
-		]);
+		renderFields(parent, this.fieldContext(), EXCLUSION_FIELDS);
 
 		new Setting(parent)
 			.setName("Patterns")

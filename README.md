@@ -137,7 +137,7 @@ Object bytes go straight between participants and S3; the broker only signs, so 
 
 ## Device transfer
 
-Use **Settings → Obsync → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, device-local ignore patterns, file size limit, concurrency, and auto-pull settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
+Use **Settings → Obsync → Connection → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, device-local ignore patterns, file size limit, concurrency, autosync, and queued-push settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
 
 The transfer link is encrypted with a key derived from the current Obsync passphrase and a random transfer salt. Before encryption, the payload is minified to short keys and compressed when that actually makes the token smaller. The final URL uses the `obsidian://obsync?d=...` format. The receiving device must use the same passphrase and explicitly confirm import before the transferred settings are applied.
 

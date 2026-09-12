@@ -12,25 +12,29 @@ const MINUTE_MS = 60_000;
 
 interface Harness {
 	host: SchedulerHost;
-	pulls: () => number;
-	pushes: () => number;
+	syncs: () => number;
+	pushFlags: () => ReadonlyArray<boolean>;
+	manualSync: () => void;
+	setSyncError: (error: string | null) => void;
 }
 
 function harness(settings: {
-	autoPullIntervalMinutes: number;
-	autoPushIntervalMinutes: number;
-	realtime?: () => boolean;
+	autoSyncIntervalMinutes: number;
+	autoSyncEnabled?: boolean;
+	autoPushAfterSync?: boolean;
 }): Harness {
-	let pulls = 0;
-	let pushes = 0;
-	const teardown: Array<() => void> = [];
+	let syncs = 0;
+	const pushFlags: Array<boolean> = [];
+	let snapshotError: string | null = null;
+	const statusListeners: Array<
+		(snapshot: { busy: boolean; error?: string | null }) => void
+	> = [];
 	const host = {
 		settings: {
 			...DEFAULT_SETTINGS,
-			autoPullOnStartup: false,
-			autoPullIntervalMinutes: settings.autoPullIntervalMinutes,
-			autoPushIntervalMinutes: settings.autoPushIntervalMinutes,
-			realtimeSync: Boolean(settings.realtime),
+			autoSyncEnabled: settings.autoSyncEnabled ?? true,
+			autoSyncIntervalMinutes: settings.autoSyncIntervalMinutes,
+			autoPushAfterSync: settings.autoPushAfterSync ?? true,
 			storageConfigs: {
 				[DEFAULT_SETTINGS.activeStorageKind]: {
 					...DEFAULT_SETTINGS.storageConfigs[
@@ -42,7 +46,6 @@ function harness(settings: {
 				},
 			},
 		},
-		isRealtimeConnected: settings.realtime ?? (() => false),
 		app: {
 			workspace: { layoutReady: true },
 			metadataCache: {
@@ -51,28 +54,36 @@ function harness(settings: {
 			},
 			vault: { on: () => ({}) },
 		},
-		register: (fn: () => void) => teardown.push(fn),
-		registerInterval: (id: number) =>
-			teardown.push(() => window.clearInterval(id)),
+		register: () => undefined,
+		registerInterval: () => undefined,
 		registerEvent: () => undefined,
 	} as unknown as SchedulerHost;
 	const controller = {
-		refreshAndAutoPull: async () => {
-			pulls++;
+		refreshAndAutoSync: async (push: boolean) => {
+			syncs++;
+			pushFlags.push(push);
 		},
-		refreshAndAutoPush: async () => {
-			pushes++;
+		getSnapshot: () => ({ error: snapshotError }),
+		subscribe: (
+			listener: (snapshot: { busy: boolean; error?: string | null }) => void,
+		) => {
+			statusListeners.push(listener);
+			return () => undefined;
 		},
-		autoPushFromSnapshot: async () => {
-			pushes++;
-		},
-		getSnapshot: () => ({ error: null }),
 	} as unknown as SyncController;
 	registerScheduler(host, controller);
 	return {
 		host,
-		pulls: () => pulls,
-		pushes: () => pushes,
+		syncs: () => syncs,
+		pushFlags: () => pushFlags,
+		manualSync: () => {
+			for (const listener of statusListeners) listener({ busy: true });
+			for (const listener of statusListeners)
+				listener({ busy: false, error: snapshotError });
+		},
+		setSyncError: (error: string | null) => {
+			snapshotError = error;
+		},
 	};
 }
 
@@ -86,66 +97,97 @@ describe("auto-sync intervals", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("pushes on its interval while pull polling is off", async () => {
-		const h = harness({
-			autoPullIntervalMinutes: 0,
-			autoPushIntervalMinutes: 10,
-		});
+	it("runs a full sync on its interval", async () => {
+		const h = harness({ autoSyncIntervalMinutes: 10 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.syncs()).toBe(1);
 		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS);
-		expect(h.pushes()).toBe(1);
-		expect(h.pulls()).toBe(0);
+		expect(h.syncs()).toBe(2);
 	});
 
 	it("does nothing before the interval is due", async () => {
-		const h = harness({
-			autoPullIntervalMinutes: 0,
-			autoPushIntervalMinutes: 10,
-		});
-		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS - 1);
-		expect(h.pushes()).toBe(0);
+		const h = harness({ autoSyncIntervalMinutes: 10 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.syncs()).toBe(1);
+		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS - 30_001);
+		expect(h.syncs()).toBe(1);
 	});
 
-	it("never fires while the interval is disabled", async () => {
-		const h = harness({
-			autoPullIntervalMinutes: 0,
-			autoPushIntervalMinutes: 0,
-		});
+	it("never fires while autosync is disabled", async () => {
+		const h = harness({ autoSyncIntervalMinutes: 10, autoSyncEnabled: false });
 		await vi.advanceTimersByTimeAsync(3 * 60 * MINUTE_MS);
-		expect(h.pushes()).toBe(0);
-		expect(h.pulls()).toBe(0);
+		expect(h.syncs()).toBe(0);
 	});
 
-	it("pulls and pushes in one pass when both intervals line up", async () => {
-		const h = harness({
-			autoPullIntervalMinutes: 10,
-			autoPushIntervalMinutes: 10,
-		});
-		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS);
-		expect(h.pulls()).toBe(1);
-		expect(h.pushes()).toBe(1);
+	it("syncs only once after startup when the interval is zero", async () => {
+		const h = harness({ autoSyncIntervalMinutes: 0 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.syncs()).toBe(1);
+		await vi.advanceTimersByTimeAsync(3 * 60 * MINUTE_MS);
+		expect(h.syncs()).toBe(1);
 	});
 
-	it("keeps pushing while realtime only replaces pull polling", async () => {
+	it("passes the push preference into the sync cycle", async () => {
 		const h = harness({
-			autoPullIntervalMinutes: 10,
-			autoPushIntervalMinutes: 10,
-			realtime: () => true,
+			autoSyncIntervalMinutes: 10,
+			autoPushAfterSync: false,
 		});
-		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS);
-		expect(h.pulls()).toBe(0);
-		expect(h.pushes()).toBe(1);
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.pushFlags()).toEqual([false]);
+		const full = harness({ autoSyncIntervalMinutes: 10 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(full.pushFlags()).toEqual([true]);
 	});
 
 	it("applies a shortened interval without a restart", async () => {
-		const h = harness({
-			autoPullIntervalMinutes: 0,
-			autoPushIntervalMinutes: 10,
-		});
+		const h = harness({ autoSyncIntervalMinutes: 10 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.syncs()).toBe(1);
 		await vi.advanceTimersByTimeAsync(5 * MINUTE_MS);
-		expect(h.pushes()).toBe(0);
-		h.host.settings.autoPushIntervalMinutes = 1;
+		expect(h.syncs()).toBe(1);
+		h.host.settings.autoSyncIntervalMinutes = 1;
 		await vi.advanceTimersByTimeAsync(2 * MINUTE_MS);
-		expect(h.pushes()).toBe(1);
+		expect(h.syncs()).toBe(2);
+	});
+
+	it("defers a due cycle that follows a manual sync", async () => {
+		const h = harness({ autoSyncIntervalMinutes: 10 });
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(h.syncs()).toBe(1);
+		// The user finishes a manual sync shortly before the tick is due.
+		await vi.advanceTimersByTimeAsync(10 * MINUTE_MS - 15_000 - 3_000);
+		h.manualSync();
+		// The due tick is suppressed and retries after the cooldown, not a
+		// whole interval later.
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(h.syncs()).toBe(1);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(h.syncs()).toBe(2);
+	});
+
+	it("recovers from error backoff after a successful manual sync", async () => {
+		const h = harness({ autoSyncIntervalMinutes: 1 });
+		h.setSyncError("backend down");
+		// Three failed cycles (3s, 60s, 120s) arm the backoff until 240s; the
+		// 180s tick is suppressed by it, and the 240s one fails again, growing
+		// the backoff until 480s.
+		await vi.advanceTimersByTimeAsync(3_000);
+		await vi.advanceTimersByTimeAsync(57_000);
+		await vi.advanceTimersByTimeAsync(60_000);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(h.syncs()).toBe(3);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(h.syncs()).toBe(4);
+		// The user fixes the backend and syncs by hand.
+		h.setSyncError(null);
+		await vi.advanceTimersByTimeAsync(35_000);
+		h.manualSync();
+		// The due tick defers to the manual cycle, then runs with the backoff
+		// cleared instead of waiting out the remaining 3 minutes.
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(h.syncs()).toBe(4);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(h.syncs()).toBe(5);
 	});
 
 	it("checks the heartbeat often enough for a one-minute interval", () => {

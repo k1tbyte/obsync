@@ -1,4 +1,4 @@
-import { debounce, type Plugin, type TAbstractFile } from "obsidian";
+import type { Plugin, TAbstractFile } from "obsidian";
 
 import { isStorageConfigured, type ObsyncSettings } from "@/settings/model";
 import type { SyncController } from "./controller";
@@ -9,8 +9,6 @@ const AUTO_PULL_STARTUP_DELAY_MS = 3_000;
 const AUTO_PULL_INDEX_WAIT_MS = 60_000;
 
 const AUTO_SYNC_BUSY_COOLDOWN_MS = 30_000;
-
-const VAULT_EVENT_DEBOUNCE_MS = 1_500;
 
 /** How often the auto-sync timer wakes up to check what is due. */
 export const SCHEDULER_HEARTBEAT_MS = 30_000;
@@ -23,8 +21,6 @@ const SCHEDULER_BACKOFF_MAX_MS = 60 * 60_000;
 
 export interface SchedulerHost extends Plugin {
 	settings: ObsyncSettings;
-	/** Auto-pull is skipped while realtime is actually delivering signals. */
-	isRealtimeConnected?(): boolean;
 }
 
 export function registerScheduler(
@@ -35,20 +31,14 @@ export function registerScheduler(
 	let consecutiveFailures = 0;
 	let backoffUntil = 0;
 
-	const tick = async (doPull: boolean, doPush: boolean): Promise<void> => {
+	const tick = async (): Promise<void> => {
 		if (!navigator.onLine) return;
 		if (!isStorageConfigured(host.settings)) return;
 		const now = Date.now();
 		if (now - lastRun < AUTO_SYNC_BUSY_COOLDOWN_MS) return;
 		if (now < backoffUntil) return;
 		lastRun = now;
-		if (doPull) await controller.refreshAndAutoPull();
-		if (doPush) {
-			// The pull above already refreshed, so push from that snapshot;
-			// a push that runs alone refreshes for itself.
-			if (doPull) await controller.autoPushFromSnapshot();
-			else await controller.refreshAndAutoPush();
-		}
+		await controller.refreshAndAutoSync(host.settings.autoPushAfterSync);
 		// The flows report failures via error state, not throws. Read it for backoff.
 		if (!controller.getSnapshot().error) {
 			consecutiveFailures = 0;
@@ -66,58 +56,76 @@ export function registerScheduler(
 		}
 	};
 
-	if (host.settings.autoPullOnStartup)
-		scheduleFirstRun(host, () => void tick(true, false));
+	// Any finished cycle - the user's manual pull or push, a realtime-signal
+	// pull, the queued settle push - counts as a fresh sync, so a due tick
+	// never duplicates work that just ran.
+	let wasBusy = false;
+	host.register(
+		controller.subscribe((snapshot) => {
+			if (snapshot.busy) wasBusy = true;
+			else if (wasBusy) {
+				wasBusy = false;
+				lastRun = Date.now();
+				// A clean finish - the user's manual sync included - proves the
+				// backend works again, so leave the error backoff behind.
+				if (!snapshot.error) {
+					consecutiveFailures = 0;
+					backoffUntil = 0;
+				}
+			}
+		}),
+	);
 
-	// Read both intervals on every wake-up so setting changes apply without restart.
-	let pullMinutesInEffect = host.settings.autoPullIntervalMinutes;
-	let pullDueAt = dueAfter(pullMinutesInEffect);
-	let pushMinutesInEffect = host.settings.autoPushIntervalMinutes;
-	let pushDueAt = dueAfter(pushMinutesInEffect);
+	// Interval 0 with the toggle on is a deliberate mode: sync once after
+	// startup, then stay quiet until the next reload.
+	if (host.settings.autoSyncEnabled) {
+		scheduleFirstRun(host, () => void tick());
+	}
+
+	// Read the interval on every wake-up so setting changes apply without restart.
+	let minutesInEffect = host.settings.autoSyncIntervalMinutes;
+	let dueAt = dueAfter(minutesInEffect);
 	host.registerInterval(
 		window.setInterval(() => {
-			const pullMinutes = host.settings.autoPullIntervalMinutes;
-			if (pullMinutes !== pullMinutesInEffect) {
-				pullMinutesInEffect = pullMinutes;
-				pullDueAt = dueAfter(pullMinutes);
-			}
-			const pushMinutes = host.settings.autoPushIntervalMinutes;
-			if (pushMinutes !== pushMinutesInEffect) {
-				pushMinutesInEffect = pushMinutes;
-				pushDueAt = dueAfter(pushMinutes);
+			const minutes = host.settings.autoSyncIntervalMinutes;
+			if (minutes !== minutesInEffect) {
+				minutesInEffect = minutes;
+				dueAt = dueAfter(minutes);
 			}
 			const now = Date.now();
-			const pullDue = pullMinutes > 0 && pullDueAt > 0 && now >= pullDueAt;
-			const pushDue = pushMinutes > 0 && pushDueAt > 0 && now >= pushDueAt;
-			if (!pullDue && !pushDue) return;
-			if (pullDue) pullDueAt = dueAfter(pullMinutes);
-			if (pushDue) pushDueAt = dueAfter(pushMinutes);
-			// Realtime replaces pull polling only while connected; nothing
-			// pushes for this device, so the push interval is never skipped.
-			const doPull =
-				pullDue &&
-				!(host.settings.realtimeSync && host.isRealtimeConnected?.());
-			if (!doPull && !pushDue) return;
-			void tick(doPull, pushDue);
+			if (!host.settings.autoSyncEnabled || dueAt <= 0 || now < dueAt) return;
+			if (now - lastRun < AUTO_SYNC_BUSY_COOLDOWN_MS) {
+				// A cycle just ran by hand: retry once the cooldown passes, not a
+				// whole interval later.
+				dueAt = lastRun + AUTO_SYNC_BUSY_COOLDOWN_MS;
+				return;
+			}
+			dueAt = dueAfter(minutes);
+			void tick();
 		}, SCHEDULER_HEARTBEAT_MS),
 	);
 
 	const pendingPaths = new Set<string>();
-	const triggerVaultSync = debounce(
-		() => {
+	let queuedPushTimer: number | null = null;
+	const scheduleQueuedPush = (): void => {
+		if (queuedPushTimer !== null) window.clearTimeout(queuedPushTimer);
+		// Read per event so a changed quiet period applies to the queue in flight.
+		queuedPushTimer = window.setTimeout(() => {
+			queuedPushTimer = null;
 			const tracked = new Set(pendingPaths);
 			pendingPaths.clear();
-			void runVaultSync(host, controller, tracked);
-		},
-		VAULT_EVENT_DEBOUNCE_MS,
-		true,
-	);
+			void runQueuedPush(host, controller, tracked);
+		}, host.settings.autoPushSettleSeconds * 1000);
+	};
 	const onVaultEvent = (file: TAbstractFile, oldPath?: string): void => {
+		if (!host.settings.autoPushAfterChange) return;
 		pendingPaths.add(file.path);
 		if (oldPath) pendingPaths.add(oldPath);
-		triggerVaultSync();
+		scheduleQueuedPush();
 	};
-	host.register(() => triggerVaultSync.cancel());
+	host.register(() => {
+		if (queuedPushTimer !== null) window.clearTimeout(queuedPushTimer);
+	});
 	host.registerEvent(host.app.vault.on("modify", onVaultEvent));
 	host.registerEvent(host.app.vault.on("create", onVaultEvent));
 	host.registerEvent(host.app.vault.on("delete", onVaultEvent));
@@ -158,16 +166,15 @@ function dueAfter(minutes: number): number {
 	return minutes > 0 ? Date.now() + minutes * 60_000 : 0;
 }
 
-async function runVaultSync(
+async function runQueuedPush(
 	host: SchedulerHost,
 	controller: SyncController,
 	trackedPaths: ReadonlySet<string>,
 ): Promise<void> {
 	if (!isStorageConfigured(host.settings)) return;
-	if (!host.settings.autoRefreshOnFileChange) return;
+	if (!host.settings.autoPushAfterChange) return;
 	await controller.refresh();
-	if (!host.settings.autoPushOnSave) return;
 	await controller.autoPushFromSnapshot(
-		host.settings.autoPushOnSaveCurrentFileOnly ? trackedPaths : undefined,
+		host.settings.autoPushChangedFilesOnly ? trackedPaths : undefined,
 	);
 }

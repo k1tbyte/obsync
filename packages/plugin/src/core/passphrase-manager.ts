@@ -66,7 +66,7 @@ export class PassphraseManager {
 	}
 
 	/**
-	 * Startup auto-pull, the share service and a user command can all ask at
+	 * Startup autosync, the share service and a user command can all ask at
 	 * once; they share one prompt instead of stacking three modals.
 	 */
 	async prompt(replace: boolean): Promise<boolean> {

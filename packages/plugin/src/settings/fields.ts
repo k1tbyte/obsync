@@ -44,7 +44,16 @@ export interface NumberField extends FieldBase {
 	set: (value: number, plugin: PluginHost) => Partial<ObsyncSettings>;
 }
 
-export type SettingsField = ToggleField | TextField | NumberField;
+export interface SliderField extends FieldBase {
+	kind: typeof EFieldKind.Slider;
+	min: number;
+	max: number;
+	step?: number;
+	get: (settings: ObsyncSettings) => number;
+	set: (value: number, plugin: PluginHost) => Partial<ObsyncSettings>;
+}
+
+export type SettingsField = ToggleField | TextField | NumberField | SliderField;
 
 /** Uniform save path ensures scope refreshes and re-renders behave identically. */
 export function renderFields(
@@ -85,6 +94,17 @@ function renderField(
 			text
 				.setValue(field.get(ctx.plugin.settings))
 				.onChange((raw) => apply(field.set(field.parse(raw), ctx.plugin))),
+		);
+		return;
+	}
+
+	if (field.kind === EFieldKind.Slider) {
+		setting.addSlider((slider) =>
+			slider
+				.setLimits(field.min, field.max, field.step ?? 1)
+				.setValue(field.get(ctx.plugin.settings))
+				.setDynamicTooltip()
+				.onChange((value) => apply(field.set(value, ctx.plugin))),
 		);
 		return;
 	}

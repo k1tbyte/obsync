@@ -13,6 +13,14 @@
 	color: var(--text-on-accent);
 }
 
+.obsync-settings-nav {
+	flex-wrap: wrap;
+}
+
+.obsync-settings-nav .obsync-settings-tab-button {
+	flex: 0 1 auto;
+}
+
 .obsync-log-list {
 	display: flex;
 	flex-direction: column;

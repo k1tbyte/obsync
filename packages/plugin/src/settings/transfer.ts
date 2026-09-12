@@ -11,12 +11,15 @@ import {
 	activeStorage,
 	DEFAULT_SETTINGS,
 	DEFAULT_SETTINGS_SYNC,
+	type LegacyAutomationSettings,
 	mergeSettings,
+	migrateLegacyAutomationSettings,
 	type ObsyncSettings,
 	type SettingsSyncCategories,
 } from "./model";
 
-const TRANSFER_VERSION = 4;
+const TRANSFER_VERSION = 5;
+const LEGACY_TRANSFER_VERSION = 4;
 const TRANSFER_SALT_BYTES = 16;
 const TRANSFER_PARTS = 4;
 export const TRANSFER_ACTION = "obsync";
@@ -129,37 +132,37 @@ const TRANSFER_FIELDS = [
 	},
 	{
 		section: ETransferSection.Automation,
-		settingsKey: "autoPullOnStartup",
-		transferKey: "u",
+		settingsKey: "autoSyncEnabled",
+		transferKey: "x",
 		kind: ETransferFieldKind.Bool,
 	},
 	{
 		section: ETransferSection.Automation,
-		settingsKey: "autoPullIntervalMinutes",
+		settingsKey: "autoSyncIntervalMinutes",
 		transferKey: "n",
 		kind: ETransferFieldKind.Num,
 	},
 	{
 		section: ETransferSection.Automation,
-		settingsKey: "autoPushIntervalMinutes",
-		transferKey: "b",
-		kind: ETransferFieldKind.Num,
-	},
-	{
-		section: ETransferSection.Automation,
-		settingsKey: "autoRefreshOnFileChange",
-		transferKey: "f",
+		settingsKey: "autoPushAfterSync",
+		transferKey: "z",
 		kind: ETransferFieldKind.Bool,
 	},
 	{
 		section: ETransferSection.Automation,
-		settingsKey: "autoPushOnSave",
+		settingsKey: "autoPushAfterChange",
 		transferKey: "p",
 		kind: ETransferFieldKind.Bool,
 	},
 	{
 		section: ETransferSection.Automation,
-		settingsKey: "autoPushOnSaveCurrentFileOnly",
+		settingsKey: "autoPushSettleSeconds",
+		transferKey: "g",
+		kind: ETransferFieldKind.Num,
+	},
+	{
+		section: ETransferSection.Automation,
+		settingsKey: "autoPushChangedFilesOnly",
 		transferKey: "c",
 		kind: ETransferFieldKind.Bool,
 	},
@@ -221,6 +224,7 @@ interface EncodedTransferBytes {
 }
 
 interface ParsedTransferToken {
+	version: number;
 	encoding: ETransferEncoding;
 	salt: Uint8Array;
 	ciphertext: Uint8Array;
@@ -306,10 +310,10 @@ export async function readSettingsTransfer(
 	const encoded = await decryptBytes(key, parsed.ciphertext);
 	const plaintext = await decodeTransferBytes(parsed.encoding, encoded);
 	const payload = JSON.parse(decoder.decode(plaintext)) as unknown;
-	if (!isTransferPayload(payload)) {
+	if (!isTransferPayload(payload, parsed.version)) {
 		throw new Error("Invalid Obsync settings transfer payload");
 	}
-	return expandTransferPayload(payload);
+	return expandTransferPayload(payload, parsed.version);
 }
 
 export function mergeTransferredSettings(
@@ -355,6 +359,7 @@ function createTransferPayload(
 
 function expandTransferPayload(
 	payload: SettingsTransferPayload,
+	version: number,
 ): ObsyncTransferSettings {
 	const result: ObsyncTransferSettings = {};
 	if (payload.s) {
@@ -370,11 +375,33 @@ function expandTransferPayload(
 	}
 	if (payload.a) {
 		applySectionDefaults(result, payload.a, ETransferSection.Automation);
+		if (version === LEGACY_TRANSFER_VERSION) {
+			Object.assign(result, expandLegacyAutomation(payload.a));
+		}
 	}
 	if (payload.l) {
 		applySectionDefaults(result, payload.l, ETransferSection.Realtime);
 	}
 	return result;
+}
+
+function expandLegacyAutomation(
+	section: SectionPayload,
+): ReturnType<typeof migrateLegacyAutomationSettings> {
+	const legacy: LegacyAutomationSettings = {
+		autoPullIntervalMinutes:
+			typeof section.n === "number"
+				? section.n
+				: DEFAULT_SETTINGS.autoSyncIntervalMinutes,
+		autoPushIntervalMinutes:
+			typeof section.b === "number"
+				? section.b
+				: DEFAULT_SETTINGS.autoSyncIntervalMinutes,
+		autoRefreshOnFileChange: section.f === undefined,
+		autoPushOnSave: section.p !== undefined,
+		autoPushOnSaveCurrentFileOnly: section.c !== undefined,
+	};
+	return migrateLegacyAutomationSettings(legacy);
 }
 
 function createSectionPayload(
@@ -452,7 +479,8 @@ function parseTransferToken(token: string): ParsedTransferToken {
 		string,
 		string,
 	];
-	if (Number.parseInt(versionText, 10) !== TRANSFER_VERSION) {
+	const version = Number.parseInt(versionText, 10);
+	if (version !== TRANSFER_VERSION && version !== LEGACY_TRANSFER_VERSION) {
 		throw new Error("Unsupported Obsync settings transfer token");
 	}
 	const encoding = TRANSFER_ENCODINGS[encodingText];
@@ -463,7 +491,12 @@ function parseTransferToken(token: string): ParsedTransferToken {
 	if (salt.length !== TRANSFER_SALT_BYTES) {
 		throw new Error("Invalid Obsync settings transfer token");
 	}
-	return { encoding, salt, ciphertext: base64UrlToBytes(ciphertextText) };
+	return {
+		version,
+		encoding,
+		salt,
+		ciphertext: base64UrlToBytes(ciphertextText),
+	};
 }
 
 function extractTransferToken(input: string): string {
@@ -496,7 +529,10 @@ function decodeSyncMask(mask: number): SettingsSyncCategories {
 	return settingsSync;
 }
 
-function isTransferPayload(value: unknown): value is SettingsTransferPayload {
+function isTransferPayload(
+	value: unknown,
+	version: number,
+): value is SettingsTransferPayload {
 	if (!value || typeof value !== "object") return false;
 	const payload = value as Partial<SettingsTransferPayload>;
 	const hasSection =
@@ -507,10 +543,14 @@ function isTransferPayload(value: unknown): value is SettingsTransferPayload {
 	if (!hasSection) return false;
 	if (!isOptionalStoragePayload(payload.s)) return false;
 	if (!isOptionalScopePayload(payload.q)) return false;
-	if (!isOptionalSectionPayload(payload.a, ETransferSection.Automation)) {
+	if (
+		!isOptionalSectionPayload(payload.a, ETransferSection.Automation, version)
+	) {
 		return false;
 	}
-	if (!isOptionalSectionPayload(payload.l, ETransferSection.Realtime)) {
+	if (
+		!isOptionalSectionPayload(payload.l, ETransferSection.Realtime, version)
+	) {
 		return false;
 	}
 	return true;
@@ -538,10 +578,27 @@ function isOptionalScopePayload(value: unknown): boolean {
 function isOptionalSectionPayload(
 	value: unknown,
 	section: ETransferSection,
+	version: number,
 ): boolean {
 	if (value === undefined) return true;
 	if (!isPlainObject(value)) return false;
-	return isSectionShape(value as SectionPayload, section);
+	const payload = value as SectionPayload;
+	if (!isSectionShape(payload, section)) return false;
+	if (
+		version !== LEGACY_TRANSFER_VERSION ||
+		section !== ETransferSection.Automation
+	) {
+		return true;
+	}
+	return (
+		isValidFieldValue(
+			payload.b,
+			DEFAULT_SETTINGS.autoSyncIntervalMinutes,
+			ETransferFieldKind.Num,
+		) &&
+		isValidFieldValue(payload.u, true, ETransferFieldKind.Bool) &&
+		isValidFieldValue(payload.f, true, ETransferFieldKind.Bool)
+	);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

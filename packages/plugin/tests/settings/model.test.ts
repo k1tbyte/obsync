@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AUTO_PUSH_SETTLE_MAX_SECONDS } from "@/constants";
 import {
 	DEFAULT_SETTINGS,
 	isShareStorageConfigured,
@@ -11,13 +12,6 @@ describe("mergeSettings", () => {
 	it("defaults historyAutoRefresh to true when absent", () => {
 		expect(mergeSettings(null).historyAutoRefresh).toBe(true);
 		expect(mergeSettings({}).historyAutoRefresh).toBe(true);
-	});
-
-	it("defaults autoRefreshOnFileChange to true when absent", () => {
-		expect(mergeSettings(null).autoRefreshOnFileChange).toBe(true);
-		expect(
-			mergeSettings({ autoRefreshOnFileChange: false }).autoRefreshOnFileChange,
-		).toBe(false);
 	});
 
 	it("preserves an explicit historyAutoRefresh: false", () => {
@@ -86,13 +80,17 @@ describe("mergeSettings", () => {
 describe("mergeSettings clamps", () => {
 	it("refuses a negative or zero value and falls back to the default", () => {
 		const merged = mergeSettings({
-			autoPullIntervalMinutes: -5,
+			autoSyncIntervalMinutes: -5,
+			autoPushSettleSeconds: 0,
 			maxFileBytes: 0,
 			fileHistoryMaxSnapshots: 0,
 		});
 
-		expect(merged.autoPullIntervalMinutes).toBe(
-			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		expect(merged.autoSyncIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoSyncIntervalMinutes,
+		);
+		expect(merged.autoPushSettleSeconds).toBe(
+			DEFAULT_SETTINGS.autoPushSettleSeconds,
 		);
 		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
 		expect(merged.fileHistoryMaxSnapshots).toBe(
@@ -102,43 +100,110 @@ describe("mergeSettings clamps", () => {
 
 	it("caps a value that is merely greedy", () => {
 		const merged = mergeSettings({
-			autoPullIntervalMinutes: 999_999,
+			autoSyncIntervalMinutes: 999_999,
+			autoPushSettleSeconds: 999,
 			fileHistoryMaxSnapshots: 1e9,
 		});
 
-		expect(merged.autoPullIntervalMinutes).toBe(24 * 60);
+		expect(merged.autoSyncIntervalMinutes).toBe(24 * 60);
+		expect(merged.autoPushSettleSeconds).toBe(AUTO_PUSH_SETTLE_MAX_SECONDS);
 		expect(merged.fileHistoryMaxSnapshots).toBe(1000);
 	});
 
 	it("ignores a number that is not one", () => {
 		const merged = mergeSettings({
 			maxFileBytes: Number.NaN,
-			autoPullIntervalMinutes: "10" as unknown as number,
+			autoSyncIntervalMinutes: "10" as unknown as number,
 		});
 
 		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
-		expect(merged.autoPullIntervalMinutes).toBe(
-			DEFAULT_SETTINGS.autoPullIntervalMinutes,
+		expect(merged.autoSyncIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoSyncIntervalMinutes,
 		);
 	});
 
 	it("keeps a value that is already in range", () => {
 		expect(
-			mergeSettings({ autoPullIntervalMinutes: 15 }).autoPullIntervalMinutes,
+			mergeSettings({ autoSyncIntervalMinutes: 15 }).autoSyncIntervalMinutes,
 		).toBe(15);
 	});
 
-	it("defaults autoPushIntervalMinutes to disabled and clamps it", () => {
-		expect(mergeSettings(null).autoPushIntervalMinutes).toBe(0);
+	it("migrates the shortest enabled legacy interval", () => {
 		expect(
-			mergeSettings({ autoPushIntervalMinutes: -5 }).autoPushIntervalMinutes,
-		).toBe(0);
+			mergeSettings({
+				autoPullIntervalMinutes: 30,
+				autoPushIntervalMinutes: 10,
+			}).autoSyncIntervalMinutes,
+		).toBe(10);
 		expect(
 			mergeSettings({ autoPushIntervalMinutes: 999_999 })
-				.autoPushIntervalMinutes,
+				.autoSyncIntervalMinutes,
 		).toBe(24 * 60);
 		expect(
-			mergeSettings({ autoPushIntervalMinutes: 20 }).autoPushIntervalMinutes,
+			mergeSettings({
+				autoSyncIntervalMinutes: 45,
+				autoPullIntervalMinutes: 5,
+			}).autoSyncIntervalMinutes,
+		).toBe(45);
+		expect(
+			mergeSettings({ autoPushIntervalMinutes: -5 }).autoSyncIntervalMinutes,
+		).toBe(0);
+	});
+	it("turns the autosync toggle on for a saved interval from before the toggle existed", () => {
+		const merged = mergeSettings({ autoSyncIntervalMinutes: 30 });
+		expect(merged.autoSyncEnabled).toBe(true);
+		expect(merged.autoPushAfterSync).toBe(true);
+		expect(mergeSettings(null).autoSyncEnabled).toBe(false);
+		expect(mergeSettings({ autoSyncIntervalMinutes: 0 }).autoSyncEnabled).toBe(
+			false,
+		);
+	});
+	it("keeps a legacy pull-only device pull-only", () => {
+		const merged = mergeSettings({ autoPullIntervalMinutes: 15 });
+		expect(merged.autoSyncEnabled).toBe(true);
+		expect(merged.autoSyncIntervalMinutes).toBe(15);
+		expect(merged.autoPushAfterSync).toBe(false);
+	});
+	it("keeps an explicit autosync toggle and push preference", () => {
+		const merged = mergeSettings({
+			autoSyncEnabled: false,
+			autoSyncIntervalMinutes: 30,
+			autoPushAfterSync: false,
+		});
+		expect(merged.autoSyncEnabled).toBe(false);
+		expect(merged.autoPushAfterSync).toBe(false);
+	});
+
+	it("migrates legacy push-after-save settings", () => {
+		const merged = mergeSettings({
+			autoPushOnSave: true,
+			autoPushOnSaveCurrentFileOnly: true,
+		});
+		expect(merged.autoPushAfterChange).toBe(true);
+		expect(merged.autoPushChangedFilesOnly).toBe(true);
+		expect("autoPushOnSave" in merged).toBe(false);
+		expect("autoRefreshOnFileChange" in merged).toBe(false);
+	});
+
+	it("keeps legacy push-after-save disabled when file refresh was off", () => {
+		const merged = mergeSettings({
+			autoRefreshOnFileChange: false,
+			autoPushOnSave: true,
+		});
+		expect(merged.autoPushAfterChange).toBe(false);
+	});
+
+	it("prefers explicit current automation settings over legacy values", () => {
+		const merged = mergeSettings({
+			autoPushAfterChange: false,
+			autoPushChangedFilesOnly: false,
+			autoPushOnSave: true,
+			autoPushOnSaveCurrentFileOnly: true,
+		});
+		expect(merged.autoPushAfterChange).toBe(false);
+		expect(merged.autoPushChangedFilesOnly).toBe(false);
+		expect(
+			mergeSettings({ autoSyncIntervalMinutes: 20 }).autoSyncIntervalMinutes,
 		).toBe(20);
 	});
 });
