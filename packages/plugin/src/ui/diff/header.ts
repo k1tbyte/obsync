@@ -1,13 +1,11 @@
 import { EDiffDirection } from "@/sync/projection";
+import { appendIconButton } from "./rail";
 
 export interface DiffHeaderState {
 	path: string;
-	summaryText: string;
 	direction: EDiffDirection | null;
 	isBinary: boolean;
-	hunkCount: number;
 	isEditing: boolean;
-	modeButtonLabel: string | null;
 	canGoPrevFile: boolean;
 	canGoNextFile: boolean;
 	/** Names the side a history restore would take, when that is ambiguous. */
@@ -18,16 +16,19 @@ export interface DiffHeaderActions {
 	saveResolution: () => void;
 	cancelResolution: () => void;
 	restoreVersion: () => void;
-	jumpPrevHunk: () => void;
-	jumpNextHunk: () => void;
-	toggleMode: () => void;
 	keepLocal: () => void;
 	acceptRemote: () => void;
+	/** Keeps the local file and parks the remote version beside it as a copy. */
+	keepBothVersions: () => void;
 	startMerge: () => void;
 	goPrevFile: () => void;
 	goNextFile: () => void;
 }
 
+/**
+ * Path, file-level actions and file navigation. Change navigation and the
+ * layout toggle live in the panel toolbars, next to the changes they move.
+ */
 export function renderDiffHeader(
 	parent: HTMLElement,
 	state: DiffHeaderState,
@@ -35,15 +36,16 @@ export function renderDiffHeader(
 ): void {
 	parent.empty();
 	parent.createSpan({ cls: "obsync-diff-path", text: state.path });
-	parent.createSpan({
-		cls: "obsync-diff-summary",
-		text: state.summaryText,
-	});
 
 	if (state.direction === null) return;
 	if (state.isEditing) {
-		appendButton(parent, "Save resolution", actions.saveResolution);
-		appendButton(parent, "Cancel", actions.cancelResolution);
+		appendIconButton(
+			parent,
+			"check",
+			"Save and push",
+			actions.saveResolution,
+		).addClass("mod-cta");
+		appendIconButton(parent, "x", "Cancel merge", actions.cancelResolution);
 		return;
 	}
 
@@ -53,30 +55,19 @@ export function renderDiffHeader(
 			state.restoreLabel ?? "Restore this version",
 			actions.restoreVersion,
 		);
-		appendHunkNavigation(parent, state, actions);
-		appendModeToggle(parent, state, actions);
 		return;
 	}
 
 	if (state.direction === EDiffDirection.Conflict) {
 		appendButton(parent, "Keep local", actions.keepLocal);
 		appendButton(parent, "Accept remote", actions.acceptRemote);
-		if (!state.isBinary) appendButton(parent, "Merge…", actions.startMerge);
+		if (!state.isBinary) {
+			appendButton(parent, "Keep both versions", actions.keepBothVersions);
+			appendButton(parent, "Merge…", actions.startMerge);
+		}
 	}
 
-	appendHunkNavigation(parent, state, actions);
 	appendFileNavigation(parent, state, actions);
-	appendModeToggle(parent, state, actions);
-}
-
-function appendHunkNavigation(
-	parent: HTMLElement,
-	state: DiffHeaderState,
-	actions: DiffHeaderActions,
-): void {
-	if (state.isBinary || state.hunkCount === 0) return;
-	appendButton(parent, "↑", actions.jumpPrevHunk, "Previous hunk");
-	appendButton(parent, "↓", actions.jumpNextHunk, "Next hunk");
 }
 
 function appendFileNavigation(
@@ -100,23 +91,13 @@ function appendFileNavigation(
 	);
 }
 
-function appendModeToggle(
-	parent: HTMLElement,
-	state: DiffHeaderState,
-	actions: DiffHeaderActions,
-): void {
-	// Both modes render a binary diff the same way, so the toggle would do nothing.
-	if (state.isBinary || !state.modeButtonLabel) return;
-	appendButton(parent, state.modeButtonLabel, actions.toggleMode);
-}
-
 function appendButton(
 	parent: HTMLElement,
 	text: string,
 	onClick: () => void,
 	ariaLabel?: string,
 	disabled = false,
-): void {
+): HTMLButtonElement {
 	const button = parent.createEl("button", {
 		cls: "obsync-icon-btn",
 		text,
@@ -124,4 +105,5 @@ function appendButton(
 	if (ariaLabel) button.setAttr("aria-label", ariaLabel);
 	button.disabled = disabled;
 	button.addEventListener("click", onClick);
+	return button;
 }

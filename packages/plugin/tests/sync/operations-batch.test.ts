@@ -3,7 +3,11 @@ import { pairedSessions, useEncryptionKey } from "@tests/helpers/session";
 import { describe, expect, it } from "vitest";
 import { pullPaths } from "@/sync/engine";
 import { batchAcceptRemoteOp, pullPathsOp } from "@/sync/operations/pull";
-import { batchKeepLocalOp, pushPathsOp } from "@/sync/operations/push";
+import {
+	batchKeepLocalOp,
+	keepBothConflictOp,
+	pushPathsOp,
+} from "@/sync/operations/push";
 import { revertPathsOp } from "@/sync/operations/revert";
 import { recomputeAfterWrite } from "@/sync/session-state";
 
@@ -180,5 +184,41 @@ describe("batch operations", () => {
 		await expect(
 			pushPathsOp(a.deps(), aResult, ["note.md"], a.context()),
 		).rejects.toThrow(/conflicts/);
+	});
+
+	it("keep-both parks the remote version beside the file and publishes only the local side", async () => {
+		const [a, b] = await syncedPair({ "note.md": "shared\n" });
+
+		b.adapter.putText("note.md", "remote edit\n");
+		const bResult = await b.compare();
+		await pushPathsOp(b.deps(), bResult, ["note.md"], b.context());
+
+		a.adapter.putText("note.md", "local edit\n");
+		const aResult = await a.compare();
+		expect(aResult.diff.conflicts.map((c) => c.path)).toEqual(["note.md"]);
+
+		const outcome = await keepBothConflictOp(
+			a.deps(),
+			aResult,
+			"note.md",
+			a.context(),
+		);
+
+		// The conflict resolves by publishing the local content.
+		expect(a.text("note.md")).toBe("local edit\n");
+		expect(outcome.newRemote?.files["note.md"]).toBeDefined();
+
+		// The remote version survives as a conflict copy, unpublished by this op.
+		const listed = await a.adapter.list("");
+		const copy = listed.files.find((p) => p.startsWith("note (conflict from "));
+		expect(copy).toBeDefined();
+		if (!copy) return;
+		expect(a.text(copy)).toBe("remote edit\n");
+		expect(outcome.newRemote?.files[copy]).toBeUndefined();
+
+		// The copy is an ordinary new local file: it publishes with the next push.
+		const after = await a.compare();
+		expect(after.diff.localChanges.map((c) => c.path)).toEqual([copy]);
+		expect(after.diff.conflicts).toHaveLength(0);
 	});
 });

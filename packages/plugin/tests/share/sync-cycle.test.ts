@@ -4,11 +4,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { importAesKey, randomBytes } from "@/crypto";
 import { createShareScopePolicy } from "@/share/scope";
 import { ScopedVaultAdapter } from "@/share/scoped-adapter";
-import {
-	conflictCopyPath,
-	runShareSyncCycle,
-	type ShareCycleOutcome,
-} from "@/share/sync-cycle";
+import { runShareSyncCycle, type ShareCycleOutcome } from "@/share/sync-cycle";
+import { conflictCopyPath } from "@/sync/conflict-copy";
 import type { EngineDependencies } from "@/sync/engine";
 import type { SessionState } from "@/sync/types";
 

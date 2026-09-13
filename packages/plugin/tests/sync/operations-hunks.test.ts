@@ -4,11 +4,11 @@ import {
 	useEncryptionKey,
 } from "@tests/helpers/session";
 import { describe, expect, it } from "vitest";
-import { computeHunks } from "@/sync/hunks";
+import { computeHunks, type HunkSelection } from "@/sync/hunks";
 import { EHunkPair, loadHunkSides } from "@/sync/operations";
-import { batchAcceptRemoteOp, pullHunksOp } from "@/sync/operations/pull";
-import { pushHunksOp, pushPathsOp } from "@/sync/operations/push";
-import { revertHunksOp } from "@/sync/operations/revert";
+import { localHunksOp, pullHunksOp } from "@/sync/operations/hunks";
+import { batchAcceptRemoteOp } from "@/sync/operations/pull";
+import { pushPathsOp } from "@/sync/operations/push";
 import { recomputeAfterWrite } from "@/sync/session-state";
 
 useEncryptionKey();
@@ -29,6 +29,11 @@ const BASE_TEXT = [
 
 /** The same file with two edits far enough apart to stay separate hunks. */
 const TWO_EDITS = BASE_TEXT.replace("alpha", "ALPHA").replace("kappa", "KAPPA");
+
+/** Every edit in these fixtures is one segment, so a hunk index alone names it. */
+function pick(...hunks: number[]): HunkSelection {
+	return new Map(hunks.map((index) => [index, new Set([0])]));
+}
 
 async function sync(
 	session: TestSession,
@@ -57,10 +62,10 @@ describe("hunk operations", () => {
 		expect(sides.left).toBe(BASE_TEXT);
 		expect(sides.right).toBe(TWO_EDITS);
 
-		const outcome = await pushHunksOp(
+		const outcome = await localHunksOp(
 			session.deps(),
 			result,
-			{ path: "note.md", selected: new Set([0]) },
+			{ path: "note.md", push: pick(0), revert: pick() },
 			session.context(),
 		);
 
@@ -89,12 +94,13 @@ describe("hunk operations", () => {
 		const result = await session.compare();
 
 		await expect(
-			pushHunksOp(
+			localHunksOp(
 				session.deps(),
 				result,
 				{
 					path: "note.md",
-					selected: new Set([0]),
+					push: pick(0),
+					revert: pick(),
 					expected: { left: "stale", right: "stale" },
 				},
 				session.context(),
@@ -115,10 +121,10 @@ describe("hunk operations", () => {
 		a.adapter.putText("note.md", TWO_EDITS);
 		const aResult = await a.compare();
 		await expect(
-			pushHunksOp(
+			localHunksOp(
 				a.deps(),
 				aResult,
-				{ path: "note.md", selected: new Set([0]) },
+				{ path: "note.md", push: pick(0), revert: pick() },
 				a.context(),
 			),
 		).rejects.toThrow(/pull first|conflict/i);
@@ -131,10 +137,10 @@ describe("hunk operations", () => {
 		const result = await session.compare();
 
 		await expect(
-			pushHunksOp(
+			localHunksOp(
 				session.deps(),
 				result,
-				{ path: "note.md", selected: new Set() },
+				{ path: "note.md", push: pick(), revert: pick() },
 				session.context(),
 			),
 		).rejects.toThrow(/No hunks selected/);
@@ -156,10 +162,10 @@ describe("hunk operations", () => {
 		const result = await session.compare();
 
 		await expect(
-			revertHunksOp(
+			localHunksOp(
 				session.deps(),
 				result,
-				{ path: "blob.bin", selected: new Set([0]) },
+				{ path: "blob.bin", push: pick(), revert: pick(0) },
 				session.context(),
 			),
 		).rejects.toThrow(/text files/);
@@ -172,10 +178,10 @@ describe("hunk operations", () => {
 		await session.adapter.remove("note.md");
 		const result = await session.compare();
 
-		const outcome = await pushHunksOp(
+		const outcome = await localHunksOp(
 			session.deps(),
 			result,
-			{ path: "note.md", selected: new Set([0]) },
+			{ path: "note.md", push: pick(0), revert: pick() },
 			session.context(),
 		);
 
@@ -200,7 +206,7 @@ describe("hunk operations", () => {
 		const outcome = await pullHunksOp(
 			b.deps(),
 			bResult,
-			{ path: "note.md", selected: new Set([0]) },
+			{ path: "note.md", selected: pick(0) },
 			b.context(),
 		);
 
@@ -218,16 +224,89 @@ describe("hunk operations", () => {
 		session.adapter.putText("added.md", "brand new\n");
 		const result = await session.compare();
 
-		const outcome = await revertHunksOp(
+		const outcome = await localHunksOp(
 			session.deps(),
 			result,
-			{ path: "added.md", selected: new Set([0]) },
+			{ path: "added.md", push: pick(), revert: pick(0) },
 			session.context(),
 		);
 
 		expect(await session.adapter.exists("added.md")).toBe(false);
 		expect(outcome.localEntries?.get("added.md")).toBeNull();
 		expect(session.state.hashCache["added.md"]).toBeUndefined();
+	});
+
+	it("pushes and reverts segments of one hunk from the same diff", async () => {
+		const session = new TestSession();
+		const base = `${Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
+		await sync(session, "note.md", base);
+		// Two edits two lines apart share a hunk but form separate segments;
+		// a third edit far away is its own hunk and stays pending.
+		const edited = base
+			.replace("line 2\n", "LINE 2\n")
+			.replace("line 5\n", "LINE 5\n")
+			.replace("line 18\n", "LINE 18\n");
+		session.adapter.putText("note.md", edited);
+		const result = await session.compare();
+		const sides = await loadHunkSides(
+			session.deps(),
+			result,
+			"note.md",
+			EHunkPair.Local,
+		);
+		expect(computeHunks(sides.left, sides.right).hunks).toHaveLength(2);
+
+		const outcome = await localHunksOp(
+			session.deps(),
+			result,
+			{
+				path: "note.md",
+				push: new Map([[0, new Set([0])]]),
+				revert: new Map([[0, new Set([1])]]),
+			},
+			session.context(),
+		);
+
+		// Local keeps LINE 2 and LINE 18; the reverted LINE 5 is back to the baseline.
+		expect(session.text("note.md")).toBe(
+			base.replace("line 2\n", "LINE 2\n").replace("line 18\n", "LINE 18\n"),
+		);
+		// The remote received only the pushed segment.
+		const recomputed = recomputeAfterWrite(
+			result,
+			session.state,
+			outcome,
+			session.deps().scope,
+		);
+		expect(recomputed.diff.localChanges.map((c) => c.path)).toEqual([
+			"note.md",
+		]);
+		const after = await session.compare();
+		const remaining = await loadHunkSides(
+			session.deps(),
+			after,
+			"note.md",
+			EHunkPair.Local,
+		);
+		expect(remaining.left).toBe(base.replace("line 2\n", "LINE 2\n"));
+	});
+
+	it("a pure revert publishes nothing", async () => {
+		const session = new TestSession();
+		await sync(session, "note.md", BASE_TEXT);
+		session.adapter.putText("note.md", TWO_EDITS);
+		const result = await session.compare();
+		const before = result.remote;
+
+		const outcome = await localHunksOp(
+			session.deps(),
+			result,
+			{ path: "note.md", push: pick(), revert: pick(1) },
+			session.context(),
+		);
+
+		expect(outcome.newRemote).toBe(before);
+		expect(session.text("note.md")).toBe(BASE_TEXT.replace("alpha", "ALPHA"));
 	});
 });
 
@@ -248,10 +327,10 @@ describe("hunk operations on a slot that has never synced", () => {
 		const [, b] = await unsyncedAgainstRemote();
 		const result = await b.compare();
 
-		await pushHunksOp(
+		await localHunksOp(
 			b.deps(),
 			result,
-			{ path: "theirs.md", selected: new Set([0]) },
+			{ path: "theirs.md", push: pick(0), revert: pick() },
 			b.context(),
 		).catch(() => undefined);
 
@@ -266,7 +345,7 @@ describe("hunk operations on a slot that has never synced", () => {
 		await pullHunksOp(
 			b.deps(),
 			result,
-			{ path: "theirs.md", selected: new Set([0]) },
+			{ path: "theirs.md", selected: pick(0) },
 			b.context(),
 		);
 
@@ -312,7 +391,7 @@ describe("hunk operations on a slot that has never synced", () => {
 		await pullHunksOp(
 			b.deps(),
 			before,
-			{ path: "note.md", selected: new Set([0]) },
+			{ path: "note.md", selected: pick(0) },
 			b.context(),
 		);
 
@@ -338,7 +417,7 @@ describe("hunk operations on a slot that has never synced", () => {
 		await pullHunksOp(
 			b.deps(),
 			before,
-			{ path: "note.md", selected: new Set([0, 1]) },
+			{ path: "note.md", selected: pick(0, 1) },
 			b.context(),
 		);
 

@@ -4,6 +4,7 @@ import {
 	buildSessionState,
 	mergeWrittenIntoCache,
 } from "@/sync/baseline";
+import { freeConflictCopyPath } from "@/sync/conflict-copy";
 import { tryAutoMergeConflict } from "@/sync/conflict-merge";
 import { loadRemoteBytes, textToBytes } from "@/sync/content";
 import {
@@ -15,9 +16,6 @@ import {
 } from "@/sync/engine";
 import type { HashCacheEntry, Manifest, SessionState } from "@/sync/types";
 import { writeBinary } from "@/vault/io";
-
-/** Guard against an endless "(conflict from X) N" chain on one file. */
-const CONFLICT_COPY_LIMIT = 100;
 
 /** Shares log more often (every cycle), so they attach fewer paths. */
 const SHARE_LOG_PATH_LIMIT = 25;
@@ -205,48 +203,13 @@ async function writeConflictCopy(
 			`Cannot keep the remote version of "${path}": its object is missing`,
 		);
 	}
-	const copyPath = await freeConflictCopyPath(deps, path, remoteDeviceName);
+	const copyPath = await freeConflictCopyPath(
+		deps.adapter,
+		path,
+		remoteDeviceName,
+	);
 	await writeBinary(deps.adapter, copyPath, bytes);
 	return copyPath;
-}
-
-/** First unused conflict-copy name to prevent overwriting. */
-async function freeConflictCopyPath(
-	deps: EngineDependencies,
-	path: string,
-	remoteDeviceName: string | undefined,
-): Promise<string> {
-	const base = conflictCopyPath(path, remoteDeviceName);
-	if (!(await deps.adapter.exists(base))) return base;
-	// Read off the original path: `base` also carries the device name, and a
-	// dotted folder or a dotted device name must not be mistaken for an extension.
-	const slash = path.lastIndexOf("/");
-	const file = slash >= 0 ? path.slice(slash + 1) : path;
-	const dot = file.lastIndexOf(".");
-	const ext = dot > 0 ? file.slice(dot) : "";
-	const stem = ext ? base.slice(0, -ext.length) : base;
-	for (let n = 2; n < CONFLICT_COPY_LIMIT; n++) {
-		const candidate = `${stem} ${n}${ext}`;
-		if (!(await deps.adapter.exists(candidate))) return candidate;
-	}
-	throw new Error(`Too many conflict copies for "${path}"`);
-}
-
-/** "notes/todo.md" → "notes/todo (conflict from Phone 2026-07-05).md" */
-export function conflictCopyPath(
-	path: string,
-	deviceName: string | undefined,
-	now = new Date(),
-): string {
-	const slash = path.lastIndexOf("/");
-	const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
-	const file = slash >= 0 ? path.slice(slash + 1) : path;
-	const dot = file.lastIndexOf(".");
-	const stem = dot > 0 ? file.slice(0, dot) : file;
-	const ext = dot > 0 ? file.slice(dot) : "";
-	const day = now.toISOString().slice(0, 10);
-	const who = (deviceName ?? "remote").replace(/[\\/:*?"<>|]/g, "-").trim();
-	return `${dir}${stem} (conflict from ${who} ${day})${ext}`;
 }
 
 function withoutPaths(

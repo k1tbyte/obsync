@@ -1,17 +1,12 @@
-import { MergeView } from "@codemirror/merge";
-import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
 import {
 	debounce,
 	ItemView,
-	Platform,
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
 import { DIFF_VIEW_TYPE, SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
 import type { PluginHost } from "@/plugin/host";
 import { errorMessage } from "@/shared/errors";
-import { formatBytes } from "@/shared/format";
 import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
 import {
 	EDiffDirection,
@@ -19,13 +14,14 @@ import {
 	type HistoryVersionRef,
 } from "@/sync/projection";
 import {
+	ComparePanel,
 	type DiffHeaderActions,
-	type HunkCardCallbacks,
 	MergeEditorPanel,
+	renderBinaryDiff,
 	renderDiffHeader,
-	renderHunkCard,
 } from "./diff";
-import { notifyError, notifyInfo } from "./notices";
+import { DiffOperations } from "./diff/operations";
+import { notifyError } from "./notices";
 import { openSourceControlView } from "./source-control-view";
 
 interface DiffViewState {
@@ -39,43 +35,35 @@ interface DiffViewState {
 	againstSize?: number;
 }
 
-const EDiffMode = {
-	Split: "split",
-	Unified: "unified",
-} as const;
-type EDiffMode = (typeof EDiffMode)[keyof typeof EDiffMode];
-
-const HUNK_OPS = {
-	push: { ok: "Pushed the hunk.", fail: "Push hunk failed" },
-	pull: { ok: "Pulled the hunk.", fail: "Pull hunk failed" },
-	revert: { ok: "Reverted the hunk.", fail: "Revert hunk failed" },
-} as const;
-
-type HunkOpKind = keyof typeof HUNK_OPS;
-
 export class DiffView extends ItemView {
 	private readonly plugin: PluginHost;
+	private readonly operations: DiffOperations;
 	private path: string | null = null;
 	private historyHash: string | null = null;
 	private historyLabel = "Version";
 	private historySize: number | undefined;
 	private against: HistoryVersionRef | null = null;
 	private model: FileDiffModel | null = null;
-	private mode: EDiffMode = EDiffMode.Unified;
-	private merge: MergeView | null = null;
 	private readonly mergePanel = new MergeEditorPanel();
+	private comparePanel: ComparePanel | null = null;
 	private forceText = false;
 	private headerEl: HTMLElement | null = null;
 	private bodyEl: HTMLElement | null = null;
-	private hunkCards: HTMLElement[] = [];
-	private currentHunkIndex = -1;
 	private rendering = false;
 	private refreshPending = false;
-	private hunkOpInFlight = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: PluginHost) {
 		super(leaf);
 		this.plugin = plugin;
+		this.operations = new DiffOperations(plugin, {
+			state: () => ({
+				path: this.path,
+				historyHash: this.historyHash,
+				model: this.model,
+			}),
+			refresh: () => this.refreshModel(),
+			advance: (path) => this.advanceAfterResolve(path),
+		});
 	}
 
 	getViewType(): string {
@@ -124,9 +112,10 @@ export class DiffView extends ItemView {
 						size: state.againstSize,
 					}
 				: null;
-			this.currentHunkIndex = -1;
+			this.model = null;
 			this.mergePanel.reset();
 			this.forceText = false;
+			this.destroyViews();
 			await this.refreshModel();
 		}
 		await super.setState(state, result);
@@ -140,8 +129,6 @@ export class DiffView extends ItemView {
 		this.contentEl.addClass("obsync-diff-view");
 		this.headerEl = this.contentEl.createDiv({ cls: "obsync-diff-header" });
 		this.bodyEl = this.contentEl.createDiv({ cls: "obsync-diff-body" });
-		if (Platform.isMobile) this.mode = EDiffMode.Unified;
-
 		const handleStatus = debounce(
 			() => {
 				if (this.path && !this.mergePanel.isEditing) void this.refreshModel();
@@ -182,7 +169,9 @@ export class DiffView extends ItemView {
 		}
 		this.rendering = true;
 		try {
-			this.renderLoading();
+			// With content already on screen, keep it: a flash of "Loading…" would
+			// destroy the compare panel and its pending choices.
+			if (!this.model) this.renderLoading();
 			if (this.historyHash) {
 				this.model = await this.plugin.controller.getHistoryDiff({
 					path: this.path,
@@ -215,7 +204,9 @@ export class DiffView extends ItemView {
 
 			this.renderShell();
 		} catch (err) {
-			this.renderError(errorMessage(err));
+			// A failed refresh must not wipe a diff the user is making choices on.
+			if (this.model) notifyError("Refresh failed", err);
+			else this.renderError(errorMessage(err));
 		} finally {
 			this.rendering = false;
 			if (this.refreshPending) {
@@ -261,16 +252,10 @@ export class DiffView extends ItemView {
 				this.mergePanel.reset();
 				this.renderShell();
 			},
-			restoreVersion: () => void this.restoreVersion(),
-			jumpPrevHunk: () => this.jumpHunk(-1),
-			jumpNextHunk: () => this.jumpHunk(1),
-			toggleMode: () => {
-				this.mode =
-					this.mode === EDiffMode.Split ? EDiffMode.Unified : EDiffMode.Split;
-				this.renderShell();
-			},
-			keepLocal: () => void this.resolveKeepLocal(),
-			acceptRemote: () => void this.resolveAcceptRemote(),
+			restoreVersion: () => void this.operations.restoreVersion(),
+			keepLocal: () => void this.operations.keepLocal(),
+			acceptRemote: () => void this.operations.acceptRemote(),
+			keepBothVersions: () => void this.operations.keepBoth(),
 			startMerge: () =>
 				void this.mergePanel.enter(this.plugin, path, () => this.renderShell()),
 			goPrevFile: () => void this.navigateFile(-1),
@@ -280,16 +265,9 @@ export class DiffView extends ItemView {
 			header,
 			{
 				path,
-				summaryText: this.summaryText(),
 				direction: model?.direction ?? null,
 				isBinary: model?.isBinary ?? false,
-				hunkCount: model?.hunks.hunks.length ?? 0,
 				isEditing: this.mergePanel.isEditing,
-				modeButtonLabel: Platform.isMobile
-					? null
-					: this.mode === EDiffMode.Split
-						? "Unified"
-						: "Side-by-side",
 				canGoPrevFile: this.getAdjacentPath(-1) !== null,
 				canGoNextFile: this.getAdjacentPath(1) !== null,
 				restoreLabel: this.against
@@ -303,258 +281,88 @@ export class DiffView extends ItemView {
 	private renderBody(): void {
 		const body = this.bodyEl;
 		if (!body) return;
+		const model = this.model;
+		// A live compare panel updates in place so pending choices survive refreshes.
+		if (
+			model &&
+			!model.isBinary &&
+			!this.mergePanel.isEditing &&
+			this.comparePanel &&
+			model.hunks.hunks.length > 0 &&
+			this.comparePanel.update(model, this.compareActionable(model))
+		) {
+			return;
+		}
 		body.empty();
 		this.destroyViews();
-		this.hunkCards = [];
-		const model = this.model;
 		if (!model) {
 			body.createDiv({ cls: "obsync-diff-empty", text: "No diff data." });
 			return;
 		}
 		if (model.isBinary) {
-			this.renderBinaryBody(body, model);
+			renderBinaryDiff(body, model, this.forceText, () => {
+				this.forceText = true;
+				void this.refreshModel();
+			});
 			return;
 		}
 		if (this.mergePanel.isEditing) {
 			this.mergePanel.render(body);
 			return;
 		}
-		if (this.mode === EDiffMode.Split) {
-			this.renderSplit(body, model);
-			return;
-		}
-		this.renderUnified(body, model);
+		this.renderTextDiff(body, model);
 	}
 
-	private renderSplit(parent: HTMLElement, model: FileDiffModel): void {
-		const labels = parent.createDiv({ cls: "obsync-merge-labels" });
-		labels.createSpan({ text: model.leftLabel });
-		labels.createSpan({ text: model.rightLabel });
-		const host = parent.createDiv({ cls: "obsync-merge-host" });
-		this.merge = new MergeView({
-			a: {
-				doc: model.leftText,
-				extensions: [EditorState.readOnly.of(true), EditorView.lineWrapping],
-			},
-			b: {
-				doc: model.rightText,
-				extensions: [EditorState.readOnly.of(true), EditorView.lineWrapping],
-			},
-			parent: host,
-		});
-		parent.createDiv({
-			cls: "obsync-diff-hint",
-			text: "Switch to unified mode to act on individual hunks.",
-		});
-	}
-
-	private renderBinaryBody(parent: HTMLElement, model: FileDiffModel): void {
-		const wrap = parent.createDiv({ cls: "obsync-diff-binary" });
-		const delta = model.rightSize - model.leftSize;
-		const sign = delta > 0 ? "+" : delta < 0 ? "−" : "";
-		const deltaText =
-			delta === 0 ? "no size change" : `${sign}${formatBytes(Math.abs(delta))}`;
-		wrap.createDiv({
-			text: `Not shown as a text diff — ${formatBytes(
-				model.leftSize,
-			)} → ${formatBytes(model.rightSize)} (${deltaText})`,
-		});
-
-		if (model.forceTextAvailable && !this.forceText) {
-			const btn = wrap.createEl("button", {
-				cls: "obsync-icon-btn",
-				text: "Show differences anyway",
-			});
-			btn.addEventListener("click", () => {
-				this.forceText = true;
-				void this.refreshModel();
-			});
-			return;
-		}
-		if (this.forceText) {
-			wrap.createDiv({
-				cls: "obsync-diff-hint",
-				text: "File is too large or not text to diff.",
-			});
-		}
-	}
-
-	private renderUnified(parent: HTMLElement, model: FileDiffModel): void {
-		const hunks = model.hunks.hunks;
-		if (hunks.length === 0) {
+	private renderTextDiff(parent: HTMLElement, model: FileDiffModel): void {
+		if (model.hunks.hunks.length === 0) {
 			parent.createDiv({
 				cls: "obsync-diff-empty",
 				text: "No textual differences.",
 			});
 			return;
 		}
-		const list = parent.createDiv({ cls: "obsync-hunk-list" });
-		const callbacks: HunkCardCallbacks = {
-			onPushHunk: (i) => void this.runHunkOp("push", i),
-			onPullHunk: (i) => void this.runHunkOp("pull", i),
-			onRevertHunk: (i) => void this.runHunkOp("revert", i),
-			onRestoreHistoryHunk: (i) => void this.restoreHistoryHunk(i),
-			onSelectHunk: (i) => this.setCurrentHunk(i),
-		};
+		const actionable = this.compareActionable(model);
+		this.comparePanel = new ComparePanel({
+			direction: model.direction,
+			actionable,
+			onApply: (choices) => void this.operations.applyChoices(choices),
+		});
+		this.comparePanel.render(parent, model);
+		if (!actionable) {
+			parent.createDiv({
+				cls: "obsync-diff-hint",
+				text: this.hunkHintText(model),
+			});
+		}
+	}
+
+	private compareActionable(model: FileDiffModel): boolean {
 		// Disable hunk ops above HUNK_TEXT_MAX_BYTES to prevent guaranteed failures.
 		const tooLarge =
 			model.leftSize > HUNK_TEXT_MAX_BYTES ||
 			model.rightSize > HUNK_TEXT_MAX_BYTES;
-		// Per-hunk restore rebuilds the patch against the file on disk, which is not
-		// one of the sides here, so its indices would not be the ones on screen.
+		// Per-segment restore rebuilds the patch against the file on disk, which is
+		// not one of the sides here, so its indices would not be the ones on screen.
 		const comparingVersions = this.against !== null;
-		// The working copy is what a hunk restore edits; there is nothing to edit
-		// when the file is gone, which is exactly the case for a deleted file.
+		// The working copy is what a restore edits; there is nothing to edit when
+		// the file is gone, which is exactly the case for a deleted file.
 		const missingWorkingCopy =
 			model.direction === EDiffDirection.History && !model.rightPresent;
-		const actionable = !tooLarge && !comparingVersions && !missingWorkingCopy;
-		for (const hunk of hunks) {
-			this.hunkCards.push(
-				renderHunkCard(list, hunk, model.direction, callbacks, actionable),
-			);
-		}
-		if (!actionable) {
-			list.createDiv({
-				cls: "obsync-diff-hint",
-				text: hunkHintText(tooLarge, comparingVersions),
-			});
-		}
+		return !tooLarge && !comparingVersions && !missingWorkingCopy;
+	}
+
+	/** Says why segment actions are off, since the buttons simply vanish otherwise. */
+	private hunkHintText(model: FileDiffModel): string {
 		if (
-			this.currentHunkIndex >= 0 &&
-			this.currentHunkIndex < this.hunkCards.length
+			model.leftSize > HUNK_TEXT_MAX_BYTES ||
+			model.rightSize > HUNK_TEXT_MAX_BYTES
 		) {
-			this.hunkCards[this.currentHunkIndex]?.addClass("is-current");
+			return "This file is too large for per-change actions; use the whole-file buttons above.";
 		}
-	}
-
-	private setCurrentHunk(index: number): void {
-		const idx = this.hunkCards.findIndex(
-			(c) => c.getAttribute("data-hunk-index") === String(index),
-		);
-		if (idx < 0) return;
-		for (const card of this.hunkCards) card.removeClass("is-current");
-		const target = this.hunkCards[idx];
-		if (target) target.addClass("is-current");
-		this.currentHunkIndex = idx;
-	}
-
-	private jumpHunk(delta: number): void {
-		if (this.hunkCards.length === 0) return;
-		const next =
-			this.currentHunkIndex < 0
-				? delta > 0
-					? 0
-					: this.hunkCards.length - 1
-				: (this.currentHunkIndex + delta + this.hunkCards.length) %
-					this.hunkCards.length;
-		for (const card of this.hunkCards) card.removeClass("is-current");
-		const target = this.hunkCards[next];
-		if (target) {
-			target.addClass("is-current");
-			target.scrollIntoView({ block: "center", behavior: "smooth" });
+		if (this.against !== null) {
+			return "Comparing two stored versions. Use the restore button above to bring the left side back.";
 		}
-		this.currentHunkIndex = next;
-	}
-
-	private summaryText(): string {
-		const model = this.model;
-		if (!model) {
-			return "";
-		}
-		const totalAdded = model.hunks.hunks.reduce((acc, h) => acc + h.added, 0);
-		const totalRemoved = model.hunks.hunks.reduce(
-			(acc, h) => acc + h.removed,
-			0,
-		);
-		const hunkCount = model.hunks.hunks.length;
-		return `${hunkCount} hunk(s) · +${totalAdded} −${totalRemoved}`;
-	}
-
-	private async restoreVersion(): Promise<void> {
-		const { path, historyHash } = this;
-		if (!path || !historyHash) return;
-		await this.runOnFile(
-			() => this.plugin.controller.restoreFileVersion(path, historyHash),
-			"Restored version. Review and push when ready.",
-			"Restore failed",
-		);
-	}
-
-	private async restoreHistoryHunk(index: number): Promise<void> {
-		const { path, historyHash } = this;
-		if (!path || !historyHash) return;
-		await this.runOnFile(
-			() =>
-				this.plugin.controller.restoreHistoryHunks(
-					path,
-					historyHash,
-					new Set([index]),
-					this.model?.rightHash,
-				),
-			"Restored hunk. Review and push when ready.",
-			"Restore hunk failed",
-		);
-	}
-
-	private async runHunkOp(kind: HunkOpKind, index: number): Promise<void> {
-		const path = this.path;
-		const model = this.model;
-		if (!path || !model) return;
-		// Prevent concurrent hunk ops that would use stale indices.
-		if (this.hunkOpInFlight) return;
-		this.hunkOpInFlight = true;
-		const selected = new Set([index]);
-		const expected = { left: model.leftHash, right: model.rightHash };
-		const controller = this.plugin.controller;
-		const run = {
-			push: () => controller.pushHunks(path, selected, expected),
-			pull: () => controller.pullHunks(path, selected, expected),
-			revert: () => controller.revertHunks(path, selected, expected),
-		}[kind];
-		const op = HUNK_OPS[kind];
-		try {
-			await this.runOnFile(run, op.ok, op.fail);
-		} finally {
-			this.hunkOpInFlight = false;
-		}
-	}
-
-	private async resolveKeepLocal(): Promise<void> {
-		const path = this.path;
-		if (!path) return;
-		await this.runOnFile(
-			() => this.plugin.controller.resolveConflictKeepLocal(path),
-			"Kept the local version.",
-			"Resolve keep local failed",
-			() => this.advanceAfterResolve(path),
-		);
-	}
-
-	private async resolveAcceptRemote(): Promise<void> {
-		const path = this.path;
-		if (!path) return;
-		await this.runOnFile(
-			() => this.plugin.controller.resolveConflictAcceptRemote(path),
-			"Accepted the remote version.",
-			"Resolve accept remote failed",
-			() => this.advanceAfterResolve(path),
-		);
-	}
-
-	/** Runs a controller call, announces it, then re-reads the view or runs `then`. */
-	private async runOnFile(
-		action: () => Promise<void>,
-		okMessage: string,
-		failureLabel: string,
-		then: () => Promise<void> = () => this.refreshModel(),
-	): Promise<void> {
-		try {
-			await action();
-			notifyInfo(okMessage);
-			await then();
-		} catch (err) {
-			notifyError(failureLabel, err);
-		}
+		return "This file is not in the vault, so there is nothing to merge into. Restore the whole version instead.";
 	}
 
 	private async advanceAfterResolve(resolvedPath: string): Promise<void> {
@@ -611,30 +419,18 @@ export class DiffView extends ItemView {
 		this.historyLabel = "Version";
 		this.historySize = undefined;
 		this.against = null;
-		this.currentHunkIndex = -1;
+		this.model = null;
 		this.forceText = false;
 		this.mergePanel.reset();
+		this.destroyViews();
 		// updateHeader prevents the tab from keeping the previous file's name.
 		const leaf = this.leaf as Partial<{ updateHeader: () => void }>;
 		leaf.updateHeader?.();
 	}
 
 	private destroyViews(): void {
-		if (this.merge) {
-			this.merge.destroy();
-			this.merge = null;
-		}
 		this.mergePanel.destroy();
+		this.comparePanel?.destroy();
+		this.comparePanel = null;
 	}
-}
-
-/** Says why hunk actions are off, since the buttons simply vanish otherwise. */
-function hunkHintText(tooLarge: boolean, comparingVersions: boolean): string {
-	if (tooLarge) {
-		return "This file is too large for per-hunk actions; use the whole-file buttons above.";
-	}
-	if (comparingVersions) {
-		return "Comparing two stored versions. Use the restore button above to bring the left side back.";
-	}
-	return "This file is not in the vault, so there is nothing to merge into. Restore the whole version instead.";
 }

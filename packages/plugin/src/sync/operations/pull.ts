@@ -1,25 +1,13 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { formatBytes, sumBytes } from "@/shared/format";
-import {
-	baselineForPath,
-	buildSessionState,
-	mergeWrittenIntoCache,
-} from "@/sync/baseline";
+import { buildSessionState, mergeWrittenIntoCache } from "@/sync/baseline";
 import { LOG_PATH_LIMIT } from "@/sync/constants";
-import { textToBytes, writeRemoteObject } from "@/sync/content";
+import { writeRemoteObject } from "@/sync/content";
 import { pullPaths } from "@/sync/engine";
-import { applyHunks, computeHunks } from "@/sync/hunks";
 import type { Manifest, ManifestEntry } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath } from "@/vault/io";
-import { writeLocalFile } from "./local-write";
-import {
-	assertSidesUnchanged,
-	EHunkPair,
-	type HunkSidesHash,
-	loadHunkSides,
-} from "./text-loaders";
 import type { Operation, OperationOutcome } from "./types";
 
 export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
@@ -64,62 +52,6 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 		touchedPaths: pulled.cancelled ? new Set(pulled.written.keys()) : pullSet,
 		localEntries: pulled.written,
 		cancelled: pulled.cancelled,
-	};
-};
-
-export interface PullHunksArgs {
-	path: string;
-	selected: ReadonlySet<number>;
-	/** sha256 of the two sides the view computed its hunk indices from. */
-	expected?: HunkSidesHash;
-}
-
-export const pullHunksOp: Operation<PullHunksArgs> = async (
-	deps,
-	result,
-	args,
-	ctx,
-) => {
-	const { path, selected } = args;
-	if (selected.size === 0) throw new Error("No hunks selected");
-	if (!result.remote) {
-		throw new Error("Cannot pull: remote manifest is missing");
-	}
-	const remoteEntry = result.remote.files[path];
-	if (!remoteEntry) throw new Error(`Remote entry missing for ${path}`);
-
-	const sides = await loadHunkSides(deps, result, path, EHunkPair.Remote);
-	await assertSidesUnchanged(sides, args.expected);
-	const { hunks } = computeHunks(sides.left, sides.right);
-	const merged = applyHunks(sides.left, hunks, selected);
-	const localEntry = await writeLocalFile(deps, path, textToBytes(merged));
-
-	// Only a pull that took every hunk has acknowledged the remote version.
-	// Moving the baseline after a partial pull would hide the hunks that were
-	// left behind and let the next push overwrite them.
-	const baseline = baselineForPath(
-		deps.state.baseline,
-		result.remote,
-		path,
-		selected.size === hunks.length
-			? remoteEntry
-			: (deps.state.baseline?.files[path] ?? null),
-	);
-	const hashCache = { ...result.updatedCache };
-	hashCache[path] = {
-		mtime: localEntry.mtime,
-		size: localEntry.size,
-		hash: localEntry.hash,
-	};
-	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
-	await ctx.logInfo(
-		ESyncLogOperation.Pull,
-		`Pulled ${selected.size} hunk(s) of ${path}.`,
-	);
-	return {
-		newRemote: result.remote,
-		touchedPaths: new Set([path]),
-		localEntries: new Map([[path, localEntry]]),
 	};
 };
 

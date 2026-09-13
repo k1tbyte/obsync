@@ -14,17 +14,19 @@ import type {
 	SnapshotListResult,
 	VaultRestorePlan,
 } from "./history";
+import type { HunkSelection } from "./hunks";
 import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
 	batchKeepLocalOp,
 	type HunkSidesHash,
+	keepBothConflictOp,
+	type LocalHunksArgs,
+	localHunksOp,
 	type Operation,
 	pullHunksOp,
 	pullPathsOp,
-	pushHunksOp,
 	pushPathsOp,
-	revertHunksOp,
 	revertPathsOp,
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
@@ -285,7 +287,7 @@ export class SyncController {
 	async restoreHistoryHunks(
 		path: string,
 		hash: string,
-		selected: ReadonlySet<number>,
+		selected: HunkSelection,
 		expectedCurrentHash?: string,
 	): Promise<void> {
 		await this.history.restoreHistoryHunks(
@@ -319,22 +321,31 @@ export class SyncController {
 		);
 	}
 
+	/** Pushes and reverts segments of one local-change diff in a single operation. */
+	async applyLocalHunks(args: LocalHunksArgs): Promise<void> {
+		if (args.push.size === 0 && args.revert.size === 0) return;
+		await this.operations.runOperation(
+			args.push.size > 0 ? ESyncLogOperation.Push : ESyncLogOperation.Compare,
+			(deps, result, ctx) => localHunksOp(deps, result, args, ctx),
+		);
+	}
+
 	async pushHunks(
 		path: string,
-		selected: ReadonlySet<number>,
+		selected: HunkSelection,
 		expected?: HunkSidesHash,
 	): Promise<void> {
-		if (selected.size === 0) return;
-		await this.operations.runOperation(
-			ESyncLogOperation.Push,
-			(deps, result, ctx) =>
-				pushHunksOp(deps, result, { path, selected, expected }, ctx),
-		);
+		await this.applyLocalHunks({
+			path,
+			push: selected,
+			revert: new Map(),
+			expected,
+		});
 	}
 
 	async pullHunks(
 		path: string,
-		selected: ReadonlySet<number>,
+		selected: HunkSelection,
 		expected?: HunkSidesHash,
 	): Promise<void> {
 		if (selected.size === 0) return;
@@ -353,25 +364,22 @@ export class SyncController {
 		);
 	}
 
-	async revertHunks(
-		path: string,
-		selected: ReadonlySet<number>,
-		expected?: HunkSidesHash,
-	): Promise<void> {
-		if (selected.size === 0) return;
-		await this.operations.runOperation(
-			ESyncLogOperation.Compare,
-			(deps, result, ctx) =>
-				revertHunksOp(deps, result, { path, selected, expected }, ctx),
-		);
-	}
-
 	async resolveConflictKeepLocal(path: string): Promise<void> {
 		await this.resolveConflicts([path], EConflictStrategy.KeepLocal);
 	}
 
 	async resolveConflictAcceptRemote(path: string): Promise<void> {
 		await this.resolveConflicts([path], EConflictStrategy.AcceptRemote);
+	}
+	/**
+	 * Resolves a conflict by keeping the local file and parking the remote
+	 * version beside it as a conflict copy, which publishes with the next push.
+	 */
+	async resolveConflictKeepBoth(path: string): Promise<void> {
+		await this.operations.runOperation(
+			ESyncLogOperation.Push,
+			(deps, res, ctx) => keepBothConflictOp(deps, res, path, ctx),
+		);
 	}
 
 	async resolveConflicts(

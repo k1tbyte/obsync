@@ -5,6 +5,7 @@ import { sha256Hex } from "@/crypto";
 import { reportWarning } from "@/shared/diagnostics";
 import { textToBytes } from "@/sync/content";
 import type { SyncController } from "@/sync/controller";
+import { type SyncHunk, wholeHunks } from "@/sync/hunks";
 import { notifyError, notifyInfo } from "@/ui";
 
 import { toCmText } from "./helpers";
@@ -84,7 +85,7 @@ export class SignsProvider {
 	/** currentText is compared against disk before publishing so an unsaved buffer does not push a different hunk. */
 	async pushHunk(
 		path: string,
-		index: number,
+		hunk: SyncHunk,
 		currentText: string,
 	): Promise<void> {
 		const baseline = this.cache.get(path);
@@ -93,7 +94,7 @@ export class SignsProvider {
 			return;
 		}
 		try {
-			await this.controller.pushHunks(path, new Set([index]), {
+			await this.controller.pushHunks(path, wholeHunks([hunk]), {
 				left: baseline.hash,
 				right: await sha256Hex(textToBytes(currentText)),
 			});

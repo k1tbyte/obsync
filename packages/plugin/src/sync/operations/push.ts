@@ -5,28 +5,20 @@ import { formatBytes, sumBytes } from "@/shared/format";
 import {
 	advanceBaselineForPaths,
 	advanceSessionAfterPush,
-	baselineForPath,
 	buildSessionState,
 } from "@/sync/baseline";
+import { freeConflictCopyPath } from "@/sync/conflict-copy";
 import { LOG_PATH_LIMIT } from "@/sync/constants";
-import { loadLocalBytes, textToBytes } from "@/sync/content";
+import { loadLocalBytes, loadRemoteBytes } from "@/sync/content";
 import {
-	type CompareResult,
 	type EngineDependencies,
 	publishFileMap,
 	pushPaths,
-	pushSingleFile,
 } from "@/sync/engine";
-import { applyHunks, computeHunks } from "@/sync/hunks";
 import { objectKey } from "@/sync/manifest";
-import type { Manifest, ManifestEntry } from "@/sync/types";
+import type { ManifestEntry } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
-import {
-	assertSidesUnchanged,
-	EHunkPair,
-	type HunkSidesHash,
-	loadHunkSides,
-} from "./text-loaders";
+import { writeBinary } from "@/vault/io";
 import type { Operation, OperationOutcome } from "./types";
 
 export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
@@ -63,68 +55,6 @@ export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 	);
 	return { newRemote: manifest, touchedPaths: pushSet };
 };
-
-export interface PushHunksArgs {
-	path: string;
-	selected: ReadonlySet<number>;
-	/** sha256 of the two sides the view computed its hunk indices from. */
-	expected?: HunkSidesHash;
-}
-
-export const pushHunksOp: Operation<PushHunksArgs> = async (
-	deps,
-	result,
-	args,
-	ctx,
-) => {
-	const { path, selected } = args;
-	if (selected.size === 0) throw new Error("No hunks selected");
-	// Like pushPathsOp, hunk push publishes manifest and must not overwrite remote edit.
-	if (result.diff.conflicts.some((c) => c.path === path)) {
-		throw new Error("Cannot push: resolve the conflict on this file first");
-	}
-	if (result.diff.remoteChanges.some((c) => c.path === path)) {
-		throw new Error("Cannot push: this file changed on the remote; pull first");
-	}
-
-	const sides = await loadHunkSides(deps, result, path, EHunkPair.Local);
-	await assertSidesUnchanged(sides, args.expected);
-	const { hunks } = computeHunks(sides.left, sides.right);
-	const merged = applyHunks(sides.left, hunks, selected);
-	// Empty result means local deletion, not zero-byte file. Publish without path.
-	const deleted = merged === "" && !(await deps.adapter.exists(path));
-	const { manifest, entry } = deleted
-		? { manifest: await publishWithoutPath(deps, result, path), entry: null }
-		: await pushSingleFile(deps, result, {
-				path,
-				bytes: textToBytes(merged),
-			});
-	const baseline = baselineForPath(deps.state.baseline, manifest, path, entry);
-	// Local file untouched by hunk push; hash cache and snapshot retain original entry.
-	await ctx.persistState(
-		buildSessionState(deps.state, baseline, result.updatedCache),
-	);
-	await ctx.logInfo(
-		ESyncLogOperation.Push,
-		`Pushed ${selected.size} hunk(s) of ${path}.`,
-	);
-	return {
-		newRemote: manifest,
-		touchedPaths: new Set([path]),
-		localEntries: new Map([[path, result.snapshot.files[path] ?? null]]),
-	};
-};
-
-/** Republishes the remote file map with one path removed. */
-async function publishWithoutPath(
-	deps: EngineDependencies,
-	result: CompareResult,
-	path: string,
-): Promise<Manifest> {
-	const files = { ...(result.remote?.files ?? {}) };
-	delete files[path];
-	return publishFileMap(deps, result, files);
-}
 
 export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 	deps,
@@ -186,6 +116,42 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 		touchedPaths: new Set(conflictPaths),
 		localEntries,
 	};
+};
+
+/**
+ * Resolves one conflict by keeping the local file and parking the remote
+ * version beside it as a conflict copy. The copy lands before the resolution
+ * publishes, so a failed push cannot lose it; as a new local file it publishes
+ * with the next push, not with this one.
+ */
+export const keepBothConflictOp: Operation<string> = async (
+	deps,
+	result,
+	path,
+	ctx,
+): Promise<OperationOutcome> => {
+	const conflict = result.diff.conflicts.find((c) => c.path === path);
+	if (!conflict) throw new Error(`No conflict on "${path}"`);
+	const bytes = await loadRemoteBytes(
+		{ storage: deps.storage, key: deps.key },
+		conflict.remoteHash,
+	);
+	if (!bytes) {
+		throw new Error(
+			`Cannot keep the remote version of "${path}": its object is missing`,
+		);
+	}
+	const copyPath = await freeConflictCopyPath(
+		deps.adapter,
+		path,
+		result.remote?.deviceName,
+	);
+	await writeBinary(deps.adapter, copyPath, bytes);
+	await ctx.logInfo(
+		ESyncLogOperation.Push,
+		`Kept the local version of "${path}"; the remote one is saved as "${copyPath}" and publishes with the next push.`,
+	);
+	return batchKeepLocalOp(deps, result, new Set([path]), ctx);
 };
 
 async function uploadLocalAsObject(
