@@ -1,18 +1,10 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { LOG_PATH_LIMIT } from "@/sync/constants";
-import { textToBytes, writeRemoteObject } from "@/sync/content";
-import { applyHunks, computeHunks } from "@/sync/hunks";
+import { writeRemoteObject } from "@/sync/content";
 import { EChangeType, type ManifestEntry } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath } from "@/vault/io";
-import { writeLocalFile } from "./local-write";
-import {
-	assertSidesUnchanged,
-	EHunkPair,
-	type HunkSidesHash,
-	loadHunkSides,
-} from "./text-loaders";
 import type { Operation } from "./types";
 
 export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
@@ -68,59 +60,4 @@ export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 		Array.from(paths).slice(0, LOG_PATH_LIMIT),
 	);
 	return { newRemote: result.remote, touchedPaths: touched, localEntries };
-};
-
-export interface RevertHunksArgs {
-	path: string;
-	selected: ReadonlySet<number>;
-	/** sha256 of the two sides the view computed its hunk indices from. */
-	expected?: HunkSidesHash;
-}
-
-export const revertHunksOp: Operation<RevertHunksArgs> = async (
-	deps,
-	result,
-	args,
-	ctx,
-) => {
-	const { path, selected } = args;
-	if (selected.size === 0) throw new Error("No hunks selected");
-	// Reverting means keeping the baseline for the selected hunks, so the pair
-	// is the same one the local-change diff shows: baseline on the left.
-	const sides = await loadHunkSides(deps, result, path, EHunkPair.Local);
-	await assertSidesUnchanged(sides, args.expected);
-	const { hunks } = computeHunks(sides.left, sides.right);
-	const keep = new Set<number>();
-	for (let i = 0; i < hunks.length; i++) {
-		if (!selected.has(i)) keep.add(i);
-	}
-	const merged = applyHunks(sides.left, hunks, keep);
-
-	const nextHashCache = { ...result.updatedCache };
-	let localEntry: ManifestEntry | null;
-	// Reverting a local add leaves nothing; remove file instead of leaving it empty.
-	if (merged === "" && !deps.state.baseline?.files[path]) {
-		await deletePath(deps.adapter, path);
-		delete nextHashCache[path];
-		localEntry = null;
-	} else {
-		localEntry = await writeLocalFile(deps, path, textToBytes(merged));
-		nextHashCache[path] = {
-			mtime: localEntry.mtime,
-			size: localEntry.size,
-			hash: localEntry.hash,
-		};
-	}
-
-	const freshState = ctx.getFreshState() ?? deps.state;
-	await ctx.persistState({ ...freshState, hashCache: nextHashCache });
-	await ctx.logInfo(
-		ESyncLogOperation.Compare,
-		`Reverted ${selected.size} hunk(s) of ${path}.`,
-	);
-	return {
-		newRemote: result.remote,
-		touchedPaths: new Set([path]),
-		localEntries: new Map([[path, localEntry]]),
-	};
 };

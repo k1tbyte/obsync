@@ -1,3 +1,4 @@
+export { conflictCopyPath } from "@/sync/conflict-copy";
 export {
 	type BrokerAdmin,
 	isBrokerConfigured,
@@ -36,7 +37,6 @@ export { type ShareServiceHost, ShareSyncService } from "./service";
 export { ShareSessionStore } from "./session-store";
 export { ShareStatusStore } from "./status-store";
 export {
-	conflictCopyPath,
 	runShareSyncCycle,
 	type ShareCycleHooks,
 	type ShareCycleOutcome,

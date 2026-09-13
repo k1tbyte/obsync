@@ -16,14 +16,13 @@
 		"@codemirror/merge": "^6.12.2",
 		"diff": "^9.0.0",
 		"ignore": "^7.0.6",
-		"node-diff3": "^3.2.1",
 		"obsidian": "latest",
 		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {
+		"@codemirror/commands": "^6.8.1",
 		"@types/diff": "^7.0.2",
 		"@types/node": "^22.20.1",
-		"@codemirror/commands": "^6.8.1",
 		"@types/qrcode": "^1.5.6",
 		"esbuild": "^0.25.12",
 		"vitest": "^4.1.11"

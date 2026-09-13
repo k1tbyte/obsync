@@ -3,7 +3,7 @@ import type { PluginHost } from "@/plugin/host";
 import { errorMessage } from "@/shared/errors";
 import { formatBytes } from "@/shared/format";
 import type { FileDiffModel, HistoryVersionRef } from "@/sync/projection";
-import { renderHunkCard } from "@/ui/diff";
+import { renderHunkPreview } from "@/ui/diff";
 import { openPromiseModal } from "@/ui/modals/promise-modal";
 
 export interface RestoreConfirmOptions {
@@ -21,14 +21,6 @@ export interface BulkRestoreEntry {
 	label: string;
 	size: number;
 }
-
-const NO_HUNK_CALLBACKS = {
-	onPushHunk: () => {},
-	onPullHunk: () => {},
-	onRevertHunk: () => {},
-	onRestoreHistoryHunk: () => {},
-	onSelectHunk: () => {},
-};
 
 /**
  * Shows what a restore would change before doing it. The diff loads after the
@@ -167,6 +159,6 @@ function renderPreview(body: HTMLElement, model: FileDiffModel | null): void {
 		return;
 	}
 	for (const hunk of hunks) {
-		renderHunkCard(body, hunk, model.direction, NO_HUNK_CALLBACKS, false);
+		renderHunkPreview(body, hunk);
 	}
 }

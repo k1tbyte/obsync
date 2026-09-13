@@ -56,9 +56,6 @@ importers:
       ignore:
         specifier: ^7.0.6
         version: 7.0.6
-      node-diff3:
-        specifier: ^3.2.1
-        version: 3.2.1
       obsidian:
         specifier: latest
         version: 1.13.1(@codemirror/state@6.7.1)(@codemirror/view@6.43.9)
@@ -1342,10 +1339,6 @@ packages:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
-
-  node-diff3@3.2.1:
-    resolution: {integrity: sha512-eKZcJ8RtMQ3cIaA15EgmtwG927fYnRlhtdA4Q9HAcCpAZPQhhU2XptnTH9GeAkMiX2bAXxlJSAFa9shFbztPgw==}
-    engines: {bun: '>=1.3.10'}
 
   npm-run-path@5.3.0:
     resolution: {integrity: sha512-ppwTtiJZq0O/ai0z7yfudtBpWIoxM8yE6nHi1X47eFR2EWORqfbu6CnPlNsjeN683eT0qG6H/Pyf9fCcvjnnnQ==}
@@ -2718,8 +2711,6 @@ snapshots:
   mustache@4.2.0: {}
 
   nanoid@3.3.18: {}
-
-  node-diff3@3.2.1: {}
 
   npm-run-path@5.3.0:
     dependencies:

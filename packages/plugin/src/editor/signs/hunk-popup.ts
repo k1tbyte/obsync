@@ -130,7 +130,7 @@ function buildPopup(
 		});
 		pushBtn.type = "button";
 		pushBtn.addEventListener("click", () => {
-			void provider.pushHunk(path, syncHunk.index, view.state.doc.toString());
+			void provider.pushHunk(path, syncHunk, view.state.doc.toString());
 			dismissPopup();
 		});
 	}

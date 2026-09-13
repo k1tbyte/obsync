@@ -30,6 +30,8 @@ export function normalizePath(path: string): string {
 	return path;
 }
 
+export function setIcon(_el: unknown, _icon: string): void {}
+
 class Stub {}
 
 export class Notice extends Stub {}

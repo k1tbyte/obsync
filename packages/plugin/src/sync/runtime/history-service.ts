@@ -21,7 +21,12 @@ import {
 	setSnapshotPinned as storeSetSnapshotPinned,
 	type VaultRestorePlan,
 } from "@/sync/history";
-import { applyHunks, computeHunks } from "@/sync/hunks";
+import {
+	applyHunks,
+	complementSelection,
+	computeHunks,
+	type HunkSelection,
+} from "@/sync/hunks";
 import {
 	buildHistoryDiff,
 	type FileDiffModel,
@@ -158,7 +163,7 @@ export class HistoryService {
 	async restoreHistoryHunks(
 		path: string,
 		hash: string,
-		selected: ReadonlySet<number>,
+		selected: HunkSelection,
 		/** sha256 of the working copy the hunks were drawn against. */
 		expectedCurrentHash?: string,
 	): Promise<void> {
@@ -191,12 +196,13 @@ export class HistoryService {
 			// version-to-current, and an index only means anything against that patch.
 			const versionText = bytesToText(versionBytes);
 			const { hunks } = computeHunks(versionText, currentText);
-			// `applyHunks` takes the right side for selected hunks, so keeping the
-			// version's side for one hunk means selecting all the others.
-			const keepCurrent = new Set(
-				hunks.map((hunk) => hunk.index).filter((index) => !selected.has(index)),
+			// `applyHunks` takes the right side for selected segments, so keeping the
+			// version's side for one segment means selecting all the others.
+			const merged = applyHunks(
+				versionText,
+				hunks,
+				complementSelection(hunks, selected),
 			);
-			const merged = applyHunks(versionText, hunks, keepCurrent);
 			await writeBinary(session.adapter, path, textToBytes(merged));
 			await this.deps.refresh();
 		});
