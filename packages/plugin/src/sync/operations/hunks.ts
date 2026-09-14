@@ -1,6 +1,10 @@
 import { ESyncLogOperation } from "@/logs/store";
-import { baselineForPath, buildSessionState } from "@/sync/baseline";
-import { textToBytes } from "@/sync/content";
+import {
+	advanceBaselineForPaths,
+	buildSessionState,
+	mergeWrittenIntoCache,
+} from "@/sync/baseline";
+import { textToBytes, writeLocalFile } from "@/sync/content";
 import {
 	type CompareResult,
 	type EngineDependencies,
@@ -17,7 +21,6 @@ import {
 } from "@/sync/hunks";
 import type { Manifest, ManifestEntry } from "@/sync/types";
 import { deletePath } from "@/vault/io";
-import { writeLocalFile } from "./local-write";
 import {
 	assertSidesUnchanged,
 	EHunkPair,
@@ -67,7 +70,6 @@ export const localHunksOp: Operation<LocalHunksArgs> = async (
 	await assertSidesUnchanged(sides, args.expected);
 	const { hunks } = computeHunks(sides.left, sides.right);
 
-	const hashCache = { ...result.updatedCache };
 	let localEntry: ManifestEntry | null = result.snapshot.files[path] ?? null;
 	if (reverting > 0) {
 		const kept = applyHunks(
@@ -78,40 +80,38 @@ export const localHunksOp: Operation<LocalHunksArgs> = async (
 		// Reverting a local add leaves nothing; remove file instead of leaving it empty.
 		if (kept === "" && !deps.state.baseline?.files[path]) {
 			await deletePath(deps.adapter, path);
-			delete hashCache[path];
 			localEntry = null;
 		} else {
 			localEntry = await writeLocalFile(deps, path, textToBytes(kept));
-			hashCache[path] = {
-				mtime: localEntry.mtime,
-				size: localEntry.size,
-				hash: localEntry.hash,
-			};
 		}
 	}
+	// Only a revert wrote the file; otherwise the scanned cache already holds it.
+	const hashCache =
+		reverting > 0
+			? mergeWrittenIntoCache(
+					new Map([[path, localEntry]]),
+					result.updatedCache,
+				)
+			: result.updatedCache;
 
 	let manifest = result.remote;
 	if (pushing > 0) {
 		const merged = applyHunks(sides.left, hunks, push);
 		// Empty result means local deletion, not zero-byte file. Publish without path.
 		const deleted = merged === "" && !(await deps.adapter.exists(path));
-		const published = deleted
-			? { manifest: await publishWithoutPath(deps, result, path), entry: null }
-			: await pushSingleFile(deps, result, {
-					path,
-					bytes: textToBytes(merged),
-				});
-		manifest = published.manifest;
-		const baseline = baselineForPath(
+		manifest = deleted
+			? await publishWithoutPath(deps, result, path)
+			: await pushSingleFile(deps, result, path, textToBytes(merged));
+		const baseline = advanceBaselineForPaths(
 			deps.state.baseline,
 			manifest,
-			path,
-			published.entry,
+			new Set([path]),
+			result.snapshot.emptyFolders,
 		);
 		await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	} else {
 		// A revert moves no baseline; only the hash cache learns the written file.
-		const fresh = ctx.getFreshState() ?? deps.state;
+		const fresh = ctx.getFreshState();
 		await ctx.persistState({ ...fresh, hashCache });
 	}
 	const parts = [
@@ -160,20 +160,16 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 	// Only a pull that took every segment has acknowledged the remote version.
 	// Moving the baseline after a partial pull would hide the segments that were
 	// left behind and let the next push overwrite them.
-	const baseline = baselineForPath(
+	const baseline = advanceBaselineForPaths(
 		deps.state.baseline,
 		result.remote,
-		path,
-		isFullSelection(hunks, selected)
-			? remoteEntry
-			: (deps.state.baseline?.files[path] ?? null),
+		isFullSelection(hunks, selected) ? new Set([path]) : new Set<string>(),
+		result.snapshot.emptyFolders,
 	);
-	const hashCache = { ...result.updatedCache };
-	hashCache[path] = {
-		mtime: localEntry.mtime,
-		size: localEntry.size,
-		hash: localEntry.hash,
-	};
+	const hashCache = mergeWrittenIntoCache(
+		new Map([[path, localEntry]]),
+		result.updatedCache,
+	);
 	await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	await ctx.logInfo(
 		ESyncLogOperation.Pull,

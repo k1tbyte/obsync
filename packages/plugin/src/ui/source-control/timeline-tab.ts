@@ -1,9 +1,11 @@
 import type { PluginHost } from "@/plugin/host";
 import { errorMessage } from "@/shared/errors";
 import type { SnapshotListResult } from "@/sync/history";
+import type { ChangeAction } from "@/ui/change-action";
 import { notifyError, notifyInfo } from "@/ui/notices";
 
 import { openConfirmModal } from "./modals";
+import { STATUS_CLASSES, STATUS_LETTERS } from "./row-formatter";
 import {
 	buildTimelineRows,
 	describeRestorePlan,
@@ -89,7 +91,7 @@ export class TimelineTab {
 		if (this.loading) return;
 		this.loading = true;
 		const generation = this.generation;
-		this.plugin.controller
+		this.plugin.controller.history
 			.listSnapshots()
 			.then((result) => {
 				if (generation !== this.generation) return;
@@ -156,15 +158,18 @@ export class TimelineTab {
 		files: { added: string[]; modified: string[]; deleted: string[] },
 	): void {
 		const list = parent.createDiv({ cls: "obsync-timeline-files" });
-		const groups: ReadonlyArray<[string, string, readonly string[]]> = [
-			["A", "obsync-status-add", files.added],
-			["M", "obsync-status-modify", files.modified],
-			["D", "obsync-status-delete", files.deleted],
+		const groups: ReadonlyArray<[ChangeAction, readonly string[]]> = [
+			["add", files.added],
+			["modify", files.modified],
+			["delete", files.deleted],
 		];
-		for (const [letter, cls, paths] of groups) {
+		for (const [action, paths] of groups) {
 			for (const path of paths) {
 				const line = list.createDiv({ cls: "obsync-timeline-file" });
-				line.createSpan({ cls: `obsync-file-status ${cls}`, text: letter });
+				line.createSpan({
+					cls: `obsync-file-status ${STATUS_CLASSES[action]}`,
+					text: STATUS_LETTERS[action],
+				});
 				line.createSpan({ cls: "obsync-file-name", text: path });
 			}
 		}
@@ -172,10 +177,12 @@ export class TimelineTab {
 
 	private async restoreVault(row: TimelineRow): Promise<void> {
 		let plan: Awaited<
-			ReturnType<PluginHost["controller"]["previewVaultRestore"]>
+			ReturnType<PluginHost["controller"]["history"]["previewVaultRestore"]>
 		>;
 		try {
-			plan = await this.plugin.controller.previewVaultRestore(row.snapshotId);
+			plan = await this.plugin.controller.history.previewVaultRestore(
+				row.snapshotId,
+			);
 		} catch (err) {
 			notifyError("Could not work out what restoring would change", err);
 			return;
@@ -198,7 +205,9 @@ export class TimelineTab {
 		});
 		if (!confirmed) return;
 		try {
-			const applied = await this.plugin.controller.restoreVault(row.snapshotId);
+			const applied = await this.plugin.controller.history.restoreVault(
+				row.snapshotId,
+			);
 			notifyInfo(
 				`Restored ${applied.write.length} and removed ${applied.remove.length} file(s). Review and push when ready.`,
 			);

@@ -39,23 +39,27 @@ export function advanceSessionAfterPush(
 			state.baseline,
 			manifest,
 			publishedDelta(result.remote, manifest),
+			result.snapshot.emptyFolders,
 		),
 		hashCache: result.updatedCache,
 	};
 }
 
 /**
- * Moves the baseline forward for `paths` only.
+ * Moves the baseline forward for `paths` only; `onDisk` holds the empty folders
+ * on disk once the operation is done.
  *
  * Adopting the whole published manifest would also adopt remote changes this
  * device never pulled: their entries would sit in the baseline while the old
  * content sits on disk, so the next compare calls them local edits and the next
- * push overwrites the other device's work.
+ * push overwrites the other device's work. A folder listed but not on disk
+ * reads the same way, as a local deletion.
  */
 export function advanceBaselineForPaths(
 	previous: Manifest | null,
 	published: Manifest,
 	paths: ReadonlySet<string>,
+	onDisk: ReadonlyArray<string>,
 ): Manifest {
 	const files: Record<string, ManifestEntry> = {
 		...(previous?.files ?? {}),
@@ -71,8 +75,26 @@ export function advanceBaselineForPaths(
 	return {
 		...published,
 		files,
+		folders: majorityFolders(previous?.folders, published.folders, onDisk),
 		parentSnapshotId: previous?.snapshotId ?? null,
 	};
+}
+
+/**
+ * The empty folders at least two of baseline, remote and disk have. A folder the
+ * baseline shares with one side was deleted on the other and that deletion has
+ * yet to propagate; a folder on one side only is not agreed on yet.
+ */
+export function majorityFolders(
+	baseline: ReadonlyArray<string> | undefined,
+	remote: ReadonlyArray<string> | undefined,
+	local: ReadonlyArray<string>,
+): string[] {
+	const sides = new Map<string, number>();
+	for (const dir of [...(baseline ?? []), ...(remote ?? []), ...local]) {
+		sides.set(dir, (sides.get(dir) ?? 0) + 1);
+	}
+	return [...sides].filter(([, count]) => count >= 2).map(([dir]) => dir);
 }
 
 export function publishedDelta(
@@ -117,34 +139,6 @@ export function resetSessionState(state: SessionState): SessionState {
 		vaultId: null,
 		baseline: null,
 		hashCache: state.hashCache,
-	};
-}
-
-/**
- * The baseline after an operation that touched one path.
- *
- * `previous` may be null on a slot that has never synced, and that must not
- * become an excuse to adopt `published` wholesale: every remote file this
- * device has not downloaded would then sit in the baseline with nothing on
- * disk, and the next push would publish all of them as deletions.
- */
-export function baselineForPath(
-	previous: Manifest | null,
-	published: Manifest,
-	path: string,
-	entry: ManifestEntry | null,
-): Manifest {
-	const files: Record<string, ManifestEntry> = { ...(previous?.files ?? {}) };
-	if (entry) {
-		files[path] = entry;
-	} else {
-		delete files[path];
-	}
-	return {
-		...published,
-		files,
-		folders: previous?.folders ?? published.folders,
-		parentSnapshotId: previous?.snapshotId ?? null,
 	};
 }
 

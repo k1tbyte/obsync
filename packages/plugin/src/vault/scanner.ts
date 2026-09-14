@@ -220,7 +220,7 @@ async function buildEntry(
 function serialGate(): <T>(run: () => Promise<T>) => Promise<T> {
 	let tail: Promise<unknown> = Promise.resolve();
 	return <T>(run: () => Promise<T>): Promise<T> => {
-		const next = tail.then(run, run);
+		const next = tail.then(run);
 		tail = next.then(
 			() => undefined,
 			() => undefined,
@@ -400,18 +400,16 @@ async function listAllFiles(
 			unreadable.push(current);
 			continue;
 		}
-		const includedFiles: string[] = [];
 		for (const file of listing.files) {
 			if (scope.includes(file)) {
-				includedFiles.push(file);
+				files.push(file);
 			} else if (scope.isIgnoredByPattern(file)) {
 				ignored.push(file);
 			}
 		}
-		const includedFolders: string[] = [];
 		for (const folder of listing.folders) {
 			if (scope.canDescend(folder)) {
-				includedFolders.push(folder);
+				stack.push(folder);
 			} else if (scope.isIgnoredByPattern(folder)) {
 				ignored.push(folder);
 			}
@@ -424,8 +422,6 @@ async function listAllFiles(
 		) {
 			emptyFolders.push(current);
 		}
-		for (const file of includedFiles) files.push(file);
-		for (const folder of includedFolders) stack.push(folder);
 	}
 	return { files, emptyFolders, ignored, unreadable };
 }

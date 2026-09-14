@@ -1,21 +1,11 @@
-import type { App } from "obsidian";
-
 import { ESyncLogOperation } from "@/logs/store";
-import type { ObsyncSettings } from "@/settings/model";
 import { writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
 import { selectAutoPushPaths } from "./auto-push";
 import { clearRemoteTextCache, textToBytes } from "./content";
 import { defaultDeviceName } from "./device";
 import type { CompareResult, EngineDependencies } from "./engine";
-import type {
-	DeletedFilesResult,
-	FileVersion,
-	SnapshotListResult,
-	VaultRestorePlan,
-} from "./history";
 import type { HunkSelection } from "./hunks";
-import type { CleanResult, VerifyResult } from "./maintenance";
 import {
 	batchAcceptRemoteOp,
 	batchKeepLocalOp,
@@ -31,23 +21,16 @@ import {
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
 } from "./operations";
-import type { FileDiffModel, HistoryDiffRequest } from "./projection";
 import {
 	SyncControllerRuntimeState,
 	type SyncStatusListener,
 	type SyncStatusSnapshot,
 } from "./runtime/controller-state";
-import {
-	type BaselineSnapshot,
-	FileDiffService,
-	type PathStatus,
-} from "./runtime/file-diff-service";
+import { FileDiffService } from "./runtime/file-diff-service";
 import { HistoryService } from "./runtime/history-service";
 import { MaintenanceService } from "./runtime/maintenance-service";
 import { OperationRunner } from "./runtime/operation-runner";
-import type { EChangeType, LocalState } from "./types";
-
-const STATUS_EVENT = "obsync:status-changed";
+import type { LocalState } from "./types";
 
 export const EConflictStrategy = {
 	KeepLocal: "keep-local",
@@ -57,11 +40,9 @@ export type EConflictStrategy =
 	(typeof EConflictStrategy)[keyof typeof EConflictStrategy];
 
 export interface SyncControllerHost {
-	app: App;
-	settings: ObsyncSettings;
 	openSession(): Promise<EngineDependencies | null>;
 	persistState(state: LocalState): Promise<void>;
-	getState(): LocalState | null;
+	getState(): LocalState;
 	onPushComplete?(): void;
 	logInfo(
 		operation: ESyncLogOperation,
@@ -99,17 +80,14 @@ const CONFLICT_STRATEGY_OPS: Record<
 export class SyncController {
 	private readonly host: SyncControllerHost;
 	private readonly runtimeState: SyncControllerRuntimeState;
-	private readonly fileDiffs: FileDiffService;
+	readonly fileDiffs: FileDiffService;
 	private readonly operations: OperationRunner;
-	private readonly history: HistoryService;
-	private readonly maintenance: MaintenanceService;
+	readonly history: HistoryService;
+	readonly maintenance: MaintenanceService;
 
 	constructor(host: SyncControllerHost) {
 		this.host = host;
-		this.runtimeState = new SyncControllerRuntimeState({
-			emit: (snapshot) =>
-				this.host.app.workspace.trigger(STATUS_EVENT, snapshot),
-		});
+		this.runtimeState = new SyncControllerRuntimeState();
 		this.fileDiffs = new FileDiffService({
 			openSession: () => this.host.openSession(),
 			getResult: () => this.runtimeState.getResult(),
@@ -136,9 +114,8 @@ export class SyncController {
 	}
 
 	/** Current device identity for live-resolving history labels. */
-	currentDevice(): { id: string; name: string } | null {
+	currentDevice(): { id: string; name: string } {
 		const state = this.host.getState();
-		if (!state) return null;
 		return {
 			id: state.deviceId,
 			name: state.deviceName?.trim() || defaultDeviceName(),
@@ -153,14 +130,6 @@ export class SyncController {
 		this.runtimeState.dispose();
 		this.fileDiffs.clear();
 		clearRemoteTextCache();
-	}
-
-	getStatusForPath(path: string): PathStatus | null {
-		return this.fileDiffs.getStatusForPath(path);
-	}
-
-	getChangedPathStatuses(): ReadonlyMap<string, EChangeType | "conflict"> {
-		return this.fileDiffs.getChangedPathStatuses();
 	}
 
 	async refresh(): Promise<void> {
@@ -238,66 +207,6 @@ export class SyncController {
 		);
 	}
 
-	async getFileHistory(path: string): Promise<FileVersion[]> {
-		return this.history.getFileHistory(path);
-	}
-
-	async listDeletedFiles(): Promise<DeletedFilesResult> {
-		return this.history.listDeletedFiles();
-	}
-
-	async listSnapshots(): Promise<SnapshotListResult> {
-		return this.history.listSnapshots();
-	}
-
-	async previewVaultRestore(snapshotId: string): Promise<VaultRestorePlan> {
-		return this.history.previewVaultRestore(snapshotId);
-	}
-
-	async restoreVault(snapshotId: string): Promise<VaultRestorePlan> {
-		return this.history.restoreVault(snapshotId);
-	}
-
-	async setSnapshotPinned(
-		snapshotId: string,
-		pinned: boolean,
-		label?: string,
-	): Promise<void> {
-		await this.history.setSnapshotPinned(snapshotId, pinned, label);
-	}
-
-	async verifyRemote(deep: boolean): Promise<VerifyResult | null> {
-		return this.maintenance.verifyRemote(deep);
-	}
-
-	async deepCleanRemote(): Promise<CleanResult | null> {
-		return this.maintenance.deepCleanRemote();
-	}
-
-	async restoreFileVersion(path: string, hash: string): Promise<void> {
-		await this.history.restoreFileVersion(path, hash);
-	}
-
-	async getHistoryDiff(
-		request: HistoryDiffRequest,
-	): Promise<FileDiffModel | null> {
-		return this.history.getHistoryDiff(request);
-	}
-
-	async restoreHistoryHunks(
-		path: string,
-		hash: string,
-		selected: HunkSelection,
-		expectedCurrentHash?: string,
-	): Promise<void> {
-		await this.history.restoreHistoryHunks(
-			path,
-			hash,
-			selected,
-			expectedCurrentHash,
-		);
-	}
-
 	/** Stops the running operation between files; see `sync/cancel.ts`. */
 	cancel(): void {
 		this.runtimeState.cancel();
@@ -364,13 +273,6 @@ export class SyncController {
 		);
 	}
 
-	async resolveConflictKeepLocal(path: string): Promise<void> {
-		await this.resolveConflicts([path], EConflictStrategy.KeepLocal);
-	}
-
-	async resolveConflictAcceptRemote(path: string): Promise<void> {
-		await this.resolveConflicts([path], EConflictStrategy.AcceptRemote);
-	}
 	/**
 	 * Resolves a conflict by keeping the local file and parking the remote
 	 * version beside it as a conflict copy, which publishes with the next push.
@@ -395,16 +297,6 @@ export class SyncController {
 	}
 
 	/**
-	 * Loads base/local/remote text of a conflicted file for manual three-way merge.
-	 * Returns null if missing, binary, or has no common ancestor.
-	 */
-	async getConflictThreeWay(
-		path: string,
-	): Promise<{ base: string; local: string; remote: string } | null> {
-		return this.fileDiffs.getConflictThreeWay(path);
-	}
-
-	/**
 	 * Resolves conflict with user-merged content: writes locally, then keeps
 	 * local side - uploading the file and publishing a manifest.
 	 * Unlike auto-merge, this pushes immediately.
@@ -417,19 +309,5 @@ export class SyncController {
 				return batchKeepLocalOp(deps, res, new Set([path]), ctx);
 			},
 		);
-	}
-
-	async getFileDiff(path: string): Promise<FileDiffModel | null> {
-		return this.fileDiffs.getFileDiff(path);
-	}
-
-	/** Like {@link getFileDiff} but decodes size-capped (non-binary) files. */
-	async getForcedFileDiff(path: string): Promise<FileDiffModel | null> {
-		return this.fileDiffs.getForcedFileDiff(path);
-	}
-
-	/** Loads the baseline text for any tracked path (for live editor signs). */
-	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
-		return this.fileDiffs.loadBaselineForPath(path);
 	}
 }

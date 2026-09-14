@@ -1,5 +1,6 @@
 import { type App, TFile } from "obsidian";
 import { IGNORE_FILE_NAME } from "@/constants";
+import type { EncryptionKey } from "@/crypto";
 import { ESyncLogOperation } from "@/logs/store";
 import {
 	activeStorage,
@@ -11,13 +12,10 @@ import { clearRemoteTextCache } from "@/sync/content";
 import type { EngineDependencies } from "@/sync/engine";
 import { PassphraseRotatedError } from "@/sync/keyfile";
 import { projectSession } from "@/sync/session-state";
-import { loadState } from "@/sync/state";
-import type { SessionState } from "@/sync/types";
-import { notifyInfo } from "@/ui";
 import { createVaultIndex } from "@/vault/file-index";
 import {
+	createIgnoreMatcher,
 	type IgnoreMatcher,
-	loadLocalIgnoreMatcher,
 	loadSharedIgnoreMatcher,
 } from "@/vault/ignore";
 import { createScopePolicy } from "@/vault/scope";
@@ -32,6 +30,7 @@ export interface SessionFactoryDeps {
 	passphrase: PassphraseManager;
 	state: StatePersister;
 	logs: LogService;
+	notify: (message: string) => void;
 	/** Persists settings an adapter rewrote itself, such as a refreshed token. */
 	persistSettings?: () => Promise<void>;
 }
@@ -71,10 +70,10 @@ interface ScopeMatchers {
 }
 
 /**
- * Rebuilding the ignore matchers costs an `exists` plus a `read` of the shared
- * ignore note, and a session is opened for every operation and every editor
- * baseline load. The metadata cache carries that note's mtime and size for
- * free, so the memo invalidates itself without an IPC round trip of its own.
+ * Rebuilding the ignore matchers costs a `read` of the shared ignore note, and
+ * a session is opened for every operation and every editor baseline load. The
+ * metadata cache carries that note's mtime and size for free, so the memo
+ * invalidates itself without an IPC round trip of its own.
  */
 function createScopeMatchers(
 	deps: SessionFactoryDeps,
@@ -86,27 +85,15 @@ function createScopeMatchers(
 		// An absent note is never memoised. The index lags a file the user has
 		// just created, and answering from a memo built while it really was
 		// absent would sync the very files those new rules exclude.
-		if (file instanceof TFile) {
-			const stamp = `${file.stat.mtime}:${file.stat.size}`;
-			if (memo && memo.stamp === stamp && memo.patterns === patterns) {
-				return memo;
-			}
-		} else {
-			memo = null;
-		}
-		const [shared, local] = await Promise.all([
-			loadSharedIgnoreMatcher(deps.app.vault.adapter),
-			loadLocalIgnoreMatcher(patterns),
-		]);
-		const next: ScopeMatchers & { stamp: string; patterns: string } = {
-			stamp:
-				file instanceof TFile ? `${file.stat.mtime}:${file.stat.size}` : "",
-			patterns,
-			shared,
-			local,
+		const stamp =
+			file instanceof TFile ? `${file.stat.mtime}:${file.stat.size}` : null;
+		if (memo && memo.stamp === stamp && memo.patterns === patterns) return memo;
+		const matchers: ScopeMatchers = {
+			shared: await loadSharedIgnoreMatcher(deps.app.vault.adapter),
+			local: createIgnoreMatcher(patterns),
 		};
-		memo = file instanceof TFile ? next : null;
-		return next;
+		memo = stamp === null ? null : { ...matchers, stamp, patterns };
+		return matchers;
 	};
 }
 
@@ -115,13 +102,13 @@ async function openSession(
 	getStorage: () => StorageAdapter,
 	getScope: () => Promise<ScopeMatchers>,
 ): Promise<EngineDependencies | null> {
-	const { app, settings, passphrase, state, logs } = deps;
+	const { app, settings, passphrase, state, logs, notify } = deps;
 	if (!isStorageConfigured(settings)) {
 		await logs.warn(
 			ESyncLogOperation.Session,
 			"Session blocked because storage is not configured.",
 		);
-		notifyInfo("Configure a storage backend first.");
+		notify("Configure a storage backend first.");
 		return null;
 	}
 	if (!(await passphrase.prompt(false))) {
@@ -129,16 +116,13 @@ async function openSession(
 			ESyncLogOperation.Session,
 			"Session blocked because the passphrase is missing.",
 		);
-		notifyInfo("A passphrase is required.");
+		notify("A passphrase is required.");
 		return null;
 	}
 	const adapter = app.vault.adapter;
 	const storage = getStorage();
 	const key = await resolveKeyWithRotationRetry(deps, storage);
 	if (!key) return null;
-	const currentState =
-		state.state ?? (await loadState(adapter, app.vault.configDir));
-	state.setInitial(currentState);
 
 	const { shared: sharedIgnore, local: localIgnore } = await getScope();
 	return {
@@ -153,7 +137,7 @@ async function openSession(
 			symlinks: createSymlinkDetector(adapter, settings.ignoreSymlinks),
 		}),
 		key,
-		state: projectSession(currentState, storage.identity()) as SessionState,
+		state: projectSession(state.state, storage.identity()),
 		maxFileBytes: settings.maxFileBytes,
 		concurrency: activeStorage(settings).concurrency,
 		history: settings.fileHistoryEnabled
@@ -170,8 +154,8 @@ async function openSession(
 async function resolveKeyWithRotationRetry(
 	deps: SessionFactoryDeps,
 	storage: StorageAdapter,
-): Promise<import("../crypto").EncryptionKey | null> {
-	const { passphrase, logs } = deps;
+): Promise<EncryptionKey | null> {
+	const { passphrase, logs, notify } = deps;
 	try {
 		return await passphrase.resolveKey(storage);
 	} catch (err) {
@@ -180,7 +164,7 @@ async function resolveKeyWithRotationRetry(
 			ESyncLogOperation.Session,
 			"Passphrase no longer matches the remote (rotated elsewhere); re-prompting.",
 		);
-		notifyInfo("Passphrase changed on another device. Enter the new one.");
+		notify("Passphrase changed on another device. Enter the new one.");
 		await passphrase.forget();
 		if (!(await passphrase.prompt(true))) return null;
 		try {
@@ -191,7 +175,7 @@ async function resolveKeyWithRotationRetry(
 				ESyncLogOperation.Session,
 				"Session blocked: passphrase still does not match after re-prompt.",
 			);
-			notifyInfo("Passphrase still incorrect.");
+			notify("Passphrase still incorrect.");
 			return null;
 		}
 	}

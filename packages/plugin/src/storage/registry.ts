@@ -1,14 +1,14 @@
 import type { ObsidianProtocolData } from "obsidian";
 
+import { createGoogleDriveAdapter } from "./adapters/google-drive";
 import {
-	createGoogleDriveAdapter,
 	defaultGoogleDriveConfig,
 	describeGoogleDriveTarget,
 	GOOGLE_DRIVE_FIELDS,
 	googleDriveIdentity,
 	handleGoogleDriveProtocol,
 	isGoogleDriveConfigured,
-} from "./adapters/google-drive";
+} from "./adapters/google-drive-auth";
 import {
 	createS3Adapter,
 	defaultS3Config,
@@ -177,31 +177,19 @@ export function createStorageAdapter(
 	/** Called when adapter updates config (e.g. token refresh) so caller can persist it. */
 	onConfigChanged?: () => void,
 ): StorageAdapter {
-	const descriptor = STORAGE_REGISTRY[
-		config.kind
-	] as StorageDescriptor<StorageAdapterConfig>;
-	return descriptor.create(config, onConfigChanged);
+	return getDescriptor(config.kind).create(config, onConfigChanged);
 }
 
 export function isAdapterConfigured(config: StorageAdapterConfig): boolean {
-	const descriptor = STORAGE_REGISTRY[
-		config.kind
-	] as StorageDescriptor<StorageAdapterConfig>;
-	return descriptor.isConfigured(config);
+	return getDescriptor(config.kind).isConfigured(config);
 }
 
 export function describeStorageTarget(config: StorageAdapterConfig): string {
-	const descriptor = STORAGE_REGISTRY[
-		config.kind
-	] as StorageDescriptor<StorageAdapterConfig>;
-	return descriptor.describeTarget(config);
+	return getDescriptor(config.kind).describeTarget(config);
 }
 
 export function storageIdentity(config: StorageAdapterConfig): string {
-	const descriptor = STORAGE_REGISTRY[
-		config.kind
-	] as StorageDescriptor<StorageAdapterConfig>;
-	return descriptor.identity(config);
+	return getDescriptor(config.kind).identity(config);
 }
 /**
  * Routes obsidian:// callbacks to owning backend, not active one (e.g. configuring Drive while S3 is active).

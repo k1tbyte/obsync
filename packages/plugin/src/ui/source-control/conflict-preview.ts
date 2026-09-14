@@ -1,11 +1,14 @@
 import type { FileDiffModel } from "@/sync/projection";
+import type { SourceControlActions } from "./actions";
 
 const CONFLICT_PREVIEW_LINES = 10;
 
-export interface ConflictPreviewHandlers {
-	keepLocal: (path: string) => Promise<void>;
-	acceptRemote: (path: string) => Promise<void>;
-}
+const LINE_CLASSES: Record<string, string> = { "+": "is-add", "-": "is-del" };
+
+export type ConflictPreviewHandlers = Pick<
+	SourceControlActions,
+	"resolveKeepLocal" | "resolveAcceptRemote"
+>;
 
 export function renderConflictPreview(
 	parent: HTMLElement,
@@ -17,12 +20,12 @@ export function renderConflictPreview(
 	const keepBtn = actions.createEl("button", { text: "Keep local" });
 	keepBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
-		void handlers.keepLocal(path);
+		void handlers.resolveKeepLocal(path);
 	});
 	const acceptBtn = actions.createEl("button", { text: "Accept remote" });
 	acceptBtn.addEventListener("click", (e) => {
 		e.stopPropagation();
-		void handlers.acceptRemote(path);
+		void handlers.resolveAcceptRemote(path);
 	});
 
 	const hunks = model.hunks.hunks;
@@ -38,11 +41,7 @@ export function renderConflictPreview(
 	let linesShown = 0;
 	outer: for (const hunk of hunks) {
 		for (const line of hunk.lines) {
-			const cls = line.startsWith("+")
-				? "is-add"
-				: line.startsWith("-")
-					? "is-del"
-					: "";
+			const cls = LINE_CLASSES[line[0] ?? ""] ?? "";
 			const span = pre.createSpan({ cls: `obsync-unified-line ${cls}` });
 			span.createSpan({ cls: "obsync-line-prefix", text: line[0] ?? " " });
 			span.createSpan({ text: line.slice(1) });

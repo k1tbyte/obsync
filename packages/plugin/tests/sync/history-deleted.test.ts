@@ -1,11 +1,11 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
+import { publishManifest } from "@tests/helpers/manifest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey, encryptJson } from "@/crypto";
 import { diffManifests } from "@/sync/history/changes";
 import { listDeletedFiles, listSnapshots } from "@/sync/history/query";
 import { pinKey, writeHistoryLog } from "@/sync/history/store";
 import type { HistoryLog, SnapshotEntry } from "@/sync/history/types";
-import { publishManifest } from "@/sync/manifest";
 import type { EFileKind, Manifest, ManifestEntry } from "@/sync/types";
 
 let key: EncryptionKey;

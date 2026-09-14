@@ -1,14 +1,9 @@
-import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { formatBytes, sumBytes } from "@/shared/format";
 import { buildSessionState, mergeWrittenIntoCache } from "@/sync/baseline";
 import { LOG_PATH_LIMIT } from "@/sync/constants";
-import { writeRemoteObject } from "@/sync/content";
 import { pullPaths } from "@/sync/engine";
-import type { Manifest, ManifestEntry } from "@/sync/types";
-import { runWithConcurrency } from "@/utils/concurrency";
-import { deletePath } from "@/vault/io";
-import type { Operation, OperationOutcome } from "./types";
+import type { Operation } from "./types";
 
 export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 	deps,
@@ -52,80 +47,5 @@ export const pullPathsOp: Operation<ReadonlyArray<string>> = async (
 		touchedPaths: pulled.cancelled ? new Set(pulled.written.keys()) : pullSet,
 		localEntries: pulled.written,
 		cancelled: pulled.cancelled,
-	};
-};
-
-export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
-	deps,
-	result,
-	paths,
-	ctx,
-): Promise<OperationOutcome> => {
-	if (!result.remote)
-		throw new Error("Cannot resolve: remote manifest is missing");
-	const remote = result.remote;
-	const conflictPaths = result.diff.conflicts
-		.map((c) => c.path)
-		.filter((p) => paths.has(p));
-	if (conflictPaths.length === 0) {
-		throw new Error("No matching conflicts to resolve");
-	}
-	// A slot with no baseline has acknowledged nothing: seeding from the whole
-	// remote would turn every file it has not downloaded into a local deletion.
-	const baselineFiles: Record<string, ManifestEntry> = {
-		...(deps.state.baseline?.files ?? {}),
-	};
-	const nextHashCache = { ...result.updatedCache };
-	const localEntries = new Map<string, ManifestEntry | null>();
-	let done = 0;
-	await runWithConcurrency(
-		conflictPaths,
-		deps.concurrency ?? DEFAULT_CONCURRENCY,
-		async (path) => {
-			const remoteEntry = remote.files[path];
-			if (!remoteEntry) {
-				// Edit vs delete, accepting remote: the remote side is the deletion.
-				await deletePath(deps.adapter, path);
-				delete baselineFiles[path];
-				delete nextHashCache[path];
-				localEntries.set(path, null);
-			} else {
-				const size = await writeRemoteObject(deps, path, remoteEntry.hash);
-				const stat = await deps.adapter.stat(path).catch(() => null);
-				const entry: ManifestEntry = {
-					hash: remoteEntry.hash,
-					size,
-					mtime: stat?.mtime ?? Date.now(),
-					kind: remoteEntry.kind,
-				};
-				baselineFiles[path] = remoteEntry;
-				nextHashCache[path] = {
-					mtime: entry.mtime,
-					size: entry.size,
-					hash: entry.hash,
-				};
-				localEntries.set(path, entry);
-			}
-			ctx.reportProgressSoon(`Resolving ${++done}/${conflictPaths.length}…`);
-		},
-	);
-	const baseline: Manifest = {
-		...remote,
-		files: baselineFiles,
-		parentSnapshotId: deps.state.baseline?.snapshotId ?? null,
-	};
-	await ctx.persistState(
-		buildSessionState(deps.state, baseline, nextHashCache),
-	);
-	await ctx.logInfo(
-		ESyncLogOperation.Pull,
-		`Resolved ${conflictPaths.length} conflict(s) by accepting remote.`,
-		conflictPaths.slice(0, LOG_PATH_LIMIT),
-	);
-	ctx.setProgress(null);
-	return {
-		newRemote: remote,
-		touchedPaths: new Set(conflictPaths),
-		localEntries,
 	};
 };

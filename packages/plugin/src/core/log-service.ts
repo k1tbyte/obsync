@@ -93,7 +93,7 @@ export class LogService {
 				console.warn("[obsync] could not write the diagnostics log", err);
 			}
 		};
-		this.writes = this.writes.then(write, write);
+		this.writes = this.writes.then(write);
 		return this.writes;
 	}
 }

@@ -97,7 +97,7 @@ export default class ObsyncPlugin extends Plugin implements PluginHost {
 		this.passphrase = runtime.passphraseManager;
 		this.controller = runtime.controller;
 		this.realtime = new PluginRealtime(this.controller, () => this.settings);
-		this.device = new DeviceName(this.app, this.statePersister, () =>
+		this.device = new DeviceName(this.statePersister, () =>
 			this.realtime.restart(),
 		);
 		this.transfer = new SettingsTransferController({

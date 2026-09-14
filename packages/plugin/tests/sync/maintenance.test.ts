@@ -1,11 +1,12 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
+import { publishManifest } from "@tests/helpers/manifest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey } from "@/crypto";
 import { REMOTE_OBJECTS_PREFIX, REMOTE_PINS_PREFIX } from "@/sync/constants";
 import { diffManifests } from "@/sync/history/changes";
 import { writeHistoryLog } from "@/sync/history/store";
 import { deepCleanOrphans, verifyRemote } from "@/sync/maintenance";
-import { objectKey, publishManifest } from "@/sync/manifest";
+import { objectKey } from "@/sync/manifest";
 import type { EFileKind, Manifest } from "@/sync/types";
 
 let key: EncryptionKey;
@@ -64,7 +65,6 @@ describe("deepCleanOrphans", () => {
 		const res = await deepCleanOrphans(storage, key);
 		expect(res.deletedObjects).toBe(2);
 		expect(res.deletedPins).toBe(0);
-		expect(res.deletedLegacy).toBe(0);
 		expect(await storage.exists(objectKey("H1"))).toBe(true);
 		expect(await storage.exists(objectKey("ORPHAN"))).toBe(false);
 		expect((await storage.list(REMOTE_PINS_PREFIX)).length).toBe(0);

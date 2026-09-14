@@ -86,15 +86,14 @@ export function symlinkDetector(
 		return links;
 	};
 	const findLink = (path: string): string | null => {
-		let parent = "";
 		let prefix = "";
 		for (const segment of path.split("/")) {
 			if (!segment) continue;
+			const parent = prefix;
 			prefix = prefix ? `${prefix}/${segment}` : segment;
 			// A linked ancestor settles it: the folder is never descended into,
 			// so nothing below it is ever listed.
 			if (linksIn(parent)?.has(fold(segment))) return prefix;
-			parent = prefix;
 		}
 		return null;
 	};

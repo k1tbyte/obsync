@@ -1,4 +1,4 @@
-export const RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
+const RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
 export const STORAGE_TIMEOUT_MS = 30_000;
 
@@ -20,7 +20,7 @@ export class StorageTimeoutError extends Error {
 	}
 }
 
-export function delay(ms: number): Promise<void> {
+function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -49,27 +49,15 @@ export function isRetryableStatus(status: number): boolean {
 const NETWORK_FAILURE =
 	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETRESET|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
 
-export function isRetryableError(err: unknown): boolean {
+function isRetryableError(err: unknown): boolean {
 	if (err instanceof StorageTimeoutError) return true;
 	if (err instanceof StorageHttpError) return isRetryableStatus(err.status);
 	if (!err || typeof err !== "object") return false;
-	const e = err as {
-		name?: string;
-		message?: string;
-		$metadata?: { httpStatusCode?: number };
-	};
+	const e = err as { name?: string; message?: string };
 	// A cancelled request is a decision, not a hiccup: retrying it ignores the
 	// caller that asked to stop.
 	if (e.name === "AbortError") return false;
-	if (
-		e.name === "TimeoutError" ||
-		e.name === "NetworkingError" ||
-		e.name === "RequestTimeout"
-	) {
-		return true;
-	}
-	const status = e.$metadata?.httpStatusCode;
-	if (status !== undefined) return isRetryableStatus(status);
+	if (e.name === "TimeoutError") return true;
 	return typeof e.message === "string" && NETWORK_FAILURE.test(e.message);
 }
 

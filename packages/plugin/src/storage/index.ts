@@ -1,7 +1,7 @@
 export {
 	DEFAULT_GDRIVE_AUTH_SERVER,
 	defaultGoogleDriveConfig,
-} from "./adapters/google-drive";
+} from "./adapters/google-drive-auth";
 export { defaultS3Config } from "./adapters/s3";
 export { defaultWebDAVConfig } from "./adapters/webdav";
 export {
@@ -12,14 +12,9 @@ export {
 	type WebDAVStorageConfig,
 } from "./config";
 export {
-	type BaseFieldSpec,
 	CONCURRENCY_FIELD,
 	EFieldKind,
-	type NumberFieldSpec,
-	type PasswordFieldSpec,
 	type SettingsFieldSpec,
-	type TextFieldSpec,
-	type ToggleFieldSpec,
 } from "./field-spec";
 export {
 	type CompactStorageConfig,
@@ -32,7 +27,6 @@ export {
 	isAdapterConfigured,
 	listBackends,
 	listShareBackends,
-	type StorageDescriptor,
 	storageDefaults,
 	storageIdentity,
 } from "./registry";

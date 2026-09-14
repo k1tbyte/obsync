@@ -1,15 +1,19 @@
 import type { TestSession } from "@tests/helpers/session";
 import { pairedSessions, useEncryptionKey } from "@tests/helpers/session";
 import { describe, expect, it } from "vitest";
-import { pullPaths } from "@/sync/engine";
-import { batchAcceptRemoteOp, pullPathsOp } from "@/sync/operations/pull";
+import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
+import { compare, pullPaths } from "@/sync/engine";
+import { pullPathsOp } from "@/sync/operations/pull";
+import { pushPathsOp } from "@/sync/operations/push";
 import {
+	batchAcceptRemoteOp,
 	batchKeepLocalOp,
 	keepBothConflictOp,
-	pushPathsOp,
-} from "@/sync/operations/push";
+} from "@/sync/operations/resolve";
 import { revertPathsOp } from "@/sync/operations/revert";
 import { recomputeAfterWrite } from "@/sync/session-state";
+import { createIgnoreMatcher } from "@/vault/ignore";
+import { createScopePolicy } from "@/vault/scope";
 
 useEncryptionKey();
 
@@ -153,6 +157,83 @@ describe("batch operations", () => {
 		expect(pulled.baseline.files["theirs.md"]?.hash).toBe(
 			aResult.remote?.files["theirs.md"]?.hash,
 		);
+	});
+
+	it.each([
+		["accept-remote", batchAcceptRemoteOp],
+		["keep-local", batchKeepLocalOp],
+	])(
+		"%s does not adopt an empty folder only the remote has",
+		async (_, resolve) => {
+			const [a, b] = await syncedPair({ "note.md": "shared\n" });
+			await b.adapter.mkdir("EmptyFolder");
+			b.adapter.putText("note.md", "edited by B\n");
+			const bResult = await b.compare();
+			await pushPathsOp(b.deps(), bResult, ["note.md"], b.context());
+
+			a.adapter.putText("note.md", "edited by A\n");
+			const aResult = await a.compare();
+			await resolve(a.deps(), aResult, new Set(["note.md"]), a.context());
+
+			// The folder is not on A's disk: listed in the baseline, the next push would delete it.
+			expect(a.state.baseline?.folders ?? []).toEqual([]);
+		},
+	);
+
+	it("two pushes without a pull keep an empty folder only the remote has", async () => {
+		const [a, b] = await syncedPair({ "note.md": "shared\n" });
+		await b.adapter.mkdir("EmptyFolder");
+		const bResult = await b.compare();
+		await pushPathsOp(b.deps(), bResult, [], b.context());
+
+		for (const text of ["first edit\n", "second edit\n"]) {
+			a.adapter.putText("note.md", text);
+			const result = await a.compare();
+			const outcome = await pushPathsOp(
+				a.deps(),
+				result,
+				["note.md"],
+				a.context(),
+			);
+			expect(outcome.newRemote?.folders).toEqual(["EmptyFolder"]);
+		}
+		expect(a.state.baseline?.folders ?? []).toEqual([]);
+	});
+
+	it("a push records the empty folders it published from disk", async () => {
+		const [a] = await syncedPair({ "note.md": "shared\n" });
+		await a.adapter.mkdir("Mine");
+		a.adapter.putText("note.md", "edited\n");
+		const result = await a.compare();
+		await pushPathsOp(a.deps(), result, ["note.md"], a.context());
+
+		// So a later remote deletion of the folder removes it here too.
+		expect(a.state.baseline?.folders).toEqual(["Mine"]);
+	});
+
+	it("a pull does not record an empty folder this device's scope hides", async () => {
+		const [a, b] = await syncedPair({ "note.md": "shared\n" });
+		await b.adapter.mkdir("Private");
+		b.adapter.putText("note.md", "edited by B\n");
+		await pushPathsOp(b.deps(), await b.compare(), ["note.md"], b.context());
+
+		const scope = createScopePolicy({
+			settingsSync: DEFAULT_SETTINGS_SYNC,
+			configDir: ".obsidian",
+			localIgnore: createIgnoreMatcher("Private/"),
+		});
+		const deps = () => ({ ...a.deps(), scope });
+		await pullPathsOp(deps(), await compare(deps()), ["note.md"], a.context());
+		a.adapter.putText("note.md", "edited by A\n");
+		const outcome = await pushPathsOp(
+			deps(),
+			await compare(deps()),
+			["note.md"],
+			a.context(),
+		);
+
+		// The folder never reached A's disk, so A's push must not publish it as deleted.
+		expect(outcome.newRemote?.folders).toEqual(["Private"]);
 	});
 
 	it("revert restores the baseline content and reports what it wrote", async () => {

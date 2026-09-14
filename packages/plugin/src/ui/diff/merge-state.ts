@@ -117,7 +117,7 @@ export const rememberChangeState = invertedEffects.of((tr) => {
 });
 
 /** Text typed at the start of a span joins it; an empty span grows around an insertion when asked. */
-export function mapSpan(
+function mapSpan(
 	span: Span,
 	mapping: ChangeDesc,
 	grow = true,

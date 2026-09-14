@@ -19,11 +19,7 @@ export {
 	loadVersionBytes,
 } from "./query";
 export { replayTo } from "./replay";
-export {
-	planVaultRestore,
-	type VaultRestorePlan,
-	type VaultRestoreWrite,
-} from "./restore-vault";
+export { planVaultRestore, type VaultRestorePlan } from "./restore-vault";
 export {
 	pinKey,
 	readHistoryLog,

@@ -36,20 +36,18 @@ export function diffManifests(
 	return changes;
 }
 
-/** Undoes one snapshot's changes, turning its file map into its parent's. */
+/** Undoes one snapshot's changes in place, mutating the given file map into its parent's. */
 export function undoChanges(
 	files: Record<string, ManifestEntry>,
 	changes: SnapshotChanges,
-): Record<string, ManifestEntry> {
-	const next = { ...files };
-	for (const path of Object.keys(changes.added)) delete next[path];
+): void {
+	for (const path of Object.keys(changes.added)) delete files[path];
 	for (const [path, change] of Object.entries(changes.modified)) {
-		next[path] = change.from;
+		files[path] = change.from;
 	}
 	for (const [path, entry] of Object.entries(changes.deleted)) {
-		next[path] = entry;
+		files[path] = entry;
 	}
-	return next;
 }
 
 /** Undoes one snapshot for a single path. `null` means the path did not exist. */

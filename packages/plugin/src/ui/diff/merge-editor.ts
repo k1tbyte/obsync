@@ -16,6 +16,7 @@ import {
 	applyPlan,
 	buildMergeSession,
 	countUnresolved,
+	type EditPlan,
 	type EMergeSide,
 	isResolved,
 	MERGE_SIDES,
@@ -23,17 +24,15 @@ import {
 	revertPlan,
 	type StatusPatch,
 	snapToLines,
-	toLines,
 } from "@/sync/merge-model";
 import { notifyError, notifyInfo } from "@/ui/notices";
-import { Divider, type DividerItem } from "./divider";
+import { Divider } from "./divider";
 import { sideSpan, spanBounds } from "./geometry";
 import { LayoutMode } from "./layout-mode";
 import {
+	dividerItems,
 	type MergeActions,
 	renderMergeLegend,
-	sideActions,
-	toneOf,
 } from "./merge-controls";
 import {
 	mergeResultState,
@@ -70,7 +69,7 @@ export class MergeEditorPanel {
 	private conflictCount = 0;
 	private resultView: EditorView | null = null;
 	private sideViews: Partial<Record<EMergeSide, EditorView>> = {};
-	private dividers: Divider[] = [];
+	private dividers: Partial<Record<EMergeSide, Divider>> = {};
 	private scrollSync: PaneScrollSync | null = null;
 	private counterEl: HTMLElement | null = null;
 	private undoButton: HTMLButtonElement | null = null;
@@ -85,9 +84,10 @@ export class MergeEditorPanel {
 	private readonly dividerActions: MergeActions = {
 		apply: (index, side) => this.apply(index, side),
 		ignore: (index, side) => {
-			const status: StatusPatch = {};
-			status[side] = "ignored";
-			this.setStatus(index, status);
+			this.resultView?.dispatch({
+				effects: setChangeState.of({ index, status: { [side]: "ignored" } }),
+				annotations: isolateHistory.of("full"),
+			});
 		},
 		revert: (index, side) => this.revert(index, side),
 	};
@@ -106,7 +106,7 @@ export class MergeEditorPanel {
 		onEntered: () => void,
 	): Promise<void> {
 		try {
-			const texts = await plugin.controller.getConflictThreeWay(path);
+			const texts = await plugin.controller.fileDiffs.getConflictThreeWay(path);
 			if (!texts) {
 				notifyError(
 					"Cannot three-way merge this file (binary or no common ancestor). Use Keep local / Accept remote.",
@@ -116,10 +116,10 @@ export class MergeEditorPanel {
 			const session = buildMergeSession(texts.base, texts.local, texts.remote);
 			this.text = session.text;
 			this.changes = session.changes;
-			this.base = toLines(texts.base);
+			this.base = session.baseLines;
 			this.sides = {
-				local: toLines(texts.local),
-				remote: toLines(texts.remote),
+				local: session.localLines,
+				remote: session.remoteLines,
 			};
 			this.eol = eolOf(texts.local);
 			this.conflictCount = session.changes.filter((c) => c.conflict).length;
@@ -181,43 +181,46 @@ export class MergeEditorPanel {
 
 	private renderDesktop(root: HTMLElement): void {
 		const heads = root.createDiv({ cls: "obsync-merge-pane-heads" });
-		heads.createDiv({
-			cls: "obsync-merge-pane-head is-local",
-			text: PANE_LABEL.local,
-		});
-		heads.createDiv({ cls: "obsync-merge-divider-head" });
-		heads.createDiv({
-			cls: "obsync-merge-pane-head",
-			text: "Result (editable)",
-		});
-		heads.createDiv({ cls: "obsync-merge-divider-head" });
-		heads.createDiv({
-			cls: "obsync-merge-pane-head is-remote",
-			text: PANE_LABEL.remote,
-		});
-
 		const body = root.createDiv({ cls: "obsync-merge-body" });
-		const localHost = body.createDiv({
-			cls: "obsync-merge-editor-host is-local",
-		});
-		const leftEl = body.createDiv({ cls: "obsync-merge-divider is-local" });
-		const resultHost = body.createDiv({
-			cls: "obsync-merge-editor-host is-result",
-		});
-		const rightEl = body.createDiv({ cls: "obsync-merge-divider is-remote" });
-		const remoteHost = body.createDiv({
-			cls: "obsync-merge-editor-host is-remote",
-		});
+
+		const col = (headCls: string, bodyCls: string, text?: string) => {
+			heads.createDiv({ cls: headCls, text });
+			return body.createDiv({ cls: bodyCls });
+		};
+
+		const localHost = col(
+			"obsync-merge-pane-head is-local",
+			"obsync-merge-editor-host is-local",
+			PANE_LABEL.local,
+		);
+		const leftEl = col(
+			"obsync-merge-divider-head",
+			"obsync-merge-divider is-local",
+		);
+		const resultHost = col(
+			"obsync-merge-pane-head",
+			"obsync-merge-editor-host is-result",
+			"Result (editable)",
+		);
+		const rightEl = col(
+			"obsync-merge-divider-head",
+			"obsync-merge-divider is-remote",
+		);
+		const remoteHost = col(
+			"obsync-merge-pane-head is-remote",
+			"obsync-merge-editor-host is-remote",
+			PANE_LABEL.remote,
+		);
 
 		const marks = sideMarks(this.base, this.sides);
 		const local = this.makeSideEditor(localHost, "local", marks);
 		const result = this.makeResultEditor(resultHost, marks);
 		const remote = this.makeSideEditor(remoteHost, "remote", marks);
 		this.sideViews = { local, remote };
-		this.dividers = [
-			new Divider(leftEl, local, result, "left"),
-			new Divider(rightEl, remote, result, "right"),
-		];
+		this.dividers = {
+			local: new Divider(leftEl, local, result, "left"),
+			remote: new Divider(rightEl, remote, result, "right"),
+		};
 		this.scrollSync = new PaneScrollSync(
 			[
 				{ a: local, b: result, pairs: () => this.scrollPairs("local") },
@@ -305,47 +308,22 @@ export class MergeEditorPanel {
 
 	private syncModel(): void {
 		const changes = this.currentChanges();
+		const result = this.resultView;
 		for (const side of MERGE_SIDES) {
 			const view = this.sideViews[side];
-			if (view) showSideChanges(view, changes);
-		}
-		for (const [side, divider] of this.dividerList()) {
-			divider.update(this.dividerItems(side, changes));
+			if (!view || !result) continue;
+			showSideChanges(view, changes);
+			this.dividers[side]?.update(
+				dividerItems(
+					changes,
+					side,
+					view.state.doc,
+					result.state.doc,
+					this.dividerActions,
+				),
+			);
 		}
 		this.scheduleLayout();
-	}
-
-	private dividerList(): Array<[EMergeSide, Divider]> {
-		return [
-			["local", this.dividers[0]],
-			["remote", this.dividers[1]],
-		].filter((pair): pair is [EMergeSide, Divider] => pair[1] !== undefined);
-	}
-
-	private dividerItems(
-		side: EMergeSide,
-		changes: readonly MergeChange[],
-	): DividerItem[] {
-		const sideView = this.sideViews[side];
-		const result = this.resultView;
-		if (!sideView || !result) return [];
-		const sideDoc = sideView.state.doc;
-		const resultDoc = result.state.doc;
-		const items: DividerItem[] = [];
-		for (const change of changes) {
-			const status = change.status[side];
-			if (status === "none") continue;
-			items.push({
-				key: change.index,
-				near: sideSpan(sideDoc, change[side]),
-				far: snapToLines(resultDoc, change.taken[side] ?? change.result),
-				tone: toneOf(change, side),
-				actions: sideActions(change, side, this.dividerActions),
-				// A decided side keeps one quiet button, so any auto-merged change can still be rejected.
-				quiet: status !== "open",
-			});
-		}
-		return items;
 	}
 
 	private currentChanges(): readonly MergeChange[] {
@@ -356,7 +334,7 @@ export class MergeEditorPanel {
 		if (this.layoutFrame !== null) return;
 		this.layoutFrame = window.requestAnimationFrame(() => {
 			this.layoutFrame = null;
-			for (const divider of this.dividers) divider.layout();
+			for (const side of MERGE_SIDES) this.dividers[side]?.layout();
 		});
 	}
 
@@ -371,18 +349,7 @@ export class MergeEditorPanel {
 			side,
 			this.sides[side].slice(...change[side]),
 		);
-		const status: StatusPatch = {};
-		status[side] = "applied";
-		view.dispatch({
-			changes: { from: plan.from, to: plan.to, insert: plan.insert },
-			effects: setChangeState.of({
-				index,
-				result: plan.result,
-				taken: plan.taken,
-				status,
-			}),
-			annotations: isolateHistory.of("full"),
-		});
+		this.dispatchPlan(index, plan, { [side]: "applied" });
 	}
 
 	private revert(index: number, side: EMergeSide): void {
@@ -395,21 +362,22 @@ export class MergeEditorPanel {
 			side,
 			this.base.slice(...change.base),
 		);
-		view.dispatch({
+		this.dispatchPlan(index, plan, { [side]: "ignored" });
+	}
+
+	private dispatchPlan(
+		index: number,
+		plan: EditPlan,
+		status: StatusPatch,
+	): void {
+		this.resultView?.dispatch({
 			changes: { from: plan.from, to: plan.to, insert: plan.insert },
 			effects: setChangeState.of({
 				index,
 				result: plan.result,
 				taken: plan.taken,
-				status: { [side]: "ignored" },
+				status,
 			}),
-			annotations: isolateHistory.of("full"),
-		});
-	}
-
-	private setStatus(index: number, status: StatusPatch): void {
-		this.resultView?.dispatch({
-			effects: setChangeState.of({ index, status }),
 			annotations: isolateHistory.of("full"),
 		});
 	}
@@ -433,9 +401,8 @@ export class MergeEditorPanel {
 		if (this.undoButton) this.undoButton.disabled = undoDepth(view.state) === 0;
 		if (this.redoButton) this.redoButton.disabled = redoDepth(view.state) === 0;
 		// With one change to step through there is nowhere else to go.
-		for (const button of this.navButtons) {
-			button.hidden = this.navigable().length < 2;
-		}
+		const canNavigate = this.navigable().length > 1;
+		for (const button of this.navButtons) button.hidden = !canNavigate;
 	}
 
 	/** The changes the arrows step through: the unresolved ones unless the filter asks for all. */
@@ -507,7 +474,7 @@ export class MergeEditorPanel {
 		this.layoutMode = null;
 		this.scrollSync?.destroy();
 		this.scrollSync = null;
-		this.dividers = [];
+		this.dividers = {};
 		this.resultView?.destroy();
 		this.resultView = null;
 		for (const view of Object.values(this.sideViews)) view.destroy();

@@ -13,20 +13,22 @@ export function stateFilePath(configDir: string): string {
 	return `${trimmed}/plugins/${PLUGIN_ID}/${STATE_FILE_NAME}`;
 }
 
+/** `stored` is the state file's own text, null when the state did not come from it. */
 export async function loadState(
 	adapter: DataAdapter,
 	configDir: string,
-): Promise<LocalState> {
+): Promise<{ state: LocalState; stored: string | null }> {
 	const path = stateFilePath(configDir);
 	const candidates = [path, `${path}.new`, `${path}.bak`];
 	for (const candidate of candidates) {
 		if (!(await adapter.exists(candidate))) continue;
 		try {
 			const raw = await adapter.read(candidate);
-			return normalizeState(JSON.parse(raw) as Partial<LocalState>);
+			const state = normalizeState(JSON.parse(raw) as Partial<LocalState>);
+			return { state, stored: candidate === path ? raw : null };
 		} catch {}
 	}
-	return createEmptyState();
+	return { state: createEmptyState(), stored: null };
 }
 
 /**
@@ -58,7 +60,7 @@ export async function resetState(
 	return next;
 }
 
-export function createEmptyState(previous?: Partial<LocalState>): LocalState {
+function createEmptyState(previous?: Partial<LocalState>): LocalState {
 	return {
 		deviceId: previous?.deviceId ?? randomId(),
 		deviceName: previous?.deviceName ?? defaultDeviceName(),

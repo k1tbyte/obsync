@@ -80,7 +80,7 @@ function isKeyfile(value: unknown): value is Keyfile {
 	);
 }
 
-export async function writeKeyfile(
+async function writeKeyfile(
 	storage: ObjectStorage,
 	keyfile: Keyfile,
 ): Promise<void> {

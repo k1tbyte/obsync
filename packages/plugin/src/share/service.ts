@@ -26,8 +26,7 @@ const SHARE_PUSH_RETRIES = 3;
 export interface ShareServiceHost {
 	app: App;
 	getSettings(): ObsyncSettings;
-	getState(): LocalState | null;
-	ensureState(): Promise<LocalState>;
+	getState(): LocalState;
 	persistState(state: LocalState): Promise<void>;
 	log(
 		level: "info" | "warn" | "error",
@@ -53,8 +52,8 @@ export class ShareSyncService {
 	constructor(private readonly host: ShareServiceHost) {
 		this.sessions = new ShareSessionStore(host);
 		this.realtime = new ShareRealtimeManager(this.statuses, {
-			deviceId: () => this.host.getState()?.deviceId,
-			deviceName: () => this.host.getState()?.deviceName,
+			deviceId: () => this.host.getState().deviceId,
+			deviceName: () => this.host.getState().deviceName,
 			onRemoteSync: (shareId) => this.scheduleSync(shareId),
 		});
 	}

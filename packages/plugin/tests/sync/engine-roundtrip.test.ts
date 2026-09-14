@@ -277,10 +277,6 @@ describe("engine round-trip", () => {
 		expect(Object.keys(log.changes).sort()).toEqual(
 			log.snapshots.map((s) => s.id).sort(),
 		);
-		// The whole history is one object, however many snapshots it holds.
-		expect(
-			[...storage.map.keys()].filter((k) => k.startsWith("snapshots/")),
-		).toEqual([]);
 	});
 	it("skips the existence probe for objects the remote already references", async () => {
 		const adapter = new InMemoryAdapter();

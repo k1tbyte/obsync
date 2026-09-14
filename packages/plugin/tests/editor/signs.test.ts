@@ -1,7 +1,7 @@
+import { Chunk } from "@codemirror/merge";
 import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, it, vi } from "vitest";
 import { registerEditorSigns } from "@/editor/signs";
-import { buildChunks } from "@/editor/signs/diff";
 import { signsField } from "@/editor/signs/gutter";
 import {
 	findSyncHunkForLine,
@@ -40,7 +40,7 @@ describe("signs helpers", () => {
 	it("presents a new trailing line as an add instead of a changed previous line", () => {
 		const baseline = Text.of(["There is second"]);
 		const current = Text.of(["There is second", "asdasd"]);
-		const chunk = buildChunks(baseline, current).chunks[0];
+		const chunk = Chunk.build(baseline, current)[0];
 		expect(chunk).toBeDefined();
 		if (!chunk)
 			throw new Error("Expected a diff chunk for trailing line addition");
@@ -55,7 +55,7 @@ describe("signs helpers", () => {
 	it("presents removing the final line as a deletion of that line only", () => {
 		const baseline = Text.of(["There is second", "asdasd"]);
 		const current = Text.of(["There is second"]);
-		const chunk = buildChunks(baseline, current).chunks[0];
+		const chunk = Chunk.build(baseline, current)[0];
 		expect(chunk).toBeDefined();
 		if (!chunk) throw new Error("Expected a diff chunk for final line removal");
 		const presented = presentChunk(chunk, baseline, current);
@@ -74,7 +74,7 @@ describe("signs helpers", () => {
 	it("presents filling an existing blank line with text as an add", () => {
 		const baseline = Text.of(["", "tail"]);
 		const current = Text.of(["heading", "tail"]);
-		const chunk = buildChunks(baseline, current).chunks[0];
+		const chunk = Chunk.build(baseline, current)[0];
 		expect(chunk).toBeDefined();
 		if (!chunk)
 			throw new Error("Expected a diff chunk for blank line replacement");
@@ -88,7 +88,7 @@ describe("signs helpers", () => {
 	it("presents filling the only blank line with multiple added lines as adds", () => {
 		const baseline = Text.of([""]);
 		const current = Text.of(["asdasdas", "dasd", "sadas"]);
-		const chunk = buildChunks(baseline, current).chunks[0];
+		const chunk = Chunk.build(baseline, current)[0];
 		expect(chunk).toBeDefined();
 		if (!chunk)
 			throw new Error("Expected a diff chunk for multi-line blank replacement");
@@ -137,7 +137,7 @@ describe("signs gutter field", () => {
 		}).state;
 		return withBaseline.update({
 			effects: setChunksEffect.of({
-				chunks: buildChunks(toCmText(baseline), withBaseline.doc).chunks,
+				chunks: Chunk.build(toCmText(baseline), withBaseline.doc),
 				lastDiffMs: 0,
 			}),
 		}).state;

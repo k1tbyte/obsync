@@ -4,7 +4,7 @@ import type { SettingsSyncCategories } from "@/settings/model";
 import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
 import { diff } from "@/sync/diff";
 import { EFileKind, type Manifest, type ManifestEntry } from "@/sync/types";
-import { loadLocalIgnoreMatcher } from "@/vault/ignore";
+import { createIgnoreMatcher } from "@/vault/ignore";
 import { scanVault } from "@/vault/scanner";
 import { createScopePolicy, type ScopeOptions } from "@/vault/scope";
 
@@ -47,10 +47,7 @@ describe("scope: vault paths", () => {
 	});
 
 	it("keeps the ignore file itself even when a pattern would drop it", async () => {
-		const ignored = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("*.md") },
-		);
+		const ignored = policy({}, { localIgnore: createIgnoreMatcher("*.md") });
 		expect(ignored.includes("syncignore.md")).toBe(true);
 		expect(ignored.includes("notes/a.md")).toBe(false);
 	});
@@ -115,29 +112,20 @@ describe("scope: canDescend agrees with includes", () => {
 
 describe("scope: separate shared and local ignore rules", () => {
 	it("hides a shared-ignored path from sync but not from the diff", async () => {
-		const scope = policy(
-			{},
-			{ sharedIgnore: await loadLocalIgnoreMatcher("drafts/") },
-		);
+		const scope = policy({}, { sharedIgnore: createIgnoreMatcher("drafts/") });
 		expect(scope.includes("drafts/a.md")).toBe(false);
 		// Another device may still hold it, so the diff has to keep seeing it.
 		expect(scope.includesInDiff("drafts/a.md")).toBe(true);
 	});
 
 	it("hides a locally ignored path from the diff as well", async () => {
-		const scope = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("private/") },
-		);
+		const scope = policy({}, { localIgnore: createIgnoreMatcher("private/") });
 		expect(scope.includes("private/a.md")).toBe(false);
 		expect(scope.includesInDiff("private/a.md")).toBe(false);
 	});
 
 	it("reports pattern-ignored paths but not structurally excluded ones", async () => {
-		const scope = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("*.tmp") },
-		);
+		const scope = policy({}, { localIgnore: createIgnoreMatcher("*.tmp") });
 		expect(scope.isIgnoredByPattern("a.tmp")).toBe(true);
 		expect(scope.isIgnoredByPattern(".git/config")).toBe(false);
 		expect(scope.isIgnoredByPattern(`${CONFIG}/app.json`)).toBe(false);
@@ -358,10 +346,7 @@ describe("scanVault", () => {
 	it("records an empty folder but not one that only holds excluded files", async () => {
 		const adapter = vault({ "junk/a.tmp": "x" });
 		await adapter.mkdir("empty");
-		const scope = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("*.tmp") },
-		);
+		const scope = policy({}, { localIgnore: createIgnoreMatcher("*.tmp") });
 
 		const { snapshot } = await scanVault(
 			adapter.asDataAdapter(),

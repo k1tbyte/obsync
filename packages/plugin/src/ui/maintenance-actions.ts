@@ -11,7 +11,7 @@ const NO_STORAGE = "Configure a storage backend first.";
 
 export async function verifyRemoteIntegrity(plugin: PluginHost): Promise<void> {
 	try {
-		const result = await plugin.controller.verifyRemote(true);
+		const result = await plugin.controller.maintenance.verifyRemote(true);
 		if (!result) {
 			notifyError(NO_STORAGE);
 			return;
@@ -43,7 +43,7 @@ export async function deepCleanOrphanedObjects(
 	});
 	if (!confirmed) return;
 	try {
-		const result = await plugin.controller.deepCleanRemote();
+		const result = await plugin.controller.maintenance.deepCleanRemote();
 		if (!result) {
 			notifyError(NO_STORAGE);
 			return;

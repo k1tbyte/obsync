@@ -115,21 +115,6 @@ export function reconcileRemoteAgainstBaseline(
 	return remote;
 }
 
-export async function publishManifest(
-	storage: ObjectStorage,
-	key: EncryptionKey,
-	manifest: Manifest,
-): Promise<void> {
-	await putManifest(storage, await encryptJson(key, manifest));
-}
-
-async function putManifest(
-	storage: ObjectStorage,
-	blob: Uint8Array,
-): Promise<void> {
-	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
-}
-
 export class ConcurrentPushError extends Error {
 	readonly conflictingRemote: Manifest | null;
 	constructor(message: string, conflictingRemote: Manifest | null) {
@@ -164,7 +149,7 @@ export async function publishManifestWithGuard(
 			precheck,
 		);
 	}
-	await putManifest(storage, blob);
+	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
 	const verify = await fetchRemoteManifest(storage, key);
 	if (verify?.snapshotId === manifest.snapshotId) return;
 	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {
@@ -198,7 +183,7 @@ export function buildManifest(
 	deviceName: string | undefined,
 	vaultId: string,
 	parent: Manifest | null,
-	snapshot: LocalSnapshot,
+	snapshot: Pick<LocalSnapshot, "files" | "emptyFolders">,
 ): Manifest {
 	return {
 		version: MANIFEST_VERSION,

@@ -6,7 +6,6 @@ export {
 	listShareParticipants,
 	revokeAllShareTokens,
 	revokeShareToken,
-	type ShareParticipant,
 } from "./broker";
 export {
 	assertShareableStorage,
@@ -38,7 +37,6 @@ export { ShareSessionStore } from "./session-store";
 export { ShareStatusStore } from "./status-store";
 export {
 	runShareSyncCycle,
-	type ShareCycleHooks,
 	type ShareCycleOutcome,
 } from "./sync-cycle";
 export {

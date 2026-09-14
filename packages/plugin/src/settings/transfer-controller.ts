@@ -52,7 +52,7 @@ export class SettingsTransferController {
 	}
 
 	async handleProtocol(params: ObsidianProtocolData): Promise<void> {
-		const data = params.d ?? params.data;
+		const data = params.d;
 		if (typeof data !== "string") {
 			notifyError("Settings transfer data is missing.");
 			return;

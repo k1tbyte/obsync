@@ -1,15 +1,8 @@
-import { type ObsidianProtocolData, requestUrl } from "obsidian";
-import {
-	EStorageBackend,
-	type GoogleDriveStorageConfig,
-} from "@/storage/config";
-import {
-	CONCURRENCY_FIELD,
-	EFieldKind,
-	type SettingsFieldSpec,
-} from "@/storage/field-spec";
-import type { StorageAdapter, StorageAuthOutcome } from "@/storage/types";
+import { type RequestUrlParam, requestUrl } from "obsidian";
+import type { GoogleDriveStorageConfig } from "@/storage/config";
+import type { StorageAdapter } from "@/storage/types";
 import { toArrayBuffer } from "@/utils/bytes";
+import { computeExpiresAt, googleDriveIdentity } from "./google-drive-auth";
 import {
 	assertOk,
 	isRetryableStatus,
@@ -18,106 +11,6 @@ import {
 	withRetry,
 	withTimeout,
 } from "./util";
-
-/** Fallback Google Drive auth broker when the user has not self-hosted one. */
-export const DEFAULT_GDRIVE_AUTH_SERVER =
-	"https://obsync-auth.kitbyte.workers.dev";
-
-export async function handleGoogleDriveProtocol(
-	params: ObsidianProtocolData,
-	config: GoogleDriveStorageConfig,
-	saveCallback: () => Promise<void>,
-): Promise<StorageAuthOutcome | false> {
-	if (params.error) {
-		return {
-			ok: false,
-			message: "Google Drive auth failed",
-			detail: params.error,
-		};
-	}
-
-	const accessToken = params.access_token;
-	const refreshToken = params.refresh_token;
-	const expiresIn = params.expires_in;
-
-	if (!accessToken && !refreshToken) return false;
-	if (!accessToken) {
-		return {
-			ok: false,
-			message: "Google Drive auth failed - no access token received.",
-		};
-	}
-
-	config.accessToken = accessToken;
-	if (refreshToken) config.refreshToken = refreshToken;
-	const seconds = Number(expiresIn);
-	config.expiresAt = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : 0;
-
-	await saveCallback();
-	// Success without refresh token leaves backend unconfigured and sync hanging.
-	if (!config.refreshToken) {
-		return {
-			ok: false,
-			message:
-				"Google Drive returned no refresh token. Remove Obsync from your Google account permissions and connect again.",
-		};
-	}
-	return { ok: true, message: "Connected to Google Drive." };
-}
-
-export function defaultGoogleDriveConfig(): GoogleDriveStorageConfig {
-	return {
-		kind: EStorageBackend.GoogleDrive,
-		folderName: "ObsidianSync",
-		clientId: "",
-		authServerUrl: DEFAULT_GDRIVE_AUTH_SERVER,
-		accessToken: "",
-		refreshToken: "",
-		expiresAt: 0,
-		concurrency: 8,
-	};
-}
-
-export function isGoogleDriveConfigured(
-	config: GoogleDriveStorageConfig,
-): boolean {
-	return Boolean(config.folderName && config.refreshToken);
-}
-
-export function describeGoogleDriveTarget(
-	config: GoogleDriveStorageConfig,
-): string {
-	return `Google Drive (${config.folderName})`;
-}
-
-export function googleDriveIdentity(config: GoogleDriveStorageConfig): string {
-	return `gdrive|${config.folderName}`;
-}
-
-export const GOOGLE_DRIVE_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
-	{
-		key: "folderName",
-		name: "Folder Name",
-		desc: "The name of the folder in your Google Drive root where data will be stored.",
-		kind: EFieldKind.Text,
-		placeholder: "ObsidianSync",
-	},
-	{
-		key: "clientId",
-		name: "Client ID",
-		desc: "Leave empty to use the auth server's own client, or provide your own.",
-		kind: EFieldKind.Text,
-		placeholder: "...",
-	},
-	{
-		key: "authServerUrl",
-		name: "Auth server URL",
-		desc: "Worker that exchanges Google auth codes for tokens. The default is run by the plugin author, and your refresh token is sent to it. Deploy packages/auth-worker and point this at your own copy to avoid that.",
-		kind: EFieldKind.Text,
-		placeholder: "https://obsync-auth...workers.dev",
-	},
-	CONCURRENCY_FIELD,
-];
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
@@ -182,10 +75,7 @@ export function createGoogleDriveAdapter(
 		// Google rotates refresh tokens on some accounts; dropping the new one
 		// leaves the next refresh holding a revoked credential.
 		if (tokenData.refresh_token) config.refreshToken = tokenData.refresh_token;
-		const expiresIn = Number(tokenData.expires_in);
-		config.expiresAt = Number.isFinite(expiresIn)
-			? Date.now() + expiresIn * 1000
-			: 0;
+		config.expiresAt = computeExpiresAt(tokenData.expires_in);
 		onTokenRefreshed?.();
 	};
 
@@ -209,21 +99,24 @@ export function createGoogleDriveAdapter(
 	/**
 	 * Drive answers 401 mid-run (not retryable); replaces token to avoid failing long syncs.
 	 */
-	const authorized: AuthorizedRequest = async (build) => {
-		const first = await driveRequest(build(await getHeaders()));
+	const authorized: AuthorizedRequest = async (params) => {
+		const build = async (): Promise<Parameters<typeof requestUrl>[0]> => ({
+			...params,
+			headers: { ...(await getHeaders()), ...params.headers },
+			throw: false,
+		});
+		const first = await driveRequest(await build());
 		if (first.status !== 401) return first;
 		await refreshOnce();
-		return driveRequest(build(await getHeaders()));
+		return driveRequest(await build());
 	};
 
 	const findFolder = async (): Promise<string | null> => {
 		const q = `name = '${escapeDriveQueryValue(config.folderName)}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-		const res = await authorized((headers) => ({
+		const res = await authorized({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
-			headers,
-			throw: false,
-		}));
+		});
 		// A failed search must not fall through to "create": that is how a 5xx
 		// ends up making a second sync folder.
 		assertOk(res, "find folder", config.folderName);
@@ -239,17 +132,15 @@ export function createGoogleDriveAdapter(
 				cachedFolderId = existing;
 				return existing;
 			}
-			const createRes = await authorized((headers) => ({
+			const createRes = await authorized({
 				url: DRIVE_API,
 				method: "POST",
-				headers,
 				body: JSON.stringify({
 					name: config.folderName,
 					mimeType: "application/vnd.google-apps.folder",
 					parents: ["root"],
 				}),
-				throw: false,
-			}));
+			});
 			assertOk(createRes, "create folder", config.folderName);
 			const created = (createRes.json as { id?: string }).id;
 			if (!created) {
@@ -268,12 +159,10 @@ export function createGoogleDriveAdapter(
 		if (cached) return cached;
 		const folderId = await getFolderId();
 		const q = `name = '${escapeDriveQueryValue(key)}' and '${escapeDriveQueryValue(folderId)}' in parents and trashed = false`;
-		const res = await authorized((headers) => ({
+		const res = await authorized({
 			url: `${DRIVE_API}?q=${encodeURIComponent(q)}&fields=files(id)`,
 			method: "GET",
-			headers,
-			throw: false,
-		}));
+		});
 		assertOk(res, "look up", key);
 		const data = res.json as GoogleDriveListResponse;
 		const id = data.files?.[0]?.id ?? null;
@@ -311,12 +200,10 @@ export function createGoogleDriveAdapter(
 		async get(key: string): Promise<Uint8Array | null> {
 			const id = await findFileId(key);
 			if (!id) return null;
-			const res = await authorized((headers) => ({
+			const res = await authorized({
 				url: `${DRIVE_API}/${id}?alt=media`,
 				method: "GET",
-				headers,
-				throw: false,
-			}));
+			});
 			if (res.status === NOT_FOUND) {
 				fileIdCache.delete(key);
 				return null;
@@ -339,12 +226,10 @@ export function createGoogleDriveAdapter(
 		async delete(key: string): Promise<void> {
 			const id = await findFileId(key);
 			if (!id) return;
-			const res = await authorized((headers) => ({
+			const res = await authorized({
 				url: `${DRIVE_API}/${id}`,
 				method: "DELETE",
-				headers,
-				throw: false,
-			}));
+			});
 			fileIdCache.delete(key);
 			if (res.status === NOT_FOUND) return;
 			assertOk(res, "delete", key);
@@ -366,12 +251,10 @@ export function createGoogleDriveAdapter(
 				url.searchParams.set("fields", "nextPageToken, files(id,name)");
 				if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-				const res = await authorized((headers) => ({
+				const res = await authorized({
 					url: url.toString(),
 					method: "GET",
-					headers,
-					throw: false,
-				}));
+				});
 				assertOk(res, "list", prefix);
 
 				const data = res.json as GoogleDriveListResponse;
@@ -406,7 +289,7 @@ type DriveResponse = Awaited<ReturnType<typeof requestUrl>>;
  * if Drive answers 401. Uploads use it too: a long sync outlives a token.
  */
 type AuthorizedRequest = (
-	build: (headers: Record<string, string>) => Parameters<typeof requestUrl>[0],
+	params: Omit<RequestUrlParam, "throw">,
 ) => Promise<DriveResponse>;
 
 async function driveRequest(
@@ -426,6 +309,23 @@ async function driveRequest(
 
 const MULTIPART_BOUNDARY = "-------314159265358979323846";
 
+function getUploadTarget(
+	key: string,
+	existingId: string | null,
+	folderId: string,
+	uploadType: string,
+) {
+	const metadata = {
+		name: key,
+		...(existingId ? {} : { parents: [folderId] }),
+	};
+	return {
+		url: `${DRIVE_UPLOAD_API}${existingId ? `/${existingId}` : ""}?uploadType=${uploadType}`,
+		method: existingId ? "PATCH" : "POST",
+		metadata,
+	} as const;
+}
+
 async function multipartUpload(
 	key: string,
 	body: Uint8Array,
@@ -434,13 +334,15 @@ async function multipartUpload(
 	authorized: AuthorizedRequest,
 	context: { folderId: string },
 ): Promise<string | null> {
-	const metadata = {
-		name: key,
-		...(existingId ? {} : { parents: [context.folderId] }),
-	};
+	const target = getUploadTarget(
+		key,
+		existingId,
+		context.folderId,
+		"multipart",
+	);
 	const delimiter = `\r\n--${MULTIPART_BOUNDARY}\r\n`;
 	const closeDelim = `\r\n--${MULTIPART_BOUNDARY}--`;
-	const metadataPart = `Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`;
+	const metadataPart = `Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(target.metadata)}`;
 	const mediaPart = `Content-Type: ${contentType ?? "application/octet-stream"}\r\n\r\n`;
 
 	const encoder = new TextEncoder();
@@ -451,18 +353,14 @@ async function multipartUpload(
 	payload.set(body, top.length);
 	payload.set(bottom, top.length + body.length);
 
-	const res = await authorized((headers) => ({
-		url: existingId
-			? `${DRIVE_UPLOAD_API}/${existingId}?uploadType=multipart`
-			: `${DRIVE_UPLOAD_API}?uploadType=multipart`,
-		method: existingId ? "PATCH" : "POST",
+	const res = await authorized({
+		url: target.url,
+		method: target.method,
 		headers: {
-			...headers,
 			"Content-Type": `multipart/related; boundary=${MULTIPART_BOUNDARY}`,
 		},
 		body: toArrayBuffer(payload),
-		throw: false,
-	}));
+	});
 	assertOk(res, "upload", key);
 	return existingId ?? (res.json as { id?: string } | null)?.id ?? null;
 }
@@ -476,21 +374,20 @@ async function resumableUpload(
 	authorized: AuthorizedRequest,
 	context: { folderId: string },
 ): Promise<string | null> {
-	const start = await authorized((headers) => ({
-		url: existingId
-			? `${DRIVE_UPLOAD_API}/${existingId}?uploadType=resumable`
-			: `${DRIVE_UPLOAD_API}?uploadType=resumable`,
-		method: existingId ? "PATCH" : "POST",
+	const target = getUploadTarget(
+		key,
+		existingId,
+		context.folderId,
+		"resumable",
+	);
+	const start = await authorized({
+		url: target.url,
+		method: target.method,
 		headers: {
-			...headers,
 			"X-Upload-Content-Type": contentType ?? "application/octet-stream",
 		},
-		body: JSON.stringify({
-			name: key,
-			...(existingId ? {} : { parents: [context.folderId] }),
-		}),
-		throw: false,
-	}));
+		body: JSON.stringify(target.metadata),
+	});
 	assertOk(start, "start upload of", key);
 	const session = start.headers.location ?? start.headers.Location;
 	if (!session) {

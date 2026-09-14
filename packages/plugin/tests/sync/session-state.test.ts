@@ -161,7 +161,6 @@ describe("session projection", () => {
 		expect(projectSession(local, "s3:two")?.vaultId).toBe("v2");
 		expect(projectSession(local, "s3:two")?.baseline).toBeNull();
 		expect(projectSession(local, "unknown")?.vaultId).toBeNull();
-		expect(projectSession(null, "s3:one")).toBeNull();
 	});
 
 	it("writes back one slot without disturbing the others", () => {

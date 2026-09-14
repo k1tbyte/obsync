@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { StatePersister } from "@/core/state-persister";
-import { loadState } from "@/sync/state";
+import { loadState, serializeState, stateFilePath } from "@/sync/state";
 import type { LocalState } from "@/sync/types";
 
 describe("StatePersister.reset", () => {
@@ -9,7 +9,6 @@ describe("StatePersister.reset", () => {
 		try {
 			const adapter = new MemoryAdapter();
 			const configDir = ".obsidian";
-			const persister = new StatePersister(adapter as never, configDir);
 			const initial = createState({
 				storages: {
 					remote: {
@@ -25,7 +24,11 @@ describe("StatePersister.reset", () => {
 					},
 				},
 			});
-			persister.setInitial(initial);
+			const persister = new StatePersister(
+				adapter as never,
+				configDir,
+				initial,
+			);
 			await persister.persist(initial);
 
 			await persister.persist({
@@ -47,11 +50,79 @@ describe("StatePersister.reset", () => {
 
 			await vi.runAllTimersAsync();
 
-			const loaded = await loadState(adapter as never, configDir);
+			const { state: loaded } = await loadState(adapter as never, configDir);
 			expect(loaded).toEqual(reset);
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("StatePersister.load", () => {
+	it("writes back a state that loading had to complete, once", async () => {
+		const adapter = new MemoryAdapter();
+		await adapter.write(
+			stateFilePath(".obsidian"),
+			JSON.stringify({ deviceName: "Desk" }),
+		);
+		adapter.writes = 0;
+
+		const first = await StatePersister.load(adapter as never, ".obsidian");
+		expect(adapter.writes).toBe(1);
+
+		// The minted device id is on disk now: the next launch keeps it and writes nothing.
+		const second = await StatePersister.load(adapter as never, ".obsidian");
+		expect(second.state.deviceId).toBe(first.state.deviceId);
+		expect(adapter.writes).toBe(1);
+	});
+
+	it("does not rewrite a file that already holds the state", async () => {
+		const adapter = new MemoryAdapter();
+		const hashCache = { "alpha.md": { mtime: 1, size: 10, hash: "hash-a" } };
+		const stored: LocalState = {
+			deviceId: "device-1",
+			deviceName: "Desk",
+			storages: {},
+			hashCache,
+			shareCaches: {},
+		};
+		await adapter.write(stateFilePath(".obsidian"), serializeState(stored));
+		adapter.writes = 0;
+
+		const persister = await StatePersister.load(adapter as never, ".obsidian");
+		// A settled refresh persists an equal state.
+		await persister.persist({
+			...persister.state,
+			hashCache: { ...hashCache },
+		});
+		await persister.flush();
+
+		expect(adapter.writes).toBe(0);
+	});
+
+	it("writes a first run's state once", async () => {
+		const adapter = new MemoryAdapter();
+
+		const persister = await StatePersister.load(adapter as never, ".obsidian");
+		await persister.persist({ ...persister.state });
+		await persister.flush();
+
+		expect(adapter.writes).toBe(1);
+		expect((await loadState(adapter as never, ".obsidian")).state).toEqual(
+			persister.state,
+		);
+	});
+
+	it("still loads when the state cannot be written, and the next persist retries", async () => {
+		const adapter = new MemoryAdapter();
+		adapter.failNextRename = true;
+
+		const persister = await StatePersister.load(adapter as never, ".obsidian");
+		expect(await adapter.exists(stateFilePath(".obsidian"))).toBe(false);
+
+		await persister.persist({ ...persister.state });
+		await persister.flush();
+		expect(await adapter.exists(stateFilePath(".obsidian"))).toBe(true);
 	});
 });
 
@@ -60,11 +131,14 @@ describe("StatePersister writes", () => {
 		vi.useFakeTimers();
 		try {
 			const adapter = new MemoryAdapter();
-			const persister = new StatePersister(adapter as never, ".obsidian");
 			const initial = createState({
 				hashCache: { "alpha.md": { mtime: 1, size: 10, hash: "hash-a" } },
 			});
-			persister.setInitial(initial);
+			const persister = new StatePersister(
+				adapter as never,
+				".obsidian",
+				initial,
+			);
 
 			await persister.persist(initial);
 			await vi.runAllTimersAsync();
@@ -89,28 +163,16 @@ describe("StatePersister writes", () => {
 		}
 	});
 
-	it("writes the state it loaded, so a minted device id reaches disk", async () => {
-		const adapter = new MemoryAdapter();
-		const persister = new StatePersister(adapter as never, ".obsidian");
-		const initial = createState({});
-
-		persister.setInitial(initial);
-		await persister.persist(initial);
-		await persister.flush();
-
-		expect(adapter.writes).toBe(1);
-		expect(await loadState(adapter as never, ".obsidian")).toMatchObject(
-			initial,
-		);
-	});
-
 	it("retries the state a failed write left off disk", async () => {
 		const adapter = new MemoryAdapter();
-		const persister = new StatePersister(adapter as never, ".obsidian");
 		const initial = createState({
 			hashCache: { "alpha.md": { mtime: 1, size: 10, hash: "hash-a" } },
 		});
-		persister.setInitial(initial);
+		const persister = new StatePersister(
+			adapter as never,
+			".obsidian",
+			initial,
+		);
 		await persister.persist(initial);
 		await persister.flush();
 
@@ -134,11 +196,14 @@ describe("StatePersister writes", () => {
 
 	it("persists again after a reset, even for state it wrote before", async () => {
 		const adapter = new MemoryAdapter();
-		const persister = new StatePersister(adapter as never, ".obsidian");
 		const initial = createState({
 			hashCache: { "alpha.md": { mtime: 1, size: 10, hash: "hash-a" } },
 		});
-		persister.setInitial(initial);
+		const persister = new StatePersister(
+			adapter as never,
+			".obsidian",
+			initial,
+		);
 		await persister.persist(initial);
 
 		await persister.reset();
@@ -146,9 +211,9 @@ describe("StatePersister writes", () => {
 		await persister.persist(initial);
 
 		expect(adapter.writes).toBe(before + 1);
-		expect(await loadState(adapter as never, ".obsidian")).toMatchObject(
-			initial,
-		);
+		expect(
+			(await loadState(adapter as never, ".obsidian")).state,
+		).toMatchObject(initial);
 	});
 });
 

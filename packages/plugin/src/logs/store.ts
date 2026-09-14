@@ -38,7 +38,7 @@ export interface SyncLogEntry {
 	bytesDownloaded?: number;
 }
 
-export function logFilePath(configDir: string): string {
+function logFilePath(configDir: string): string {
 	const trimmed = configDir.endsWith("/") ? configDir.slice(0, -1) : configDir;
 	return `${trimmed}/plugins/${PLUGIN_ID}/${LOG_FILE_NAME}`;
 }

@@ -25,11 +25,13 @@ export async function runWithNotice(
 	action: () => Promise<unknown>,
 	successMessage: string,
 	failureLabel = "Operation failed",
-): Promise<void> {
+): Promise<boolean> {
 	try {
 		await action();
 		notifyInfo(successMessage);
+		return true;
 	} catch (err) {
 		notifyError(failureLabel, err);
+		return false;
 	}
 }

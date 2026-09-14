@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { defaultDeviceName } from "@/sync/device";
 import { buildManifest } from "@/sync/manifest";
-import type { LocalSnapshot } from "@/sync/types";
 
-const snapshot: LocalSnapshot = {
+const snapshot = {
 	files: {},
-	skipped: [],
 	emptyFolders: [],
-	ignoredPaths: [],
-	unreadableDirs: [],
 };
 
 describe("buildManifest deviceName", () => {

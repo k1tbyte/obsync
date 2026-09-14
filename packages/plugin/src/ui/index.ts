@@ -30,7 +30,7 @@ export {
 } from "./notices";
 export { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
 export { addPushMenuItem } from "./push-action";
-export { type RealtimeStatusHandle, registerRibbon } from "./ribbon";
+export { registerRibbon } from "./ribbon";
 export {
 	confirmAdoptNewVault,
 	confirmBatchResolve,

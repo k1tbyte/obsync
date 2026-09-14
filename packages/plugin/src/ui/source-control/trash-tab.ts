@@ -160,7 +160,7 @@ export class TrashTab {
 		if (this.loading) return;
 		this.loading = true;
 		const generation = this.generation;
-		this.plugin.controller
+		this.plugin.controller.history
 			.listDeletedFiles()
 			.then((result) => {
 				if (generation !== this.generation) return;
@@ -270,7 +270,7 @@ export class TrashTab {
 		});
 		if (!confirmed) return;
 		try {
-			await this.plugin.controller.restoreFileVersion(target, row.hash);
+			await this.plugin.controller.history.restoreFileVersion(target, row.hash);
 			// The row stays: the remote still has the file deleted until this is pushed.
 			notifyInfo(`Restored ${target}. Review and push the change when ready.`);
 		} catch (err) {
@@ -316,7 +316,10 @@ export class TrashTab {
 				continue;
 			}
 			try {
-				await this.plugin.controller.restoreFileVersion(row.path, row.hash);
+				await this.plugin.controller.history.restoreFileVersion(
+					row.path,
+					row.hash,
+				);
 				// Failures stay selected so the user can retry them.
 				this.selected.delete(row.path);
 				restored++;

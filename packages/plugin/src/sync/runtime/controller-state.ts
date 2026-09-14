@@ -17,10 +17,6 @@ export interface SyncStatusSnapshot {
 
 export type SyncStatusListener = (snapshot: SyncStatusSnapshot) => void;
 
-interface SyncControllerRuntimeStateOptions {
-	emit: (snapshot: SyncStatusSnapshot) => void;
-}
-
 export class SyncControllerRuntimeState {
 	private result: CompareResult | null = null;
 	private resultAt: number | null = null;
@@ -32,10 +28,9 @@ export class SyncControllerRuntimeState {
 	private chain: Promise<void> = Promise.resolve();
 	private aborter: AbortController | null = null;
 
-	constructor(options: SyncControllerRuntimeStateOptions) {
+	constructor() {
 		this.broadcaster = new StatusBroadcaster<SyncStatusSnapshot>({
 			getSnapshot: () => this.getSnapshot(),
-			emit: options.emit,
 		});
 	}
 
@@ -158,10 +153,7 @@ export class SyncControllerRuntimeState {
 	enqueue<T>(task: () => Promise<T>): Promise<T> {
 		this.pendingOps++;
 		if (this.pendingOps === 1) this.broadcast();
-		const run = this.chain.then(
-			() => task(),
-			() => task(),
-		);
+		const run = this.chain.then(task);
 		this.chain = run.then(
 			() => undefined,
 			() => undefined,

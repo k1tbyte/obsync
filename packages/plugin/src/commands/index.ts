@@ -142,7 +142,7 @@ export function registerCommands(plugin: Plugin & PluginHost): void {
 			const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 			const path = view?.file?.path;
 			if (!path) return false;
-			const status = plugin.controller.getStatusForPath(path);
+			const status = plugin.controller.fileDiffs.getStatusForPath(path);
 			if (!status) return false;
 			if (checking) return true;
 			void openDiffView(plugin, path);

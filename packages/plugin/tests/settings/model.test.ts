@@ -128,42 +128,6 @@ describe("mergeSettings clamps", () => {
 		).toBe(15);
 	});
 
-	it("migrates the shortest enabled legacy interval", () => {
-		expect(
-			mergeSettings({
-				autoPullIntervalMinutes: 30,
-				autoPushIntervalMinutes: 10,
-			}).autoSyncIntervalMinutes,
-		).toBe(10);
-		expect(
-			mergeSettings({ autoPushIntervalMinutes: 999_999 })
-				.autoSyncIntervalMinutes,
-		).toBe(24 * 60);
-		expect(
-			mergeSettings({
-				autoSyncIntervalMinutes: 45,
-				autoPullIntervalMinutes: 5,
-			}).autoSyncIntervalMinutes,
-		).toBe(45);
-		expect(
-			mergeSettings({ autoPushIntervalMinutes: -5 }).autoSyncIntervalMinutes,
-		).toBe(0);
-	});
-	it("turns the autosync toggle on for a saved interval from before the toggle existed", () => {
-		const merged = mergeSettings({ autoSyncIntervalMinutes: 30 });
-		expect(merged.autoSyncEnabled).toBe(true);
-		expect(merged.autoPushAfterSync).toBe(true);
-		expect(mergeSettings(null).autoSyncEnabled).toBe(false);
-		expect(mergeSettings({ autoSyncIntervalMinutes: 0 }).autoSyncEnabled).toBe(
-			false,
-		);
-	});
-	it("keeps a legacy pull-only device pull-only", () => {
-		const merged = mergeSettings({ autoPullIntervalMinutes: 15 });
-		expect(merged.autoSyncEnabled).toBe(true);
-		expect(merged.autoSyncIntervalMinutes).toBe(15);
-		expect(merged.autoPushAfterSync).toBe(false);
-	});
 	it("keeps an explicit autosync toggle and push preference", () => {
 		const merged = mergeSettings({
 			autoSyncEnabled: false,
@@ -172,39 +136,6 @@ describe("mergeSettings clamps", () => {
 		});
 		expect(merged.autoSyncEnabled).toBe(false);
 		expect(merged.autoPushAfterSync).toBe(false);
-	});
-
-	it("migrates legacy push-after-save settings", () => {
-		const merged = mergeSettings({
-			autoPushOnSave: true,
-			autoPushOnSaveCurrentFileOnly: true,
-		});
-		expect(merged.autoPushAfterChange).toBe(true);
-		expect(merged.autoPushChangedFilesOnly).toBe(true);
-		expect("autoPushOnSave" in merged).toBe(false);
-		expect("autoRefreshOnFileChange" in merged).toBe(false);
-	});
-
-	it("keeps legacy push-after-save disabled when file refresh was off", () => {
-		const merged = mergeSettings({
-			autoRefreshOnFileChange: false,
-			autoPushOnSave: true,
-		});
-		expect(merged.autoPushAfterChange).toBe(false);
-	});
-
-	it("prefers explicit current automation settings over legacy values", () => {
-		const merged = mergeSettings({
-			autoPushAfterChange: false,
-			autoPushChangedFilesOnly: false,
-			autoPushOnSave: true,
-			autoPushOnSaveCurrentFileOnly: true,
-		});
-		expect(merged.autoPushAfterChange).toBe(false);
-		expect(merged.autoPushChangedFilesOnly).toBe(false);
-		expect(
-			mergeSettings({ autoSyncIntervalMinutes: 20 }).autoSyncIntervalMinutes,
-		).toBe(20);
 	});
 });
 

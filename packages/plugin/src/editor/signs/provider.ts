@@ -184,7 +184,7 @@ export class SignsProvider {
 		if (existing && existing.generation === generation) return existing.promise;
 		const promise = (async () => {
 			try {
-				const snapshot = await this.controller
+				const snapshot = await this.controller.fileDiffs
 					.loadBaselineForPath(path)
 					.catch((err: unknown) => {
 						// Resolving to null prevents unhandled rejections for callers firing this with void.

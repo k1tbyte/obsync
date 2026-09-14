@@ -12,7 +12,7 @@ import { scanVault } from "@/vault/scanner";
 import type { ScopePolicy } from "@/vault/scope";
 import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
 import { throwIfCancelled } from "./cancel";
-import { writeRemoteObject } from "./content";
+import { writeRemoteEntry } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
 import {
@@ -191,14 +191,10 @@ export async function pullPaths(
 		async (change) => {
 			const entry = entryAt(remote.files, change.path);
 			if (!entry) throw new Error(`Missing manifest entry for ${change.path}`);
-			const size = await writeRemoteObject(deps, change.path, entry.hash);
-			const stat = await deps.adapter.stat(change.path).catch(() => null);
-			written.set(change.path, {
-				hash: entry.hash,
-				size,
-				mtime: stat?.mtime ?? Date.now(),
-				kind: entry.kind,
-			});
+			written.set(
+				change.path,
+				await writeRemoteEntry(deps, change.path, entry),
+			);
 			onProgress?.(++done, total);
 		},
 		deps.signal,
@@ -220,7 +216,9 @@ export async function pullPaths(
 	// The folder pass is skipped though - it reconciles the whole tree, which a
 	// partial pull has not reached.
 	const cancelled = deps.signal?.aborted === true;
-	if (!cancelled) await syncFolders(deps, remote);
+	const onDisk = cancelled
+		? compareResult.snapshot.emptyFolders
+		: await syncFolders(deps, remote);
 
 	// `written`, not `paths`: a requested path with no remote change was never
 	// downloaded, and advancing its baseline would turn an unresolved conflict
@@ -229,28 +227,20 @@ export async function pullPaths(
 		deps.state.baseline,
 		remote,
 		new Set(written.keys()),
+		onDisk,
 	);
-	return {
-		// The baseline otherwise adopts the remote's whole folder set, which a
-		// cancelled pull never created on disk - and the next push would then read
-		// those folders as locally deleted and drop them from the manifest.
-		baseline: cancelled
-			? { ...baseline, folders: deps.state.baseline?.folders }
-			: baseline,
-		written,
-		cancelled,
-	};
+	return { baseline, written, cancelled };
 }
 
 /**
- * Mirrors the remote folder set, so empty directories survive a round trip.
- * Filtered by scope: unfiltered folders would let a share participant create
- * directories outside the share root.
+ * Mirrors the remote folder set, so empty directories survive a round trip, and
+ * returns the folders it put on disk. Filtered by scope: unfiltered folders
+ * would let a share participant create directories outside the share root.
  */
 async function syncFolders(
 	deps: EngineDependencies,
 	remote: Manifest,
-): Promise<void> {
+): Promise<string[]> {
 	const remoteFolders = (remote.folders ?? []).filter((dir) =>
 		deps.scope.canDescend(dir),
 	);
@@ -266,39 +256,42 @@ async function syncFolders(
 			await removeEmptyDir(deps.adapter, dir);
 		}
 	}
+	return remoteFolders;
 }
 
-export interface SingleFilePushInput {
-	path: string;
-	bytes: Uint8Array;
-	mtime?: number;
+export async function storeObject(
+	deps: EngineDependencies,
+	bytes: Uint8Array,
+): Promise<string> {
+	const hash = await sha256Hex(bytes);
+	const exists = await deps.storage.exists(objectKey(hash));
+	if (!exists) {
+		const blob = await encryptBytes(deps.key, bytes);
+		await deps.storage.put(objectKey(hash), blob);
+	}
+	return hash;
 }
 
 export async function pushSingleFile(
 	deps: EngineDependencies,
 	compareResult: CompareResult,
-	input: SingleFilePushInput,
-): Promise<{ manifest: Manifest; entry: ManifestEntry }> {
-	const hash = await sha256Hex(input.bytes);
-	const exists = await deps.storage.exists(objectKey(hash));
-	if (!exists) {
-		const blob = await encryptBytes(deps.key, input.bytes);
-		await deps.storage.put(objectKey(hash), blob);
-	}
-	const kind: EFileKind = deps.scope.classify(input.path);
+	path: string,
+	bytes: Uint8Array,
+): Promise<Manifest> {
+	const hash = await storeObject(deps, bytes);
+	const kind: EFileKind = deps.scope.classify(path);
 	const entry: ManifestEntry = {
 		hash,
-		size: input.bytes.length,
-		mtime: input.mtime ?? Date.now(),
+		size: bytes.length,
+		mtime: Date.now(),
 		kind,
 	};
 	const baseFiles = compareResult.remote?.files ?? {};
 	const nextFiles: Record<string, ManifestEntry> = {
 		...baseFiles,
-		[input.path]: entry,
+		[path]: entry,
 	};
-	const manifest = await publishFileMap(deps, compareResult, nextFiles);
-	return { manifest, entry };
+	return publishFileMap(deps, compareResult, nextFiles);
 }
 
 /**
@@ -317,14 +310,11 @@ export async function publishFileMap(
 		compareResult.remote,
 		{
 			files,
-			skipped: [],
 			emptyFolders: mergeFolderArrays(
 				compareResult.remote?.folders,
 				compareResult.snapshot.emptyFolders,
 				deps.state.baseline?.folders,
 			),
-			ignoredPaths: [],
-			unreadableDirs: [],
 		},
 	);
 	await publishManifestWithHistory(
@@ -393,11 +383,7 @@ async function listStoredHashes(
 	if (probes < UPLOAD_LIST_THRESHOLD) return null;
 	try {
 		const keys = await storage.list(REMOTE_OBJECTS_PREFIX);
-		return new Set(
-			keys
-				.filter((key) => key.startsWith(REMOTE_OBJECTS_PREFIX))
-				.map((key) => key.slice(REMOTE_OBJECTS_PREFIX.length)),
-		);
+		return new Set(keys.map((key) => key.slice(REMOTE_OBJECTS_PREFIX.length)));
 	} catch {
 		// Listing is only an optimisation; a backend that refuses it still gets
 		// a correct push out of the per-object probe.

@@ -125,7 +125,7 @@ export class HistoryTab {
 		if (this.loading) return;
 		this.loading = true;
 		const generation = this.generation;
-		this.plugin.controller
+		this.plugin.controller.history
 			.getFileHistory(path)
 			.then((versions) => {
 				if (generation !== this.generation) return;
@@ -254,7 +254,11 @@ export class HistoryTab {
 		label?: string,
 	): Promise<void> {
 		try {
-			await this.plugin.controller.setSnapshotPinned(snapshotId, pinned, label);
+			await this.plugin.controller.history.setSnapshotPinned(
+				snapshotId,
+				pinned,
+				label,
+			);
 			this.historyVersions = null;
 			this.onRerender();
 			notifyInfo(pinned ? "Snapshot pinned." : "Snapshot unpinned.");
@@ -297,7 +301,7 @@ export class HistoryTab {
 		});
 		if (!confirmed) return;
 		try {
-			await this.plugin.controller.restoreFileVersion(path, row.hash);
+			await this.plugin.controller.history.restoreFileVersion(path, row.hash);
 			// The list describes the remote, which a local restore does not touch.
 			notifyInfo("Restored. Review and push the change when ready.");
 		} catch (err) {

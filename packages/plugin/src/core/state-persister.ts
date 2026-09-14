@@ -1,20 +1,18 @@
 import type { DataAdapter } from "obsidian";
-import { resetState, saveState, serializeState } from "@/sync/state";
+import { loadState, resetState, saveState, serializeState } from "@/sync/state";
 import type { LocalState } from "@/sync/types";
 
 const PERSIST_STATE_DEBOUNCE_MS = 500;
 
 export class StatePersister {
-	private current: LocalState | null = null;
 	private pendingHashCacheState: LocalState | null = null;
 	private flushTimer: number | null = null;
 	/**
-	 * A digest of the last successful write. A settled refresh persists a state
-	 * identical to the one on disk, which at 20k files is a 3.3 MB rewrite for no
-	 * new bytes. The digest rather than the payload: the payload is that same 3.3
-	 * MB, pinned for as long as the plugin is loaded. Never seeded from
-	 * {@link setInitial}: `loadState` normalises what it read and can mint a
-	 * device id that has to reach disk.
+	 * A digest of the last successful write, seeded from the file as loaded. A
+	 * settled refresh persists a state identical to the one on disk, which at 20k
+	 * files is a 3.3 MB rewrite for no new bytes. The digest rather than the
+	 * payload: the payload is that same 3.3 MB, pinned for as long as the plugin
+	 * is loaded.
 	 */
 	private lastWritten: string | null = null;
 	/** Serialises every write: a debounced flush and a direct persist otherwise
@@ -24,14 +22,27 @@ export class StatePersister {
 	constructor(
 		private readonly adapter: DataAdapter,
 		private readonly configDir: string,
+		private current: LocalState,
 	) {}
 
-	get state(): LocalState | null {
-		return this.current;
+	/**
+	 * Writes the loaded state back unless the file already holds it: loading can
+	 * mint a device id, and that has to reach disk before anything syncs.
+	 */
+	static async load(
+		adapter: DataAdapter,
+		configDir: string,
+	): Promise<StatePersister> {
+		const { state, stored } = await loadState(adapter, configDir);
+		const persister = new StatePersister(adapter, configDir, state);
+		if (stored !== null) persister.lastWritten = fingerprint(stored);
+		// An unwritable disk must not stop the plugin loading; the next persist retries.
+		await persister.write(state).catch(() => undefined);
+		return persister;
 	}
 
-	setInitial(state: LocalState): void {
-		this.current = state;
+	get state(): LocalState {
+		return this.current;
 	}
 
 	async persist(state: LocalState): Promise<void> {
@@ -61,7 +72,7 @@ export class StatePersister {
 
 	/** Every write to the state file goes through here, in order. */
 	private enqueue<T>(task: () => Promise<T>): Promise<T> {
-		const run = this.writes.then(task, task);
+		const run = this.writes.then(task);
 		// The chain must survive a failed write, or every later one is skipped.
 		this.writes = run.then(
 			() => undefined,

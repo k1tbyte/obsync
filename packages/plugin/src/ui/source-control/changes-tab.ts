@@ -1,45 +1,17 @@
 import { setIcon } from "obsidian";
 import type { PluginHost } from "@/plugin/host";
-import { formatBytes, formatRelativeTime } from "@/shared/format";
-import { EConflictStrategy, type SyncStatusSnapshot } from "@/sync/controller";
-import type { DiffResult } from "@/sync/types";
+import { formatRelativeTime } from "@/shared/format";
+import type { SyncStatusSnapshot } from "@/sync/controller";
+import type { DiffResult, ManifestEntry } from "@/sync/types";
 import { notifyError } from "@/ui/notices";
 
 import type { SourceControlActions } from "./actions";
+import { ChangesSection, type ChangesSectionDeps } from "./changes-section";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
 import { diffEquals } from "./diff-identity";
 import { showIgnoredFiles } from "./modals";
 import { rowFromChange, rowFromConflict } from "./row-formatter";
-import { SectionStateManager } from "./section-state-manager";
-import { buildTree, flattenRows, flattenTree } from "./tree-builder";
-import { ESection, type FileRow, type VisualRow } from "./types";
-import { mountVirtualList, type VirtualListHandle } from "./virtual-list";
-
-type SectionActionKind = "push" | "pull" | "none";
-
-/**
- * Below this a list is cheap to build whole, and building it whole keeps
- * anything that changes a row's height - an expanded conflict preview - working
- * without the list having to measure it.
- */
-const VIRTUAL_MIN_ROWS = 100;
-
-/** Gives a clickable non-button the semantics a keyboard user needs. */
-function makeActivatable(
-	el: HTMLElement,
-	label: string,
-	activate: () => void,
-): void {
-	el.setAttr("role", "button");
-	el.setAttr("tabindex", "0");
-	el.setAttr("aria-label", label);
-	el.addEventListener("click", () => activate());
-	el.addEventListener("keydown", (event: KeyboardEvent) => {
-		if (event.key !== "Enter" && event.key !== " ") return;
-		event.preventDefault();
-		activate();
-	});
-}
+import { ESection, type FileRow } from "./types";
 
 /**
  * The Changes pane: toolbar, filter and the three change sections. Owns its own
@@ -57,17 +29,14 @@ export class ChangesTab {
 	private lastDiff: DiffResult | null = null;
 	private lastError: string | null = null;
 	private built = false;
-	/** Row counts as filtered, which a status-only refresh must not undo. */
-	private readonly renderedCounts = new Map<ESection, number>();
 	private statusLineEl: HTMLElement | null = null;
 	private refreshButtonEl: HTMLButtonElement | null = null;
 	private cancelButtonEl: HTMLButtonElement | null = null;
 	private pushAllButtonEl: HTMLButtonElement | null = null;
 	private pullAllButtonEl: HTMLButtonElement | null = null;
-	private readonly sections = new SectionStateManager();
+	private readonly sections: ChangesSection[];
 	/** The pane scrolls, not the lists; every window is computed against it. */
 	private scroller: HTMLElement | null = null;
-	private readonly lists = new Map<ESection, VirtualListHandle>();
 	private activePath: string | null = null;
 	private openingPath: string | null = null;
 	private openGeneration = 0;
@@ -75,24 +44,35 @@ export class ChangesTab {
 	constructor(
 		private readonly plugin: PluginHost,
 		private readonly previews: ConflictPreviewManager,
-		/** Lazily: the view builds this tab before it can build the actions. */
-		private readonly getActions: () => SourceControlActions,
+		private readonly actions: SourceControlActions,
 		private readonly rerender: () => void,
 		private readonly openDiff: (path: string) => Promise<void>,
 	) {
 		this.layout = plugin.settings.uiLayout;
-	}
-
-	sectionState(): SectionStateManager {
-		return this.sections;
+		const deps: ChangesSectionDeps = {
+			scroller: () => this.scroller,
+			layout: () => this.layout,
+			isBusy: () => plugin.controller.getSnapshot().busy,
+			refreshLists: () => this.refreshLists(),
+			actions,
+			previews,
+			rerender,
+			openFileDiff: (item, path) => this.openFileDiff(item, path),
+			isOpening: (path) => this.openingPath === path,
+			isActive: (path) => this.activePath === path,
+		};
+		this.sections = [
+			new ChangesSection(ESection.Conflicts, "Conflicts", deps),
+			new ChangesSection(ESection.Local, "Local changes", deps),
+			new ChangesSection(ESection.Remote, "Remote changes", deps),
+		];
 	}
 
 	/** Virtual lists listen on the scroller, which outlives their own rows. */
 	dispose(): void {
 		this.openGeneration++;
 		this.openingPath = null;
-		for (const list of this.lists.values()) list.destroy();
-		this.lists.clear();
+		for (const section of this.sections) section.destroyList();
 	}
 
 	/** Forces a full rebuild on the next render. */
@@ -112,7 +92,7 @@ export class ChangesTab {
 	/** In-place updates to status/progress keep scrolling usable mid-push. */
 	refreshInPlace(snapshot: SyncStatusSnapshot): void {
 		this.refreshStatus(snapshot);
-		this.updateSelectionState();
+		for (const section of this.sections) section.updateUi(snapshot.busy);
 		// An error line grows a button and a progress line changes length, both
 		// of which move the lists below them.
 		this.refreshLists();
@@ -120,7 +100,7 @@ export class ChangesTab {
 
 	/** Re-windows every list against where it now sits in the pane. */
 	refreshLists(): void {
-		for (const list of this.lists.values()) list.refresh();
+		for (const section of this.sections) section.refreshList();
 	}
 
 	render(root: HTMLElement, snapshot: SyncStatusSnapshot): void {
@@ -130,7 +110,6 @@ export class ChangesTab {
 		this.built = true;
 		this.lastDiff = snapshot.result?.diff ?? null;
 		this.lastError = snapshot.error ?? null;
-		this.renderedCounts.clear();
 		this.renderToolbar(root, snapshot);
 		this.renderStatusLine(root, snapshot);
 		this.renderFilter(root);
@@ -147,81 +126,44 @@ export class ChangesTab {
 		const localFiles = result.snapshot.files;
 		const remoteFiles = result.remote?.files;
 		const showFileSizes = this.plugin.settings.showFileSizes;
-		// Pruned against the unfiltered lists: a filter must not drop a selection.
-		this.sections.pruneSelection(
-			ESection.Conflicts,
-			diff.conflicts.map((c) => c.path),
-		);
-		this.sections.pruneSelection(
-			ESection.Local,
-			diff.localChanges.map((c) => c.path),
-		);
-		this.sections.pruneSelection(
-			ESection.Remote,
-			diff.remoteChanges.map((c) => c.path),
-		);
-
-		this.renderSection(
-			root,
-			ESection.Conflicts,
-			"Conflicts",
-			this.applyFilter(
-				diff.conflicts.map((conflict) =>
-					rowFromConflict(
-						conflict,
-						showFileSizes
-							? (localFiles[conflict.path]?.size ??
-									remoteFiles?.[conflict.path]?.size)
-							: undefined,
-					),
+		const sizeIn = (
+			files: Record<string, ManifestEntry> | undefined,
+			path: string,
+		): number | undefined => (showFileSizes ? files?.[path]?.size : undefined);
+		const rows: Record<ESection, FileRow[]> = {
+			[ESection.Conflicts]: diff.conflicts.map((conflict) =>
+				rowFromConflict(
+					conflict,
+					sizeIn(localFiles, conflict.path) ??
+						sizeIn(remoteFiles, conflict.path),
 				),
 			),
-			snapshot,
-			"none",
-		);
-		this.renderSection(
-			root,
-			ESection.Local,
-			"Local changes",
-			this.applyFilter(
-				diff.localChanges.map((change) =>
-					rowFromChange(
-						change,
-						showFileSizes
-							? (localFiles[change.path]?.size ??
-									remoteFiles?.[change.path]?.size)
-							: undefined,
-						showFileSizes ? remoteFiles?.[change.path]?.size : undefined,
-					),
+			[ESection.Local]: diff.localChanges.map((change) =>
+				rowFromChange(
+					change,
+					sizeIn(localFiles, change.path) ?? sizeIn(remoteFiles, change.path),
+					sizeIn(remoteFiles, change.path),
 				),
 			),
-			snapshot,
-			"push",
-		);
-		this.renderSection(
-			root,
-			ESection.Remote,
-			"Remote changes",
-			this.applyFilter(
-				diff.remoteChanges.map((change) =>
-					rowFromChange(
-						change,
-						showFileSizes
-							? (remoteFiles?.[change.path]?.size ??
-									localFiles[change.path]?.size)
-							: undefined,
-						showFileSizes ? localFiles[change.path]?.size : undefined,
-					),
+			[ESection.Remote]: diff.remoteChanges.map((change) =>
+				rowFromChange(
+					change,
+					sizeIn(remoteFiles, change.path) ?? sizeIn(localFiles, change.path),
+					sizeIn(localFiles, change.path),
 				),
 			),
-			snapshot,
-			"pull",
-		);
+		};
+		this.previews.prune(rows[ESection.Conflicts].map((row) => row.path));
+		for (const section of this.sections) {
+			// Pruned against the unfiltered rows: a filter must not drop a selection.
+			section.pruneSelection(rows[section.id]);
+			section.render(root, this.applyFilter(rows[section.id]), snapshot.busy);
+		}
 	}
 
-	private applyFilter(rows: ReadonlyArray<FileRow>): FileRow[] {
+	private applyFilter(rows: ReadonlyArray<FileRow>): ReadonlyArray<FileRow> {
 		const needle = this.filter.trim().toLowerCase();
-		if (!needle) return [...rows];
+		if (!needle) return rows;
 		return rows.filter((row) => row.path.toLowerCase().includes(needle));
 	}
 
@@ -315,7 +257,8 @@ export class ChangesTab {
 		// Reads the snapshot at click time: the one captured at render is stale the
 		// moment anything syncs, and acting on it would push the wrong paths.
 		pushAll.addEventListener("click", () => {
-			void this.getActions().pushAll(this.plugin.controller.getSnapshot());
+			const diff = this.plugin.controller.getSnapshot().result?.diff;
+			void this.actions.pushPaths(diff?.localChanges.map((c) => c.path) ?? []);
 		});
 
 		const pullAll = bar.createEl("button", {
@@ -329,7 +272,8 @@ export class ChangesTab {
 		pullAll.setAttr("aria-label", `Pull all ${snapshot.pendingRemote} changes`);
 		this.pullAllButtonEl = pullAll;
 		pullAll.addEventListener("click", () => {
-			void this.getActions().pullAll(this.plugin.controller.getSnapshot());
+			const diff = this.plugin.controller.getSnapshot().result?.diff;
+			void this.actions.pullPaths(diff?.remoteChanges.map((c) => c.path) ?? []);
 		});
 
 		this.setBulkButtonState(snapshot);
@@ -372,7 +316,7 @@ export class ChangesTab {
 				});
 				resolveBtn.addEventListener(
 					"click",
-					() => void this.getActions().adoptNewVault(),
+					() => void this.actions.adoptNewVault(),
 				);
 				return;
 			}
@@ -423,307 +367,6 @@ export class ChangesTab {
 		}
 	}
 
-	private renderSection(
-		parent: HTMLElement,
-		section: ESection,
-		title: string,
-		rows: ReadonlyArray<FileRow>,
-		snapshot: SyncStatusSnapshot,
-		actionKind: SectionActionKind,
-	): void {
-		this.sections.resetRefs(section);
-		if (rows.length === 0) return;
-		const sectionEl = parent.createDiv({ cls: "obsync-section" });
-		if (this.sections.isCollapsed(section)) sectionEl.addClass("is-collapsed");
-
-		const header = sectionEl.createDiv({ cls: "obsync-section-header" });
-		const disclosure = header.createSpan({ cls: "obsync-section-disclosure" });
-		setIcon(
-			disclosure,
-			this.sections.isCollapsed(section) ? "chevron-right" : "chevron-down",
-		);
-		header.createSpan({
-			cls: "obsync-section-title",
-			text: title,
-		});
-		header.setAttr(
-			"aria-expanded",
-			String(!this.sections.isCollapsed(section)),
-		);
-		const counts = header.createSpan({ cls: "obsync-section-count" });
-		this.sections.bindCounts(section, counts);
-		this.renderedCounts.set(section, rows.length);
-		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-		makeActivatable(header, `${title} section`, () => {
-			const collapsed = this.sections.toggleCollapsed(section);
-			sectionEl.toggleClass("is-collapsed", collapsed);
-			header.setAttr("aria-expanded", String(!collapsed));
-			setIcon(disclosure, collapsed ? "chevron-right" : "chevron-down");
-			// Hiding a body moves every section under it, and a windowed list
-			// reads its own position to decide which rows to hold.
-			this.refreshLists();
-		});
-
-		const body = sectionEl.createDiv({ cls: "obsync-section-body" });
-		const actions = body.createDiv({
-			cls: "obsync-toolbar obsync-section-actions",
-		});
-
-		if (actionKind !== "none") {
-			const label = actionKind === "push" ? "Push selected" : "Pull selected";
-			const actionBtn = actions.createEl("button", { text: label });
-			actionBtn.addClass("is-primary");
-			this.sections.bindActionButton(section, actionBtn);
-			actionBtn.addEventListener(
-				"click",
-				() => void this.getActions().runSectionAction(section, actionKind),
-			);
-		}
-
-		if (section === ESection.Local) {
-			const revertBtn = actions.createEl("button", { text: "Revert selected" });
-			revertBtn.addClass("is-warning");
-			this.sections.bindRevertButton(section, revertBtn);
-			revertBtn.addEventListener(
-				"click",
-				() => void this.getActions().revertSelected(section),
-			);
-		}
-
-		if (section === ESection.Conflicts) {
-			const keepAll = actions.createEl("button", { text: "Keep all local" });
-			keepAll.addClass("is-warning");
-			keepAll.disabled = snapshot.busy || rows.length === 0;
-			keepAll.addEventListener(
-				"click",
-				() => void this.getActions().batchResolve(EConflictStrategy.KeepLocal),
-			);
-			const acceptAll = actions.createEl("button", {
-				text: "Accept all remote",
-			});
-			acceptAll.addClass("is-warning");
-			acceptAll.disabled = snapshot.busy || rows.length === 0;
-			acceptAll.addEventListener(
-				"click",
-				() =>
-					void this.getActions().batchResolve(EConflictStrategy.AcceptRemote),
-			);
-		}
-
-		const selectAll = actions.createEl("button", {
-			cls: "obsync-section-icon-action",
-		});
-		setIcon(selectAll, "list-checks");
-		selectAll.setAttr("aria-label", "Select all");
-		selectAll.setAttr("title", "Select all");
-		selectAll.addEventListener("click", () => {
-			this.sections.selectAll(section, rows);
-			this.afterSelectionChange(section, rows.length);
-			this.rerender();
-		});
-		const selectNone = actions.createEl("button", {
-			cls: "obsync-section-icon-action",
-		});
-		setIcon(selectNone, "x");
-		selectNone.setAttr("aria-label", "Clear selection");
-		selectNone.setAttr("title", "Clear selection");
-		selectNone.addEventListener("click", () => {
-			this.sections.clearSelection(section);
-			this.afterSelectionChange(section, rows.length);
-			this.rerender();
-		});
-
-		const list = body.createDiv({ cls: "obsync-file-list" });
-		this.layoutSection(list, section, rows);
-		this.sections.updateSectionUi(section, rows.length, snapshot.busy);
-	}
-
-	/**
-	 * Fills a section's list, and can refill it in place: expanding a folder
-	 * changes which rows exist without touching anything else on the pane.
-	 */
-	private layoutSection(
-		list: HTMLElement,
-		section: ESection,
-		rows: ReadonlyArray<FileRow>,
-	): void {
-		const scroller = this.scroller;
-		// Dropping the list drops its height, and the browser clamps the pane's
-		// scroll position to what is left before the new list restores it.
-		const scrollTop = scroller?.scrollTop ?? 0;
-		this.lists.get(section)?.destroy();
-		this.lists.delete(section);
-		list.empty();
-
-		const visual =
-			this.layout === "flat"
-				? flattenRows(rows)
-				: flattenTree(buildTree(rows), (path) =>
-						this.sections.isFolderExpanded(section, path),
-					);
-		const build = (index: number): HTMLElement =>
-			this.buildVisualRow(
-				list,
-				visual[index] as VisualRow,
-				section,
-				rows.length,
-				() => this.layoutSection(list, section, rows),
-			);
-
-		// Conflict rows grow an inline preview, so their height is not the pitch
-		// a windowed list places them on.
-		if (
-			!scroller ||
-			section === ESection.Conflicts ||
-			visual.length < VIRTUAL_MIN_ROWS
-		) {
-			for (let index = 0; index < visual.length; index++) build(index);
-		} else {
-			this.lists.set(
-				section,
-				mountVirtualList({
-					scroller,
-					container: list,
-					count: visual.length,
-					renderRow: build,
-				}),
-			);
-		}
-		if (scroller) scroller.scrollTop = scrollTop;
-		// This section just changed height, which moves every section under it.
-		this.refreshLists();
-	}
-
-	private buildVisualRow(
-		parent: HTMLElement,
-		visual: VisualRow,
-		section: ESection,
-		rowsLen: number,
-		relayout: () => void,
-	): HTMLElement {
-		return visual.row
-			? this.renderFileRow(parent, visual.row, section, rowsLen, visual.depth)
-			: this.renderFolderRow(parent, visual, section, relayout);
-	}
-
-	private renderFolderRow(
-		parent: HTMLElement,
-		visual: VisualRow,
-		section: ESection,
-		relayout: () => void,
-	): HTMLElement {
-		const folderPath = visual.folderPath as string;
-		const collapsed = visual.collapsed === true;
-		const folder = parent.createDiv({ cls: "obsync-tree-folder" });
-		setDepth(folder, visual.depth);
-		if (collapsed) folder.addClass("is-collapsed");
-		const toggle = folder.createSpan({ cls: "obsync-tree-folder-toggle" });
-		setIcon(toggle, collapsed ? "chevron-right" : "chevron-down");
-		const icon = folder.createSpan({ cls: "obsync-tree-folder-icon" });
-		setIcon(icon, collapsed ? "folder" : "folder-open");
-		folder.createSpan({
-			cls: "obsync-tree-folder-name",
-			text: visual.name,
-		});
-		folder.setAttr("title", folderPath);
-		folder.setAttr("aria-expanded", String(!collapsed));
-		makeActivatable(folder, `${visual.name} folder`, () => {
-			this.sections.toggleFolder(section, folderPath);
-			relayout();
-		});
-		folder.addEventListener("contextmenu", (event) => {
-			event.preventDefault();
-			this.getActions().showFolderContextMenu(event, folderPath);
-		});
-		return folder;
-	}
-
-	private renderFileRow(
-		parent: HTMLElement,
-		row: FileRow,
-		section: ESection,
-		rowsLen: number,
-		depth: number,
-	): HTMLElement {
-		const item = parent.createDiv({ cls: "obsync-file-row" });
-		setDepth(item, depth);
-		if (row.isConflict) item.addClass("is-conflict");
-		if (this.openingPath === row.path) {
-			item.addClass("is-opening");
-			item.setAttr("aria-busy", "true");
-		}
-		if (this.activePath === row.path) {
-			item.addClass("is-active");
-			item.setAttr("aria-current", "true");
-		}
-		item.setAttr("role", "button");
-		item.setAttr("tabindex", "0");
-		item.setAttr("data-obsync-path", row.path);
-		item.setAttr("aria-label", `Open diff for ${row.path}`);
-		item.addEventListener("keydown", (event: KeyboardEvent) => {
-			if (event.key !== "Enter" && event.key !== " ") return;
-			if (event.target !== item) return;
-			event.preventDefault();
-			this.openFileDiff(item, row.path);
-		});
-
-		const checkbox = item.createEl("input", {
-			type: "checkbox",
-			cls: "obsync-file-checkbox",
-		});
-		checkbox.checked = this.sections.isSelected(section, row.path);
-		checkbox.addEventListener("click", (e) => e.stopPropagation());
-		checkbox.addEventListener("change", () => {
-			this.sections.setSelected(section, row.path, checkbox.checked);
-			this.afterSelectionChange(section, rowsLen);
-		});
-
-		const display = splitDisplayPath(row.path);
-		const copy = item.createSpan({ cls: "obsync-file-copy" });
-		copy.createSpan({ cls: "obsync-file-name", text: display.name });
-		if (this.layout === "flat" && display.parent) {
-			copy.createSpan({
-				cls: "obsync-file-parent",
-				text: display.parent,
-			});
-		}
-		copy.setAttr("title", row.path);
-
-		if (row.isConflict) this.renderConflictRowControls(parent, item, row);
-
-		if (row.size !== undefined) {
-			const size = item.createSpan({
-				cls: [
-					"obsync-file-size",
-					...(row.sizeDelta === undefined ? [] : ["has-delta"]),
-				],
-			});
-			if (row.sizeDelta !== undefined) {
-				size.createSpan({
-					cls: `obsync-file-size-delta ${sizeDeltaClass(row.sizeDelta)}`,
-					text: formatSizeDelta(row.sizeDelta),
-				});
-			}
-			size.createSpan({
-				cls: "obsync-file-size-current",
-				text: formatBytes(row.size),
-			});
-		}
-		item.createSpan({
-			cls: `obsync-file-status ${row.statusClass}`,
-			text: row.statusLetter,
-		});
-
-		item.addEventListener("click", () => {
-			this.openFileDiff(item, row.path);
-		});
-		item.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			this.getActions().showContextMenu(e, row.path, section);
-		});
-		return item;
-	}
-
 	private openFileDiff(item: HTMLElement, path: string): void {
 		if (this.openingPath === path) return;
 		const generation = ++this.openGeneration;
@@ -766,68 +409,6 @@ export class ChangesTab {
 		}
 		return null;
 	}
-
-	private renderConflictRowControls(
-		parent: HTMLElement,
-		item: HTMLElement,
-		row: FileRow,
-	): void {
-		const keepBtn = item.createEl("button", {
-			cls: "obsync-row-action obsync-row-keep",
-			text: "Keep local",
-		});
-		keepBtn.setAttr("aria-label", "Keep local version");
-		keepBtn.setAttr("title", "Keep local version");
-		keepBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			void this.getActions().resolveKeepLocal(row.path);
-		});
-
-		const acceptBtn = item.createEl("button", {
-			cls: "obsync-row-action obsync-row-accept",
-			text: "Accept remote",
-		});
-		acceptBtn.setAttr("aria-label", "Accept remote version");
-		acceptBtn.setAttr("title", "Accept remote version");
-		acceptBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			void this.getActions().resolveAcceptRemote(row.path);
-		});
-
-		const expanded = this.previews.isExpanded(row.path);
-		const expandBtn = item.createEl("button", {
-			cls: "obsync-expand-btn",
-			text: expanded ? "▾" : "▸",
-		});
-		expandBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			this.previews.toggle(row.path);
-			this.rerender();
-		});
-
-		if (expanded) {
-			this.previews.render(
-				parent,
-				row.path,
-				this.getActions().previewHandlers(),
-			);
-		}
-	}
-
-	private afterSelectionChange(section: ESection, rowsLen: number): void {
-		const snapshot = this.plugin.controller.getSnapshot();
-		this.sections.updateSectionUi(section, rowsLen, snapshot.busy);
-	}
-
-	private updateSelectionState(): void {
-		const snapshot = this.plugin.controller.getSnapshot();
-		if (!snapshot.result?.diff) return;
-		// The counts drawn are of the filtered rows, so re-deriving them from the
-		// diff would report the whole list under an active filter.
-		for (const [section, count] of this.renderedCounts) {
-			this.sections.updateSectionUi(section, count, snapshot.busy);
-		}
-	}
 }
 
 function canPushAll(snapshot: SyncStatusSnapshot): boolean {
@@ -850,29 +431,4 @@ function canPullAll(snapshot: SyncStatusSnapshot): boolean {
 
 function formatActionCount(count: number): string {
 	return count.toLocaleString();
-}
-
-function formatSizeDelta(delta: number): string {
-	const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-	return `${sign}${formatBytes(Math.abs(delta))}`;
-}
-
-function sizeDeltaClass(delta: number): string {
-	if (delta > 0) return "is-positive";
-	if (delta < 0) return "is-negative";
-	return "is-neutral";
-}
-
-function splitDisplayPath(path: string): { name: string; parent: string } {
-	const separator = path.lastIndexOf("/");
-	if (separator < 0) return { name: path, parent: "" };
-	return {
-		name: path.slice(separator + 1),
-		parent: path.slice(0, separator),
-	};
-}
-
-/** Indentation the flattened tree no longer gets from nested containers. */
-function setDepth(el: HTMLElement, depth: number): void {
-	if (depth > 0) el.style.setProperty("--obsync-depth", String(depth));
 }
