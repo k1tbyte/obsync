@@ -26,8 +26,14 @@ export default class SyncRelay implements Party.Server {
 		if (!secret) return true;
 		const supplied = new URL(request.url).searchParams.get("token");
 		if (!supplied) return false;
-		const expected = await deriveRoomToken(secret, this.room.id);
-		return timingSafeEqual(supplied, expected);
+		// PartyKit hands the room id over percent-encoded in the URL path, while
+		// clients derive the token from the raw channel id; accept either form.
+		const roomIds = new Set([this.room.id, decodeRoomId(this.room.id)]);
+		for (const roomId of roomIds) {
+			if (timingSafeEqual(supplied, await deriveRoomToken(secret, roomId)))
+				return true;
+		}
+		return false;
 	}
 
 	async onConnect(
@@ -111,6 +117,15 @@ export async function deriveRoomToken(
 	return [...new Uint8Array(mac)]
 		.map((byte) => byte.toString(16).padStart(2, "0"))
 		.join("");
+}
+
+/** A malformed escape in the path stays as-is; only well-formed encoding unwraps. */
+function decodeRoomId(roomId: string): string {
+	try {
+		return decodeURIComponent(roomId);
+	} catch {
+		return roomId;
+	}
 }
 
 function timingSafeEqual(left: string, right: string): boolean {

@@ -113,6 +113,24 @@ describe("room authorisation", () => {
 		expect(conn.closed).toEqual({ code: 4001, reason: "Unauthorized" });
 	});
 
+	it("accepts the raw room's token when PartyKit passes the id encoded", async () => {
+		// The client puts the channel id through encodeURIComponent in the path;
+		// PartyKit hands the server that encoded segment as room.id.
+		const target = room(encodeURIComponent(ROOM));
+		const conn = connection("c1");
+		await connect(target, conn, { token: await roomToken() });
+
+		expect(conn.closed).toBeNull();
+	});
+
+	it("refuses the raw room's token for an unrelated room", async () => {
+		const target = room(encodeURIComponent("s3|other-bucket/prefix"));
+		const conn = connection("c1");
+		await connect(target, conn, { token: await roomToken() });
+
+		expect(conn.closed?.code).toBe(4001);
+	});
+
 	it("refuses a token derived for a different room", async () => {
 		const target = room();
 		const conn = connection("c1");
