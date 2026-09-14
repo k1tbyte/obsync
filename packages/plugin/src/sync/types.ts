@@ -23,6 +23,8 @@ export interface Manifest {
 	files: Record<string, ManifestEntry>;
 	/** Leaf empty directories that have no files and would otherwise not be created. */
 	folders?: string[];
+	/** Reset generations by config-directory/category; resets never delete local files. */
+	resetGenerations?: Record<string, number>;
 }
 
 export interface HashCacheEntry {

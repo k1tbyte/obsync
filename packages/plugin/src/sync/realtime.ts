@@ -1,9 +1,9 @@
 /**
- * Realtime sync signalling client via PartyKit WebSocket.
+ * Realtime sync signalling client for the relay worker (packages/relay).
  * - On push: sends "sync" to notify other devices.
  * - On receiving "sync": triggers auto-pull via scheduler.
- * Room token is derived from deployment token and room id, ensuring room
- * tokens never carry storage credentials or deployment secrets.
+ * Room token is derived from the relay secret and room id, so a room token
+ * never carries the secret itself.
  */
 
 import { requestUrl } from "obsidian";
@@ -34,9 +34,9 @@ type RealtimeServerMessage = RealtimePresenceMessage | RealtimeSyncMessage;
 export interface RealtimeClientOptions {
 	serverUrl: string;
 	channelId: string;
-	/** Relay deployment secret. The room token is derived from it. */
+	/** Relay secret. The room token is derived from it. */
 	token?: string;
-	/** Room token derived elsewhere for a participant handed one instead of the deployment secret. */
+	/** Sent as is: a share participant's share token opens that share's room. */
 	roomToken?: string;
 	deviceId?: string;
 	deviceName?: string;
@@ -69,7 +69,10 @@ export class RealtimeClient {
 
 		let wsUrl: string;
 		try {
-			wsUrl = await this.roomUrl(this.options.serverUrl);
+			// Settings hold the worker's https URL; the socket needs its ws twin.
+			wsUrl = await this.roomUrl(
+				this.options.serverUrl.replace(/^http(s)?:/, "ws$1:"),
+			);
 		} catch {
 			// A malformed server URL cannot be fixed by retrying.
 			this.options.onConnectionChange?.(false);

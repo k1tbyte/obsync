@@ -107,6 +107,7 @@ export const localHunksOp: Operation<LocalHunksArgs> = async (
 			manifest,
 			new Set([path]),
 			result.snapshot.emptyFolders,
+			deps.scope,
 		);
 		await ctx.persistState(buildSessionState(deps.state, baseline, hashCache));
 	} else {
@@ -165,6 +166,7 @@ export const pullHunksOp: Operation<PullHunksArgs> = async (
 		result.remote,
 		isFullSelection(hunks, selected) ? new Set([path]) : new Set<string>(),
 		result.snapshot.emptyFolders,
+		deps.scope,
 	);
 	const hashCache = mergeWrittenIntoCache(
 		new Map([[path, localEntry]]),

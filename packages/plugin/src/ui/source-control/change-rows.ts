@@ -1,5 +1,6 @@
 import { setIcon } from "obsidian";
 import { formatBytes } from "@/shared/format";
+import { appendIconButton } from "../icon-button";
 import type { SourceControlActions } from "./actions";
 import type { ConflictPreviewManager } from "./conflict-preview-manager";
 import type { ESection, FileRow, VisualRow } from "./types";
@@ -150,38 +151,31 @@ function renderConflictRowControls(
 	row: FileRow,
 	ctx: RowContext,
 ): void {
-	const keepBtn = item.createEl("button", {
-		cls: "obsync-row-action obsync-row-keep",
-		text: "Keep local",
-	});
-	keepBtn.setAttr("aria-label", "Keep local version");
-	keepBtn.setAttr("title", "Keep local version");
-	keepBtn.addEventListener("click", (e) => {
+	const controls = item.createDiv({ cls: "obsync-conflict-controls" });
+
+	appendIconButton(controls, "arrow-up", "Keep local version", (e) => {
 		e.stopPropagation();
 		void ctx.actions.resolveKeepLocal(row.path);
 	});
 
-	const acceptBtn = item.createEl("button", {
-		cls: "obsync-row-action obsync-row-accept",
-		text: "Accept remote",
-	});
-	acceptBtn.setAttr("aria-label", "Accept remote version");
-	acceptBtn.setAttr("title", "Accept remote version");
-	acceptBtn.addEventListener("click", (e) => {
+	appendIconButton(controls, "arrow-down", "Accept remote version", (e) => {
 		e.stopPropagation();
 		void ctx.actions.resolveAcceptRemote(row.path);
 	});
 
 	const expanded = ctx.previews.isExpanded(row.path);
-	const expandBtn = item.createEl("button", {
-		cls: "obsync-expand-btn",
-		text: expanded ? "▾" : "▸",
-	});
-	expandBtn.addEventListener("click", (e) => {
-		e.stopPropagation();
-		ctx.previews.toggle(row.path);
-		ctx.rerender();
-	});
+	const expandBtn = appendIconButton(
+		controls,
+		expanded ? "chevron-down" : "chevron-right",
+		expanded ? "Collapse conflict preview" : "Expand conflict preview",
+		(e) => {
+			e.stopPropagation();
+			ctx.previews.toggle(row.path);
+			ctx.rerender();
+		},
+	);
+	expandBtn.addClass("obsync-expand-btn");
+	expandBtn.setAttr("aria-expanded", String(expanded));
 
 	if (expanded) {
 		ctx.previews.render(parent, row.path, ctx.actions);

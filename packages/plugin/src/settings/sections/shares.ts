@@ -1,13 +1,14 @@
 import { type ButtonComponent, Setting } from "obsidian";
 
 import type { PluginHost } from "@/plugin/host";
+import { isRelayConfigured } from "@/settings/model";
 import {
 	describeShareStatus,
 	describeShareTooltip,
+	endShare,
 	IDLE_SHARE_STATUS,
 	isOwnedShare,
 	listShareParticipants,
-	revokeAllShareTokens,
 	revokeShareToken,
 	type SharedFolderConfig,
 	shareIndicatorState,
@@ -15,7 +16,6 @@ import {
 import { listShareBackends } from "@/storage";
 import type { EStorageBackend } from "@/storage/config";
 import {
-	brokerAdmin,
 	CreateShareModal,
 	JoinShareModal,
 	notifyError,
@@ -36,35 +36,13 @@ export function renderSharesSection(
 		"Share a folder with other people. Each share syncs to its own encrypted storage location with its own key. Invitees get a revocable token for that folder only — never your storage credentials.",
 	);
 
-	renderShareStorage(parent, plugin, onDisplay);
-
-	new Setting(parent)
-		.setName("Broker URL")
-		.setDesc(
-			"Your self-hosted worker (packages/auth-worker). It signs share access for invitees; only it holds the storage credentials.",
-		)
-		.addText((t) =>
-			t
-				.setPlaceholder("https://obsync-auth.example.workers.dev")
-				.setValue(plugin.settings.shareBrokerUrl)
-				.onChange(async (v) => {
-					plugin.settings.shareBrokerUrl = v.trim();
-					await plugin.saveSettings();
-				}),
+	if (!isRelayConfigured(plugin.settings)) {
+		new Setting(parent).setDesc(
+			"Set up the relay server under Connection first. It signs share access for invitees and carries live updates between participants.",
 		);
+	}
 
-	new Setting(parent)
-		.setName("Broker admin secret")
-		.setDesc(
-			"Matches SHARE_ADMIN_SECRET on the worker. Used to issue and revoke invites; never leaves this device.",
-		)
-		.addText((t) => {
-			t.inputEl.type = "password";
-			t.setValue(plugin.settings.shareBrokerAdminSecret).onChange(async (v) => {
-				plugin.settings.shareBrokerAdminSecret = v.trim();
-				await plugin.saveSettings();
-			});
-		});
+	renderShareStorage(parent, plugin, onDisplay);
 
 	new Setting(parent)
 		.setName("Share or join")
@@ -234,9 +212,8 @@ async function managePeople(
 	plugin: PluginHost,
 	share: SharedFolderConfig,
 ): Promise<void> {
-	const admin = brokerAdmin(plugin);
 	try {
-		const participants = await listShareParticipants(admin, share.id);
+		const participants = await listShareParticipants(plugin.settings, share.id);
 		if (participants.length === 0) {
 			notifyInfo(`No one has been invited to "${share.name}" yet.`);
 			return;
@@ -254,11 +231,15 @@ async function managePeople(
 				confirmClass: "mod-warning",
 			});
 			if (!confirmed) continue;
-			await revokeShareToken(admin, share.id, participant.participantId);
+			await revokeShareToken(
+				plugin.settings,
+				share.id,
+				participant.participantId,
+			);
 			notifyInfo(`Revoked "${participant.participantId}".`);
 		}
 	} catch (err) {
-		notifyError("Could not reach the share broker", err);
+		notifyError("Could not reach the relay", err);
 	}
 }
 
@@ -289,10 +270,10 @@ async function removeShare(
 	if (owned) {
 		// Revoke first so no token outlives the data it writes to. Fail closed if revocation fails.
 		try {
-			await revokeAllShareTokens(brokerAdmin(plugin), share.id);
+			await endShare(plugin.settings, share.id);
 		} catch (err) {
 			notifyError(
-				"Could not revoke invites, so the share was kept. Revoke them on the broker and try again",
+				"Could not revoke invites, so the share was kept. Check the relay server and try again",
 				err,
 			);
 			return;

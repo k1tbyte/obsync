@@ -20,7 +20,6 @@ const share: SharedFolderConfig = {
 	localRoot: "Projects/Team",
 	keyB64: "key",
 	storage: defaultS3Config(),
-	relayUrl: "wss://relay.example.com",
 	createdAt: 1,
 };
 

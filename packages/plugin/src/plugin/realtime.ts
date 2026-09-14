@@ -2,6 +2,7 @@ import { debounce } from "obsidian";
 
 import {
 	activeStorage,
+	isRelayConfigured,
 	isStorageConfigured,
 	type ObsyncSettings,
 } from "@/settings/model";
@@ -83,9 +84,9 @@ export class PluginRealtime {
 			false,
 		);
 		this.client = new RealtimeClient({
-			serverUrl: settings.realtimeServerUrl,
+			serverUrl: settings.relayUrl,
 			channelId,
-			token: settings.realtimeToken || undefined,
+			token: settings.relaySecret,
 			deviceId: currentDevice.id,
 			deviceName: currentDevice.name,
 			onRemoteSync: () => this.onRemoteSync?.(),
@@ -149,11 +150,11 @@ function sameDevices(
 /** Null when realtime cannot run at all with these settings. */
 function connectionKeyOf(settings: ObsyncSettings): string | null {
 	if (!settings.realtimeSync) return null;
-	if (!settings.realtimeServerUrl) return null;
+	if (!isRelayConfigured(settings)) return null;
 	if (!isStorageConfigured(settings)) return null;
 	return [
 		storageIdentity(activeStorage(settings)),
-		settings.realtimeServerUrl,
-		settings.realtimeToken,
+		settings.relayUrl,
+		settings.relaySecret,
 	].join("|");
 }

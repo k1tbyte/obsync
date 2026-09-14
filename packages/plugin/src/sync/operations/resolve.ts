@@ -50,6 +50,7 @@ export const batchAcceptRemoteOp: Operation<ReadonlySet<string>> = async (
 		remote,
 		new Set(conflictPaths),
 		result.snapshot.emptyFolders,
+		deps.scope,
 	);
 	await ctx.persistState(
 		buildSessionState(
@@ -106,6 +107,7 @@ export const batchKeepLocalOp: Operation<ReadonlySet<string>> = async (
 		manifest,
 		new Set(conflictPaths),
 		result.snapshot.emptyFolders,
+		deps.scope,
 	);
 	await ctx.persistState(
 		buildSessionState(
@@ -176,7 +178,7 @@ async function resolveEach(
 }> {
 	const conflictPaths = result.diff.conflicts
 		.map((c) => c.path)
-		.filter((p) => paths.has(p));
+		.filter((p) => paths.has(p) && deps.scope.includesInDiff(p));
 	if (conflictPaths.length === 0) {
 		throw new Error("No matching conflicts to resolve");
 	}

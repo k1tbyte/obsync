@@ -1,4 +1,4 @@
-name: Deploy Relay (PartyKit)
+name: Deploy Relay
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy to PartyKit
+    name: Deploy to Cloudflare Workers
     steps:
       - uses: actions/checkout@v4
 
@@ -21,8 +21,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Test
+        run: pnpm --filter obsync-relay run test
+
+      # The KV namespace and Durable Object are created by wrangler on the first
+      # deploy; only the secrets below come from the repository.
       - name: Deploy
-        run: pnpm --filter obsync-relay exec partykit deploy --var TOKEN="${{ secrets.RELAY_TOKEN }}"
+        working-directory: packages/relay
+        shell: bash
         env:
-          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
-          PARTYKIT_LOGIN: ${{ secrets.PARTYKIT_LOGIN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        run: |
+          if [ -z "$RELAY_SECRET" ]; then
+            echo "::error::Add a RELAY_SECRET repository secret (Obsync settings -> Connection -> Relay server -> Generate)."
+            exit 1
+          fi
+          secrets="$RUNNER_TEMP/relay-secrets.json"
+          jq -n 'env | {RELAY_SECRET, GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET} | with_entries(select(.value != null and .value != ""))' > "$secrets"
+          pnpm exec wrangler deploy --secrets-file "$secrets" | tee "$RUNNER_TEMP/deploy.log"
+          url=$(grep -oE 'https://[^ ]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -1)
+          echo "Relay URL: \`$url\` - paste it into Obsync settings -> Connection -> Relay server." >> "$GITHUB_STEP_SUMMARY"

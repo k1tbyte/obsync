@@ -1,11 +1,12 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ES2022",
-		"module": "ES2022",
+		"target": "es2022",
+		"module": "es2022",
+		"lib": ["es2022"],
+		"types": ["@cloudflare/workers-types"],
 		"strict": true,
-		"esModuleInterop": true,
-		"types": ["partykit/server"]
+		"resolveJsonModule": true
 	},
-	"include": ["src", "tests", "vitest.config.ts"]
+	"include": ["src/**/*", "tests/**/*"]
 }

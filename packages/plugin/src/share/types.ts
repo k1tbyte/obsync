@@ -16,12 +16,6 @@ export interface SharedFolderConfig {
 	keyB64: string;
 	/** Storage location that holds the share's encrypted objects. */
 	storage: StorageAdapterConfig;
-	/** Optional PartyKit relay for instant propagation between participants. */
-	relayUrl?: string;
-	/** Relay deployment secret. Owner only: it can derive any room's token. */
-	relayToken?: string;
-	/** Room token handed to a participant, scoped to this share's room alone. */
-	relayRoomToken?: string;
 	/** Paused shares keep their config but never sync. */
 	paused?: boolean;
 	createdAt: number;
@@ -84,7 +78,7 @@ export function isPathInShare(path: string, root: string): boolean {
 	return path === normalized || path.startsWith(`${normalized}/`);
 }
 
-/** The relay room a share syncs through; invite derives room token from it. */
+/** The relay room a share syncs through. Mirrored by the relay's shareRoomId. */
 export function shareChannelId(shareId: string): string {
 	return `obsync-share-${shareId}`;
 }

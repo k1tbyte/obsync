@@ -13,7 +13,6 @@ export {
 	askNewPassphrase,
 	askPassphrase,
 	askSettingsTransferInput,
-	brokerAdmin,
 	CreateShareModal,
 	confirmRemoteReset,
 	confirmSettingsTransferImport,

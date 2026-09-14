@@ -33,7 +33,7 @@ export function shareIndicatorState(
 	if (share.paused || status.state === EShareSyncState.Paused) return "paused";
 	if (status.state === EShareSyncState.Error) return "error";
 	if (status.state === EShareSyncState.Syncing) return "syncing";
-	if (share.relayUrl && !status.relayConnected) return "offline";
+	if (!status.relayConnected) return "offline";
 	return "active";
 }
 
@@ -41,10 +41,7 @@ export function describeShareStatus(
 	share: SharedFolderConfig,
 	status: ShareStatus,
 ): string {
-	const parts = [
-		describeSyncState(share, status),
-		describePresence(share, status),
-	];
+	const parts = [describeSyncState(share, status), describePresence(status)];
 	const activity = describeActivity(status.lastActivity);
 	if (activity) parts.push(activity);
 	return parts.join(" · ");
@@ -71,11 +68,7 @@ function describeSyncState(
 		: "Not synced yet";
 }
 
-function describePresence(
-	share: SharedFolderConfig,
-	status: ShareStatus,
-): string {
-	if (!share.relayUrl) return "Live presence not configured";
+function describePresence(status: ShareStatus): string {
 	if (!status.relayConnected) return "Live presence offline";
 	const online = status.peers.length;
 	return online === 0

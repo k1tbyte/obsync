@@ -7,6 +7,7 @@ import { ConcurrentPushError } from "@/sync/manifest";
 import type { LocalState } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 
+import { ShareBrokerRegistry } from "./broker-registry";
 import { ShareRealtimeManager } from "./realtime-manager";
 import { ShareSessionStore } from "./session-store";
 import { ShareStatusStore } from "./status-store";
@@ -44,6 +45,7 @@ export class ShareSyncService {
 	private readonly statuses = new ShareStatusStore();
 	private readonly sessions: ShareSessionStore;
 	private readonly realtime: ShareRealtimeManager;
+	private readonly registry: ShareBrokerRegistry;
 	private readonly debounceTimers = new Map<string, number>();
 	private readonly inFlight = new Map<string, Promise<void>>();
 	private readonly queued = new Set<string>();
@@ -51,7 +53,9 @@ export class ShareSyncService {
 
 	constructor(private readonly host: ShareServiceHost) {
 		this.sessions = new ShareSessionStore(host);
+		this.registry = new ShareBrokerRegistry(() => host.getSettings());
 		this.realtime = new ShareRealtimeManager(this.statuses, {
+			getSettings: () => this.host.getSettings(),
 			deviceId: () => this.host.getState().deviceId,
 			deviceName: () => this.host.getState().deviceName,
 			onRemoteSync: (shareId) => this.scheduleSync(shareId),
@@ -74,6 +78,7 @@ export class ShareSyncService {
 	refresh(): void {
 		if (this.disposed) return;
 		const shares = this.host.getSettings().sharedFolders;
+		this.registry.sync(shares);
 		let changed = this.realtime.sync(shares);
 
 		for (const share of shares) {
@@ -102,6 +107,11 @@ export class ShareSyncService {
 
 	getStatus(shareId: string): ShareStatus {
 		return this.statuses.get(shareId);
+	}
+
+	/** Resolves once the relay can sign this share's requests, so a fresh invite works at once. */
+	ensureBrokerStorage(share: SharedFolderConfig): Promise<void> {
+		return this.registry.ensure(share);
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -208,6 +218,8 @@ export class ShareSyncService {
 			state: EShareSyncState.Syncing,
 			error: null,
 		});
+		// Cycles, not settings keystrokes, carry rotated storage keys to the relay.
+		this.registry.sync([share]);
 		try {
 			await this.sessions.ensureRoot(share);
 			const outcome = await this.runCycleWithRetries(share);

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_SETTINGS, type ObsyncSettings } from "@/settings/model";
 import { ShareRealtimeManager } from "@/share/realtime-manager";
 import { ShareStatusStore } from "@/share/status-store";
 import type { SharedFolderConfig } from "@/share/types";
+import { defaultS3Config } from "@/storage";
 import { EStorageBackend } from "@/storage/config";
 
 interface FakeClient {
@@ -33,12 +35,38 @@ describe("ShareRealtimeManager", () => {
 		clients.length = 0;
 	});
 
-	it("opens one connection per share that has a relay", () => {
+	it("opens one connection per owned share through this device's relay", () => {
 		const { manager } = setup();
 		manager.sync([share({ id: "a" }), share({ id: "b" })]);
 
 		expect(clients).toHaveLength(2);
 		expect(clients[0]?.connect).toHaveBeenCalledOnce();
+		expect(clients[0]?.options).toMatchObject({
+			serverUrl: "https://relay.example",
+			token: "secret",
+			channelId: "obsync-share-a",
+		});
+	});
+
+	it("joins a joined share's room on its owner's relay with the share token", () => {
+		const { manager } = setup();
+		manager.sync([
+			share({
+				id: "a",
+				storage: {
+					kind: EStorageBackend.ShareBroker,
+					brokerUrl: "https://owner.example",
+					shareToken: "share-token",
+					concurrency: 4,
+				},
+			}),
+		]);
+
+		expect(clients[0]?.options).toMatchObject({
+			serverUrl: "https://owner.example",
+			roomToken: "share-token",
+		});
+		expect(clients[0]?.options.token).toBeUndefined();
 	});
 
 	it("leaves an established connection alone on an unrelated change", () => {
@@ -50,19 +78,21 @@ describe("ShareRealtimeManager", () => {
 		expect(clients[0]?.dispose).not.toHaveBeenCalled();
 	});
 
-	it("reconnects when the relay credentials change", () => {
-		const { manager } = setup();
-		manager.sync([share({ id: "a", relayToken: "old" })]);
-		manager.sync([share({ id: "a", relayToken: "new" })]);
+	it("reconnects when the relay secret changes", () => {
+		const { manager, settings } = setup();
+		manager.sync([share({ id: "a" })]);
+		settings.relaySecret = "rotated";
+		manager.sync([share({ id: "a" })]);
 
 		expect(clients).toHaveLength(2);
 		expect(clients[0]?.dispose).toHaveBeenCalledOnce();
-		expect(clients[1]?.options.token).toBe("new");
+		expect(clients[1]?.options.token).toBe("rotated");
 	});
 
-	it("skips shares with no relay url", () => {
-		const { manager } = setup();
-		manager.sync([share({ id: "a", relayUrl: undefined })]);
+	it("skips owned shares while this device has no relay", () => {
+		const { manager, settings } = setup();
+		settings.relayUrl = "";
+		expect(manager.sync([share({ id: "a" })])).toBe(false);
 		expect(clients).toHaveLength(0);
 	});
 
@@ -89,11 +119,6 @@ describe("ShareRealtimeManager", () => {
 		expect(clients[0]?.dispose).toHaveBeenCalledOnce();
 	});
 
-	it("reports no status change when nothing was connected", () => {
-		const { manager } = setup();
-		expect(manager.sync([share({ id: "a", relayUrl: undefined })])).toBe(false);
-	});
-
 	it("routes a peer notification to that share's client only", () => {
 		const { manager } = setup();
 		manager.sync([share({ id: "a" }), share({ id: "b" })]);
@@ -117,14 +142,21 @@ describe("ShareRealtimeManager", () => {
 function setup(): {
 	manager: ShareRealtimeManager;
 	statuses: ShareStatusStore;
+	settings: ObsyncSettings;
 } {
+	const settings: ObsyncSettings = {
+		...DEFAULT_SETTINGS,
+		relayUrl: "https://relay.example",
+		relaySecret: "secret",
+	};
 	const statuses = new ShareStatusStore();
 	const manager = new ShareRealtimeManager(statuses, {
+		getSettings: () => settings,
 		deviceId: () => "device-1",
 		deviceName: () => "Laptop",
 		onRemoteSync: () => undefined,
 	});
-	return { manager, statuses };
+	return { manager, statuses, settings };
 }
 
 function share(overrides: Partial<SharedFolderConfig>): SharedFolderConfig {
@@ -133,18 +165,7 @@ function share(overrides: Partial<SharedFolderConfig>): SharedFolderConfig {
 		name: "Shared notes",
 		localRoot: "Shared",
 		keyB64: "key",
-		storage: {
-			kind: EStorageBackend.S3,
-			endpoint: "",
-			region: "",
-			bucket: "",
-			accessKeyId: "",
-			secretAccessKey: "",
-			prefix: "",
-			forcePathStyle: false,
-			concurrency: 4,
-		},
-		relayUrl: "wss://relay.example",
+		storage: defaultS3Config(),
 		createdAt: 1,
 		...overrides,
 	};

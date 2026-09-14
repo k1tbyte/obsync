@@ -7,7 +7,6 @@ export {
 	showSettingsTransferExport,
 } from "./settings-transfer-modal";
 export {
-	brokerAdmin,
 	CreateShareModal,
 	JoinShareModal,
 	ShareInviteModal,

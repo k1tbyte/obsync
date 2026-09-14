@@ -12,7 +12,7 @@ import type { StorageAuthOutcome } from "@/storage/types";
 
 /** Fallback Google Drive auth broker when the user has not self-hosted one. */
 export const DEFAULT_GDRIVE_AUTH_SERVER =
-	"https://obsync-auth.kitbyte.workers.dev";
+	"https://obsync-relay.kitbyte.workers.dev";
 
 export function computeExpiresAt(
 	expiresIn: string | number | undefined,
@@ -108,9 +108,9 @@ export const GOOGLE_DRIVE_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
 		key: "authServerUrl",
 		name: "Auth server URL",
-		desc: "Worker that exchanges Google auth codes for tokens. The default is run by the plugin author, and your refresh token is sent to it. Deploy packages/auth-worker and point this at your own copy to avoid that.",
+		desc: "Worker that exchanges Google auth codes for tokens. The default is run by the plugin author, and your refresh token is sent to it. Deploy packages/relay and point this at your own copy to avoid that.",
 		kind: EFieldKind.Text,
-		placeholder: "https://obsync-auth...workers.dev",
+		placeholder: "https://obsync-relay...workers.dev",
 	},
 	CONCURRENCY_FIELD,
 ];

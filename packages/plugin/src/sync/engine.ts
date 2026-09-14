@@ -12,6 +12,7 @@ import { scanVault } from "@/vault/scanner";
 import type { ScopePolicy } from "@/vault/scope";
 import { advanceBaselineForPaths, mergeFolderArrays } from "./baseline";
 import { throwIfCancelled } from "./cancel";
+import { reconcileBaselineResetGenerations } from "./config-reset";
 import { writeRemoteEntry } from "./content";
 import { diff } from "./diff";
 import { type HistoryConfig, publishManifestWithHistory } from "./history";
@@ -78,10 +79,15 @@ export async function compare(
 			: Promise.resolve(knownRemote),
 	]);
 	assertVaultCompatibility(deps.state, fetched);
-	const remote = reconcileRemoteAgainstBaseline(fetched, deps.state.baseline);
+	const remote = reconcileRemoteAgainstBaseline(
+		fetched,
+		deps.state.baseline,
+		deps.storage,
+		deps.key,
+	);
 	if (fetched && remote !== fetched) {
 		reportWarning(
-			"Storage returned a stale manifest; using the baseline.",
+			"Storage returned a stale manifest; using the complete published head.",
 			undefined,
 			[
 				`fetched: ${fetched.snapshotId}`,
@@ -92,7 +98,13 @@ export async function compare(
 	const result = diff({
 		local: snapshot,
 		remote,
-		baseline: remote ? deps.state.baseline : null,
+		baseline: remote
+			? reconcileBaselineResetGenerations(
+					deps.state.baseline,
+					remote,
+					deps.scope,
+				)
+			: null,
 		includes: (path) => deps.scope.includesInDiff(path),
 	});
 	return { snapshot, remote, diff: result, updatedCache };
@@ -106,8 +118,8 @@ export async function pushPaths(
 ): Promise<Manifest> {
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
 	const pathSet = new Set(paths);
-	const localChanges = compareResult.diff.localChanges.filter((c) =>
-		pathSet.has(c.path),
+	const localChanges = compareResult.diff.localChanges.filter(
+		(c) => pathSet.has(c.path) && deps.scope.includesInDiff(c.path),
 	);
 
 	const uploads = collectUploads(localChanges, compareResult.snapshot);
@@ -175,8 +187,8 @@ export async function pullPaths(
 	const concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
 	const pathSet = new Set(paths);
 	const remote = compareResult.remote;
-	const changes = compareResult.diff.remoteChanges.filter((c) =>
-		pathSet.has(c.path),
+	const changes = compareResult.diff.remoteChanges.filter(
+		(c) => pathSet.has(c.path) && deps.scope.includesInDiff(c.path),
 	);
 
 	const downloads = changes.filter((c) => c.type !== EChangeType.RemoteDelete);
@@ -228,6 +240,7 @@ export async function pullPaths(
 		remote,
 		new Set(written.keys()),
 		onDisk,
+		deps.scope,
 	);
 	return { baseline, written, cancelled };
 }
@@ -278,6 +291,8 @@ export async function pushSingleFile(
 	path: string,
 	bytes: Uint8Array,
 ): Promise<Manifest> {
+	if (!deps.scope.includesInDiff(path))
+		throw new Error("File is outside this device's sync scope.");
 	const hash = await storeObject(deps, bytes);
 	const kind: EFileKind = deps.scope.classify(path);
 	const entry: ManifestEntry = {
@@ -313,7 +328,9 @@ export async function publishFileMap(
 			emptyFolders: mergeFolderArrays(
 				compareResult.remote?.folders,
 				compareResult.snapshot.emptyFolders,
-				deps.state.baseline?.folders,
+				deps.state.baseline?.folders?.filter((dir) =>
+					deps.scope.canDescend(dir),
+				),
 			),
 		},
 	);

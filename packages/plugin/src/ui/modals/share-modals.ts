@@ -1,13 +1,15 @@
 import { Modal, Setting } from "obsidian";
 
 import type { PluginHost } from "@/plugin/host";
-import { isShareStorageConfigured, shareStorage } from "@/settings/model";
+import {
+	isRelayConfigured,
+	isShareStorageConfigured,
+	shareStorage,
+} from "@/settings/model";
 import {
 	assertShareableStorage,
-	type BrokerAdmin,
 	createSharedFolderConfig,
 	createShareInviteUrl,
-	isBrokerConfigured,
 	issueShareToken,
 	joinedSharedFolderConfig,
 	normalizeShareRoot,
@@ -17,13 +19,6 @@ import {
 	shareNameToFolder,
 } from "@/share";
 import { notifyError, notifyInfo } from "@/ui/notices";
-
-export function brokerAdmin(plugin: PluginHost): BrokerAdmin {
-	return {
-		url: plugin.settings.shareBrokerUrl,
-		adminSecret: plugin.settings.shareBrokerAdminSecret,
-	};
-}
 
 /** Returns the share whose root equals or nests the given root, if any. */
 function findShareOverlap(
@@ -45,8 +40,6 @@ export class CreateShareModal extends Modal {
 	private submitting = false;
 	private folder: string;
 	private name = "";
-	private relayUrl: string;
-	private relayToken: string;
 
 	constructor(
 		private readonly plugin: PluginHost,
@@ -54,8 +47,6 @@ export class CreateShareModal extends Modal {
 	) {
 		super(plugin.app);
 		this.folder = folderPath ?? "";
-		this.relayUrl = plugin.settings.realtimeServerUrl;
-		this.relayToken = plugin.settings.realtimeToken;
 	}
 
 	onOpen(): void {
@@ -90,27 +81,6 @@ export class CreateShareModal extends Modal {
 			);
 
 		new Setting(contentEl)
-			.setName("Relay server (optional)")
-			.setDesc(
-				"WebSocket relay for instant updates between participants. Without it, changes propagate on the periodic re-check.",
-			)
-			.addText((t) =>
-				t
-					.setPlaceholder("wss://…")
-					.setValue(this.relayUrl)
-					.onChange((v) => {
-						this.relayUrl = v;
-					}),
-			);
-
-		new Setting(contentEl).setName("Relay token (optional)").addText((t) => {
-			t.inputEl.type = "password";
-			t.setValue(this.relayToken).onChange((v) => {
-				this.relayToken = v;
-			});
-		});
-
-		new Setting(contentEl)
 			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
 			.addButton((b) =>
 				b
@@ -141,9 +111,9 @@ export class CreateShareModal extends Modal {
 					"Fill in the share storage credentials under Settings → Obsync → Shared folders first.",
 				);
 			}
-			if (!isBrokerConfigured(brokerAdmin(this.plugin))) {
+			if (!isRelayConfigured(this.plugin.settings)) {
 				throw new Error(
-					"Set the share broker URL and admin secret under Settings → Obsync → Shared folders first.",
+					"Set up the relay server under Settings → Obsync → Connection first.",
 				);
 			}
 			const overlap = findShareOverlap(
@@ -159,8 +129,6 @@ export class CreateShareModal extends Modal {
 				localRoot: root,
 				name: this.name,
 				baseStorage: shareStorage(this.plugin.settings),
-				relayUrl: this.relayUrl,
-				relayToken: this.relayToken,
 			});
 			await this.plugin.addSharedFolder(share);
 			this.close();
@@ -249,8 +217,9 @@ export class ShareInviteModal extends Modal {
 			return;
 		}
 		try {
+			await this.plugin.shares.ensureBrokerStorage(this.share);
 			const brokerStorage = await issueShareToken(
-				brokerAdmin(this.plugin),
+				this.plugin.settings,
 				this.share.id,
 				participantId,
 				this.participant.trim(),

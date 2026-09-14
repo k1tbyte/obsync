@@ -25,8 +25,8 @@ const original = await page.evaluate(() => ({
 await mkdir("artifacts/ui-verification", { recursive: true });
 let leafId;
 const checks = [];
-const shot = (name) =>
-	page.screenshot({ path: `artifacts/ui-verification/${name}.png` });
+const shot = (name, target = page) =>
+	target.screenshot({ path: `artifacts/ui-verification/${name}.png` });
 const settle = () => page.waitForTimeout(150);
 
 async function seed(nextModel = model(), texts) {
@@ -47,11 +47,11 @@ async function seed(nextModel = model(), texts) {
 				};
 			const controller = {
 				getSnapshot: () => ({}),
-				getConflictThreeWay: async () => texts,
+				fileDiffs: { getConflictThreeWay: async () => texts },
 				resolveConflictMerged: capture("merge"),
 				applyLocalHunks: capture("local"),
 				pullHunks: capture("pull"),
-				restoreHistoryHunks: capture("restore"),
+				history: { restoreHistoryHunks: capture("restore") },
 			};
 			view.plugin = { controller };
 			view.operations.plugin = view.plugin;
@@ -98,34 +98,61 @@ async function scrollEnd(panelKind, end = "bottom") {
 		await settle();
 	}
 }
-async function assertRowsInside() {
-	const clipped = await root()
-		.locator(".obsync-merge-divider, .obsync-compare-divider")
-		.evaluateAll((strips) =>
-			strips.flatMap((strip) => {
-				const bounds = strip.getBoundingClientRect();
-				return [
-					...strip.querySelectorAll(".obsync-divider-action:not(.is-hidden)"),
-				]
-					.filter((row) => {
-						const rect = row.getBoundingClientRect();
-						return (
-							rect.top < bounds.top - 0.5 || rect.bottom > bounds.bottom + 0.5
-						);
-					})
-					.map((row) => ({
-						change: row.dataset.change,
-						strip: strip.className,
-						rect: row.getBoundingClientRect().toJSON(),
-						bounds: bounds.toJSON(),
-					}));
-			}),
-		);
-	assert.deepEqual(
-		clipped,
-		[],
-		"Visible action rows stay inside their divider",
-	);
+const COMPARE_STRIP = ".obsync-compare-divider";
+const STRIPS = [
+	COMPARE_STRIP,
+	".obsync-merge-divider.is-local",
+	".obsync-merge-divider.is-remote",
+];
+const strip = (which) => root().locator(`${which} .obsync-divider-canvas`);
+const popup = (which) =>
+	root().locator(`${which} .obsync-divider-action.is-popup`);
+
+/** How many changes on screen the strip offers actions for. */
+async function changesOnScreen(which = COMPARE_STRIP) {
+	const canvas = strip(which);
+	await canvas.press("Home");
+	const label = await canvas.getAttribute("aria-label");
+	return Number(/of (\d+)/.exec(label)?.[1] ?? 0);
+}
+
+/** Opens the action popup of the n-th change on screen through the strip's keyboard model. */
+async function openChange(index, which = COMPARE_STRIP) {
+	const canvas = strip(which);
+	await canvas.press("Home");
+	for (let step = 0; step < index; step++) await canvas.press("ArrowDown");
+	await canvas.press("Enter");
+	await settle();
+	const open = popup(which);
+	assert.equal(await open.count(), 1, `change ${index} opens its popup`);
+	return open;
+}
+
+const closePopup = () => page.keyboard.press("Escape");
+
+/** The popup for the first and last change on screen stays within its strip. */
+async function assertPopupInside() {
+	for (const which of STRIPS) {
+		if ((await strip(which).count()) === 0) continue;
+		if ((await changesOnScreen(which)) === 0) continue;
+		for (const key of ["Home", "End"]) {
+			const canvas = strip(which);
+			await canvas.press(key);
+			await canvas.press("Enter");
+			await settle();
+			const inside = await popup(which).evaluate((el) => {
+				const bounds = el
+					.closest(".obsync-merge-divider, .obsync-compare-divider")
+					.getBoundingClientRect();
+				const rect = el.getBoundingClientRect();
+				return (
+					rect.top >= bounds.top - 0.5 && rect.bottom <= bounds.bottom + 0.5
+				);
+			});
+			assert(inside, `The ${key} popup of ${which} stays inside its divider`);
+			await closePopup();
+		}
+	}
 }
 
 try {
@@ -143,17 +170,25 @@ try {
 	});
 	await resize(1500);
 	await seed();
-	const rows = () =>
-		root().locator(".obsync-compare-divider .obsync-divider-action");
-	// The third change sits below the fold; only changes on screen hold buttons.
-	assert.equal(await rows().count(), 2);
-	await rows().nth(0).locator("button").nth(0).click();
-	await rows().nth(1).locator("button").nth(1).click();
+	// The third change sits below the fold; only changes on screen offer actions.
+	assert.equal(await changesOnScreen(), 2);
+	assert.equal(await popup(COMPARE_STRIP).count(), 0, "No popup until a click");
+	await (await openChange(0)).locator("button").nth(0).click();
+	assert.equal(
+		await popup(COMPARE_STRIP).count(),
+		0,
+		"Acting closes the popup",
+	);
+	await (await openChange(1)).locator("button").nth(1).click();
 	await page.evaluate((id) => {
 		const view = app.workspace.getLeafById(id).view;
 		view.comparePanel.update(view.model, true);
 	}, leafId);
-	assert.equal(await rows().locator('[aria-pressed="true"]').count(), 2);
+	for (const index of [0, 1]) {
+		const open = await openChange(index);
+		assert.equal(await open.locator('[aria-pressed="true"]').count(), 1);
+		await closePopup();
+	}
 	assert.deepEqual(
 		await root()
 			.locator(".obsync-pending-kind")
@@ -214,14 +249,20 @@ try {
 	assert.equal(await root().locator(".obsync-gap.is-fold").count(), 0);
 	await shot("two-way-narrow");
 	await resize(1500);
-	assert.equal(await rows().locator(".is-active").count(), 2);
+	for (const index of [0, 1]) {
+		const open = await openChange(index);
+		assert.equal(await open.locator(".is-active").count(), 1);
+		await closePopup();
+	}
 	await root()
 		.getByRole("button", { name: "Discard the pending choices" })
 		.click();
-	assert.equal(await root().locator(".obsync-rail-btn.is-active").count(), 0);
+	const first = await openChange(0);
+	assert.equal(await first.locator(".is-active").count(), 0);
+	await closePopup();
 	checks.push("390px layout preserves choices and gaps fold again");
 	await scrollEnd("comparePanel");
-	await assertRowsInside();
+	await assertPopupInside();
 	await shot("two-way-bottom");
 
 	// Refreshing with a different direction must replace the panel and its actions.
@@ -238,15 +279,17 @@ try {
 		1,
 		"Structural refresh leaves one panel",
 	);
+	const remoteOnly = await openChange(0);
 	assert.equal(
-		await rows().first().locator("button").count(),
+		await remoteOnly.locator("button").count(),
 		1,
 		"Remote refresh exposes only Pull",
 	);
+	await closePopup();
 	checks.push("structural refresh replaces the panel and direction");
 	for (const direction of ["remote", "history"]) {
 		await seed(model(base, local, direction));
-		await rows().first().locator("button").click();
+		await (await openChange(0)).locator("button").first().click();
 		assert.deepEqual(await calls(), []);
 		await root()
 			.getByRole("button", { name: "Apply 1 chosen change(s)", exact: true })
@@ -261,7 +304,9 @@ try {
 			},
 			{ id: leafId, nextModel: model(base, `${local}\nNew edit`, direction) },
 		);
-		assert.equal(await rows().locator(".is-active").count(), 0);
+		const stale = await openChange(0);
+		assert.equal(await stale.locator(".is-active").count(), 0);
+		await closePopup();
 	}
 	checks.push(
 		"pull and history restore wait for submit; stale text clears choices",
@@ -323,13 +368,14 @@ try {
 	);
 	await shot("three-way-wide");
 	await scrollEnd("mergePanel");
-	await assertRowsInside();
+	await assertPopupInside();
 	await shot("three-way-bottom");
 	await scrollEnd("mergePanel", "top");
-	const accept = root().locator(
-		'.obsync-merge-divider.is-local [data-change="0"] [aria-label="Accept change"]',
-	);
-	await accept.click();
+	const localStrip = ".obsync-merge-divider.is-local";
+	const accept = await openChange(0, localStrip);
+	assert.equal(await accept.getAttribute("data-change"), "0");
+	await shot("three-way-popup", root().locator(".obsync-merge-body"));
+	await accept.locator('[aria-label="Accept change"]').click();
 	const snapshot = () =>
 		page.evaluate((id) => {
 			const panel = app.workspace.getLeafById(id).view.mergePanel;
@@ -413,7 +459,7 @@ try {
 
 	await resize(1500, 500);
 	await seed(model("a", ""), { base: "a", local: "", remote: "b" });
-	await assertRowsInside();
+	await assertPopupInside();
 	await shot("empty-side");
 	assert.equal(
 		await root()
@@ -427,7 +473,7 @@ try {
 		local: "a\nb\nc",
 		remote: "a\nb\nd",
 	});
-	await assertRowsInside();
+	await assertPopupInside();
 	await shot("eof-insertion");
 	checks.push("empty side and final-line insertions remain actionable");
 	const shortBase = "first\nsame 1\nsame 2\nsame 3\nlast";

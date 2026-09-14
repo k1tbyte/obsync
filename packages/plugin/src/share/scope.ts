@@ -26,5 +26,8 @@ export function createShareScopePolicy(
 		isIgnoredByPattern() {
 			return false;
 		},
+		getCategory() {
+			return null;
+		},
 	};
 }

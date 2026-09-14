@@ -2,6 +2,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { setIcon } from "obsidian";
 import { EDiffDirection, type FileDiffModel } from "@/sync/projection";
+import { appendIconButton } from "../icon-button";
 import { ChangeOverlay } from "./change-overlay";
 import { CHOICE_ICON, EChoiceKind, HunkChoices } from "./choices";
 import {
@@ -16,7 +17,7 @@ import { Divider, type DividerItem } from "./divider";
 import { sideSpan, spanBounds } from "./geometry";
 import { LayoutMode } from "./layout-mode";
 import { setCombinedMode } from "./merge-decorations";
-import { appendIconButton, changeNavigation, type RailAction } from "./rail";
+import { changeNavigation, type RailAction } from "./rail";
 import {
 	NO_ANCHORS,
 	PaneScrollSync,
@@ -139,6 +140,7 @@ export class ComparePanel {
 		this.layoutMode = null;
 		this.scrollSync?.destroy();
 		this.scrollSync = null;
+		this.divider?.destroy();
 		this.divider = null;
 		this.overlays = [];
 		this.leftView?.destroy();

@@ -1,4 +1,5 @@
 import { sha256Hex } from "@/crypto";
+import { reconcileBaselineResetGenerations } from "@/sync/config-reset";
 import { HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
 import {
 	bytesToText,
@@ -44,9 +45,11 @@ export async function loadHunkSides(
 	path: string,
 	pair: EHunkPair,
 ): Promise<HunkSides> {
+	if (!deps.scope.includesInDiff(path))
+		throw new Error("File is outside this device's sync scope.");
 	if (pair === EHunkPair.Local) {
 		return {
-			left: await baselineSide(deps, path),
+			left: await baselineSide(deps, result, path),
 			right: await localSide(deps, path),
 		};
 	}
@@ -81,9 +84,17 @@ export async function assertSidesUnchanged(
 /** Baseline text, or "" when the path is not in the baseline yet. */
 async function baselineSide(
 	deps: EngineDependencies,
+	result: CompareResult,
 	path: string,
 ): Promise<string> {
-	const entry = deps.state.baseline?.files[path];
+	const baseline = result.remote
+		? reconcileBaselineResetGenerations(
+				deps.state.baseline,
+				result.remote,
+				deps.scope,
+			)
+		: deps.state.baseline;
+	const entry = baseline?.files[path];
 	if (!entry) return "";
 	return decodeRemote(deps, path, entry.hash, entry.size);
 }

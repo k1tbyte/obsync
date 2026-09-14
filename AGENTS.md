@@ -5,9 +5,9 @@ user-configured remote storage (S3-compatible, WebDAV, Google Drive), with
 shared folders brokered by a self-hosted worker. TypeScript, bundled to
 `main.js` by esbuild.
 
-pnpm workspace: `packages/plugin` (the plugin), `packages/auth-worker`
-(Cloudflare worker brokering share invites), `packages/relay` (PartyKit
-realtime presence).
+pnpm workspace: `packages/plugin` (the plugin), `packages/relay` (one
+Cloudflare worker: realtime relay over PartyServer Durable Objects, share
+broker, Google OAuth proxy; deployed by the Deploy Relay workflow).
 
 ## Commands
 

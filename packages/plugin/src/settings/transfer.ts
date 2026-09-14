@@ -60,8 +60,8 @@ const TRANSFER_FIELDS = {
 	},
 	l: {
 		realtimeSync: "e",
-		realtimeServerUrl: "u",
-		realtimeToken: "t",
+		relayUrl: "u",
+		relaySecret: "t",
 	},
 } as const;
 

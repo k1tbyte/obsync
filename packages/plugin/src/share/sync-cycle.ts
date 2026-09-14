@@ -109,7 +109,7 @@ export async function runShareSyncCycle(
 	const pushList = result.diff.localChanges.map((c) => c.path);
 	if (pushList.length > 0) {
 		const manifest = await pushPaths(current(), result, pushList);
-		session = advanceSessionAfterPush(session, result, manifest);
+		session = advanceSessionAfterPush(session, result, manifest, deps.scope);
 		await hooks.persist(session);
 		hooks.notifyPeers();
 		await hooks.log(

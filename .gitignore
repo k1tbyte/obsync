@@ -20,7 +20,6 @@ data.json
 
 # worker / relay local state
 .wrangler
-.partykit
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store

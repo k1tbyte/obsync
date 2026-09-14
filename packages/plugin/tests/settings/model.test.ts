@@ -9,6 +9,21 @@ import {
 import { EStorageBackend, type StorageAdapterConfig } from "@/storage/config";
 
 describe("mergeSettings", () => {
+	it("requires opt-in for every configuration category on a fresh device", () => {
+		expect(Object.values(mergeSettings(null).settingsSync)).toEqual([
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+		]);
+		expect(
+			mergeSettings({
+				settingsSync: { ...DEFAULT_SETTINGS.settingsSync, snippets: true },
+			}).settingsSync.snippets,
+		).toBe(true);
+	});
 	it("defaults historyAutoRefresh to true when absent", () => {
 		expect(mergeSettings(null).historyAutoRefresh).toBe(true);
 		expect(mergeSettings({}).historyAutoRefresh).toBe(true);
@@ -23,6 +38,22 @@ describe("mergeSettings", () => {
 	it("shows file sizes by default and preserves an explicit false", () => {
 		expect(mergeSettings(null).showFileSizes).toBe(true);
 		expect(mergeSettings({ showFileSizes: false }).showFileSizes).toBe(false);
+	});
+
+	it("drops the retired relay and broker fields but keeps the relay config", () => {
+		const merged = mergeSettings({
+			relayUrl: "https://relay.example",
+			relaySecret: "secret",
+			realtimeToken: "old-token",
+			shareBrokerAdminSecret: "old-admin",
+		} as Parameters<typeof mergeSettings>[0]);
+
+		expect(merged).toMatchObject({
+			relayUrl: "https://relay.example",
+			relaySecret: "secret",
+		});
+		expect(merged).not.toHaveProperty("realtimeToken");
+		expect(merged).not.toHaveProperty("shareBrokerAdminSecret");
 	});
 
 	it("backfills missing per-storage concurrency from backend defaults", () => {

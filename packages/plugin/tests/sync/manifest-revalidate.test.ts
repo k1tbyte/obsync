@@ -1,14 +1,15 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
+import { RevalidatingStorage } from "@tests/helpers/revalidating-storage";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey, encryptJson } from "@/crypto";
-import type { ConditionalRead } from "@/storage/types";
+import { advanceBaselineForPaths } from "@/sync/baseline";
 import { REMOTE_MANIFEST_KEY } from "@/sync/constants";
 import {
 	ConcurrentPushError,
 	fetchRemoteManifest,
 	publishManifestWithGuard,
 } from "@/sync/manifest";
-import type { Manifest } from "@/sync/types";
+import { EFileKind, type Manifest } from "@/sync/types";
 
 let key: EncryptionKey;
 beforeAll(async () => {
@@ -27,37 +28,6 @@ function manifest(snapshotId: string): Manifest {
 	};
 }
 
-/** A backend that hands out a validator, as S3 and WebDAV do. */
-class RevalidatingStorage extends FakeStorage {
-	bodiesSent = 0;
-	private version = 0;
-	private readonly etags = new Map<string, string>();
-
-	override put(objectKey: string, body: Uint8Array): Promise<void> {
-		this.etags.set(objectKey, `"v${++this.version}"`);
-		return super.put(objectKey, body);
-	}
-
-	override delete(objectKey: string): Promise<void> {
-		this.etags.delete(objectKey);
-		return super.delete(objectKey);
-	}
-
-	getIfChanged(
-		objectKey: string,
-		etag: string | null,
-	): Promise<ConditionalRead> {
-		const body = this.map.get(objectKey);
-		if (!body) return Promise.resolve({ status: "absent" });
-		const current = this.etags.get(objectKey) ?? null;
-		if (etag !== null && etag === current) {
-			return Promise.resolve({ status: "unchanged" });
-		}
-		this.bodiesSent++;
-		return Promise.resolve({ status: "found", body, etag: current });
-	}
-}
-
 async function publish(
 	storage: FakeStorage,
 	head: Manifest,
@@ -67,6 +37,38 @@ async function publish(
 }
 
 describe("fetchRemoteManifest revalidation", () => {
+	it("never answers a full remote read with a partial baseline sharing its snapshot id", async () => {
+		const storage = new RevalidatingStorage();
+		const entry = { hash: "content", size: 7, mtime: 0, kind: EFileKind.Vault };
+		await publish(storage, {
+			...manifest("s1"),
+			files: { "accepted.md": entry, "pending.md": entry },
+			folders: ["Remote only"],
+		});
+		const remote = (await fetchRemoteManifest(storage, key)) as Manifest;
+		const baseline = advanceBaselineForPaths(
+			null,
+			remote,
+			new Set(["accepted.md"]),
+			[],
+		);
+		expect(baseline.files["pending.md"]).toBeUndefined();
+		const refreshed = await fetchRemoteManifest(storage, key, baseline);
+		expect(refreshed?.files).toEqual(remote.files);
+		expect(refreshed?.folders).toEqual(remote.folders);
+		expect(storage.bodiesSent).toBe(1);
+	});
+
+	it("does not let a cached validator bypass decryption with a different key", async () => {
+		const storage = new RevalidatingStorage();
+		await publish(storage, manifest("s1"));
+		const first = await fetchRemoteManifest(storage, key);
+		const otherKey = await deriveKey("other", new Uint8Array(16));
+		await expect(
+			fetchRemoteManifest(storage, otherKey, first),
+		).rejects.toThrow();
+	});
+
 	it("answers from the caller's copy while the remote has not moved", async () => {
 		const storage = new RevalidatingStorage();
 		const head = await publish(storage, manifest("s1"));

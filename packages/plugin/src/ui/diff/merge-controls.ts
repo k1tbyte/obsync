@@ -101,8 +101,6 @@ export function dividerItems(
 			far: snapToLines(resultDoc, change.taken[side] ?? change.result),
 			tone: toneOf(change, side),
 			actions: sideActions(change, side, handlers),
-			// A decided side keeps one quiet button, so any auto-merged change can still be rejected.
-			quiet: status !== "open",
 		});
 	}
 	return items;

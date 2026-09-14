@@ -26,6 +26,7 @@ import {
 	snapToLines,
 } from "@/sync/merge-model";
 import { notifyError, notifyInfo } from "@/ui/notices";
+import { appendIconButton } from "../icon-button";
 import { Divider } from "./divider";
 import { sideSpan, spanBounds } from "./geometry";
 import { LayoutMode } from "./layout-mode";
@@ -47,7 +48,7 @@ import {
 	mergeChangesField,
 	setChangeState,
 } from "./merge-state";
-import { appendIconButton, changeNavigation } from "./rail";
+import { changeNavigation } from "./rail";
 import {
 	NO_ANCHORS,
 	PaneScrollSync,
@@ -474,6 +475,7 @@ export class MergeEditorPanel {
 		this.layoutMode = null;
 		this.scrollSync?.destroy();
 		this.scrollSync = null;
+		for (const divider of Object.values(this.dividers)) divider?.destroy();
 		this.dividers = {};
 		this.resultView?.destroy();
 		this.resultView = null;

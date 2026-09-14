@@ -46,11 +46,13 @@ const DEVICE_LOCAL_PLUGIN_IDS: ReadonlyArray<string> = [
 ];
 
 export interface ScopePolicy {
+	readonly configDir?: string;
 	includes(path: string): boolean;
 	includesInDiff(path: string): boolean;
 	canDescend(dir: string): boolean;
 	classify(path: string): EFileKind;
 	isIgnoredByPattern(path: string): boolean;
+	getCategory(path: string): keyof SettingsSyncCategories | null;
 }
 
 export interface ScopeOptions {
@@ -83,12 +85,13 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		(id) => `${pluginsDir}${id}/`,
 	);
 
-	const sync = options.settingsSync;
+	const sync = { ...options.settingsSync };
 	const sharedIgnoreMatcher = options.sharedIgnore;
 	const localIgnoreMatcher = options.localIgnore;
 	const symlinks = options.symlinks;
 
 	return {
+		configDir,
 		includes(rawPath) {
 			const path = normalizePath(rawPath);
 			if (!isPathAllowed(path)) return false;
@@ -138,6 +141,9 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			if (isIgnoreFile(path)) return false;
 			return isSharedIgnored(path) || isLocalIgnored(path);
 		},
+		getCategory(rawPath) {
+			return configCategory(normalizePath(rawPath));
+		},
 	};
 
 	function isPathAllowed(path: string): boolean {
@@ -170,20 +176,30 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 	}
 
 	function isConfigAllowed(path: string): boolean {
-		if (deniedConfigFiles.includes(path)) return false;
-		if (deniedConfigDirs.some((d) => path.startsWith(d))) return false;
+		const category = configCategory(path);
+		return category !== null && sync[category];
+	}
 
-		if (sync.coreSettings && coreFiles.includes(path)) return true;
-		if (sync.hotkeys && path === hotkeysFile) return true;
-		if (sync.pluginList && path === communityPluginsFile) return true;
-		if (sync.pluginConfigs && path.startsWith(pluginsDir)) {
-			if (deviceLocalPluginPrefixes.some((p) => path.startsWith(p)))
-				return false;
-			return true;
-		}
-		if (sync.snippets && path.startsWith(snippetsDir)) return true;
-		if (sync.themes && path.startsWith(themesDir)) return true;
-		return false;
+	function configCategory(path: string): keyof SettingsSyncCategories | null {
+		if (!path.startsWith(configPrefix) || path.startsWith(ownPluginPrefix))
+			return null;
+		if (hasDotSegment(stripConfigPrefix(path, configPrefix))) return null;
+		if (
+			deniedConfigFiles.includes(path) ||
+			deniedConfigDirs.some((d) => path.startsWith(d))
+		)
+			return null;
+		if (coreFiles.includes(path)) return "coreSettings";
+		if (path === hotkeysFile) return "hotkeys";
+		if (path === communityPluginsFile) return "pluginList";
+		if (
+			path.startsWith(pluginsDir) &&
+			!deviceLocalPluginPrefixes.some((p) => path.startsWith(p))
+		)
+			return "pluginConfigs";
+		if (path.startsWith(snippetsDir)) return "snippets";
+		if (path.startsWith(themesDir)) return "themes";
+		return null;
 	}
 
 	function hasConfigDescendants(): boolean {
