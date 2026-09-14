@@ -189,7 +189,6 @@ export class ChangesSection {
 		});
 		setIcon(selectAll, "list-checks");
 		selectAll.setAttr("aria-label", "Select all");
-		selectAll.setAttr("title", "Select all");
 		selectAll.addEventListener("click", () => {
 			for (const row of rows) this.selected.add(row.path);
 			this.deps.rerender();
@@ -199,7 +198,6 @@ export class ChangesSection {
 		});
 		setIcon(selectNone, "x");
 		selectNone.setAttr("aria-label", "Clear selection");
-		selectNone.setAttr("title", "Clear selection");
 		selectNone.addEventListener("click", () => {
 			this.selected.clear();
 			this.deps.rerender();

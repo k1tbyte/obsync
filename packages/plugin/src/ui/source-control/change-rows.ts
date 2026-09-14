@@ -57,11 +57,8 @@ export function renderFolderRow(
 		cls: "obsync-tree-folder-name",
 		text: visual.name,
 	});
-	folder.setAttr("title", folderPath);
 	folder.setAttr("aria-expanded", String(!collapsed));
-	makeActivatable(folder, `${visual.name} folder`, () =>
-		ctx.toggleFolder(folderPath),
-	);
+	makeActivatable(folder, folderPath, () => ctx.toggleFolder(folderPath));
 	folder.addEventListener("contextmenu", (event) => {
 		event.preventDefault();
 		ctx.actions.showFolderContextMenu(event, folderPath);
@@ -110,7 +107,6 @@ export function renderFileRow(
 			text: display.parent,
 		});
 	}
-	copy.setAttr("title", row.path);
 
 	if (row.isConflict) renderConflictRowControls(parent, item, row, ctx);
 

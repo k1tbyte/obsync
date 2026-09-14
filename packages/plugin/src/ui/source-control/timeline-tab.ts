@@ -110,7 +110,7 @@ export class TimelineTab {
 
 	private renderRow(body: HTMLElement, row: TimelineRow): void {
 		const item = body.createDiv({ cls: "obsync-history-row" });
-		item.setAttr("title", row.tooltip);
+		item.setAttr("aria-label", row.tooltip);
 
 		const head = item.createDiv({ cls: "obsync-history-row-head" });
 		const title = head.createDiv({

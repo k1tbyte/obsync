@@ -9,7 +9,6 @@ export function appendIconButton(
 	const button = parent.createEl("button", { cls: "obsync-icon-btn" });
 	button.type = "button";
 	button.setAttr("aria-label", label);
-	button.setAttr("title", label);
 	setIcon(button, icon);
 	button.addEventListener("click", onClick);
 	return button;

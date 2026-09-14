@@ -149,8 +149,10 @@ export class HistoryTab {
 		});
 		item.setAttr("role", "button");
 		item.setAttr("tabindex", "0");
-		item.setAttr("aria-label", `Diff ${path} against ${row.title}`);
-		item.setAttr("title", row.tooltip);
+		item.setAttr(
+			"aria-label",
+			`Diff ${path} against ${row.title} (${row.tooltip})`,
+		);
 
 		const head = item.createDiv({ cls: "obsync-history-row-head" });
 		const titleEl = head.createDiv({

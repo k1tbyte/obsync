@@ -30,5 +30,4 @@ export function setIndicatorTooltip(
 	tooltip: string,
 ): void {
 	target.setAttr("aria-label", tooltip);
-	target.setAttr("title", tooltip);
 }

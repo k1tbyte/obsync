@@ -262,7 +262,6 @@ export class SourceControlView extends ItemView {
 			btn.setAttr("tabindex", tab === this.tab ? "0" : "-1");
 			btn.id = `obsync-source-tab-${tab}`;
 			btn.setAttr("data-obsync-tab", tab);
-			btn.setAttr("title", label);
 			const iconEl = btn.createSpan({ cls: "obsync-source-tab-icon" });
 			setIcon(iconEl, icon);
 			btn.createSpan({ cls: "obsync-source-tab-label", text: label });

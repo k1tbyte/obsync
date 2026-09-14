@@ -6,7 +6,7 @@ import { EFieldKind } from "@/storage/field-spec";
 import type { ConnectionTestResult } from "./connection-test";
 import type { ObsyncSettings } from "./model";
 
-const SUB_SETTING_CLASS = "obsync-sub-setting";
+export const SUB_SETTING_CLASS = "obsync-sub-setting";
 const ERROR_DESC_CLASS = "obsync-settings-error";
 
 export interface FieldContext {

@@ -47,9 +47,8 @@ export class Divider {
 		this.canvas.setAttr("role", "button");
 		this.canvas.setAttr(
 			"aria-label",
-			"Change actions. Use arrow keys to choose a change, then Enter.",
+			"Change actions: click a connector, or use arrow keys and Enter.",
 		);
-		this.canvas.setAttr("title", "Click a connector for change actions");
 		this.actions = el.createDiv({ cls: "obsync-divider-actions" });
 		const { signal } = this.listeners;
 		el.addEventListener(

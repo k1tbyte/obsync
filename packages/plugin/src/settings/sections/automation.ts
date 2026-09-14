@@ -13,6 +13,7 @@ import {
 	type FieldContext,
 	renderFields,
 	type SettingsField,
+	SUB_SETTING_CLASS,
 } from "@/settings/fields";
 import { isRelayConfigured } from "@/settings/model";
 import { EFieldKind } from "@/storage/field-spec";
@@ -109,40 +110,37 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 		get: (s) => s.realtimeSync,
 		set: (v) => ({ realtimeSync: v }),
 		after: restartRelay,
+		rerender: true,
 	},
 ];
 
-/** Returns unsubscribe for relay-status rows. */
+/** Returns unsubscribe for the connected-devices row, if shown. */
 export function renderAutomationSection(
 	parent: HTMLElement,
 	plugin: PluginHost,
 	onDisplay: () => void,
-): () => void {
+): (() => void) | null {
 	new Setting(parent).setName("Automation").setHeading();
 
 	const ctx: FieldContext = { plugin, rerender: onDisplay };
 	renderFields(parent, ctx, AUTOMATION_FIELDS);
 
-	return renderRelayStatus(parent, plugin);
+	if (!plugin.settings.realtimeSync) return null;
+	return renderConnectedDevices(parent, plugin);
 }
 
-function renderRelayStatus(
+function renderConnectedDevices(
 	parent: HTMLElement,
 	plugin: PluginHost,
 ): () => void {
-	const statusSetting = new Setting(parent).setName("Relay status");
 	const devicesSetting = new Setting(parent).setName("Connected devices");
+	devicesSetting.settingEl.addClass(SUB_SETTING_CLASS);
 	let connected = plugin.realtime.isConnected();
 	let devices = [...plugin.realtime.getDevices()];
 
 	const render = (): void => {
-		statusSetting.setDesc(describeRelayStatus(plugin, connected));
 		devicesSetting.setDesc(
-			describeConnectedDevices(
-				plugin.settings.realtimeSync,
-				connected,
-				devices,
-			),
+			describeConnectedDevices(plugin, connected, devices),
 		);
 	};
 	render();
@@ -174,24 +172,16 @@ function clampAutoSyncMinutes(raw: string): number {
 	);
 }
 
-function describeRelayStatus(plugin: PluginHost, connected: boolean): string {
-	if (!plugin.settings.realtimeSync) return "Relay is disabled.";
-	if (!isRelayConfigured(plugin.settings)) {
-		return "Set up the relay server under Connection.";
-	}
-	return connected ? "● Connected" : "○ Not connected";
-}
-
 function describeConnectedDevices(
-	realtimeEnabled: boolean,
+	plugin: PluginHost,
 	connected: boolean,
 	devices: readonly { name: string }[],
 ): string {
-	if (!realtimeEnabled) {
-		return "Enable real-time sync to see connected devices.";
+	if (!isRelayConfigured(plugin.settings)) {
+		return "Set up the relay server under Connection.";
 	}
 	if (!connected) {
-		return "Connect to the relay to see other devices.";
+		return "Not connected to the relay.";
 	}
 	if (devices.length === 0) {
 		return "No other devices connected.";

@@ -227,7 +227,6 @@ export class ChangesTab {
 		});
 		setIcon(refresh, "refresh-cw");
 		refresh.setAttr("aria-label", "Refresh changes");
-		refresh.setAttr("title", "Refresh changes");
 		refresh.addEventListener(
 			"click",
 			() => void this.plugin.controller.refresh(),
@@ -285,7 +284,6 @@ export class ChangesTab {
 			this.layout === "tree" ? "Show flat list" : "Show folder tree";
 		setIcon(layoutToggle, this.layout === "tree" ? "list" : "list-tree");
 		layoutToggle.setAttr("aria-label", layoutLabel);
-		layoutToggle.setAttr("title", layoutLabel);
 		layoutToggle.addEventListener("click", () => {
 			this.layout = this.layout === "tree" ? "flat" : "tree";
 			this.plugin.settings.uiLayout = this.layout;

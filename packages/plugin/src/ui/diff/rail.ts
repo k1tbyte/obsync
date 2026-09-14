@@ -29,7 +29,6 @@ export function renderRailButton(
 	const button = parent.createEl("button", { cls: "obsync-rail-btn" });
 	button.type = "button";
 	button.setAttr("aria-label", action.label);
-	button.setAttr("title", action.label);
 	if (action.active !== undefined) {
 		button.setAttr("aria-pressed", String(action.active));
 	}
