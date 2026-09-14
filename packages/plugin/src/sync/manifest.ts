@@ -13,37 +13,30 @@ import {
 import { defaultDeviceName } from "./device";
 import type { LocalSnapshot, Manifest } from "./types";
 
-/**
- * What the remote manifest object looked like the last time this backend served
- * it: the validator it came with, and which manifest that validator names.
- *
- * Per storage adapter, because the adapter is the identity of the remote. Two
- * strings rather than the manifest itself - at 20k files that would be another
- * copy of a structure the state file already holds.
- */
+// A per-path baseline can share a snapshot id with HEAD without holding all its files.
 const validators = new WeakMap<
 	ObjectStorage,
-	{ etag: string; snapshotId: string }
+	{ etag: string; manifest: Manifest; key: EncryptionKey }
+>();
+const publishedHeads = new WeakMap<
+	ObjectStorage,
+	{ manifest: Manifest; key: EncryptionKey }
 >();
 
-/**
- * @param known A manifest the caller already holds. When the backend confirms
- * the remote is still the one the validator names, this is returned without
- * downloading it: a settled refresh otherwise transfers 1 MB, inflates 3.4 MB
- * and parses 20k entries to learn nothing moved.
- */
+// `known` permits revalidation; only the complete cached response can answer a 304.
 export async function fetchRemoteManifest(
 	storage: ObjectStorage,
 	key: EncryptionKey,
 	known?: Manifest | null,
 ): Promise<Manifest | null> {
-	const validator = validators.get(storage);
+	const cached = validators.get(storage);
+	const validator = cached?.key === key ? cached : undefined;
 	// Conditional only when a "not modified" can actually be answered. Asking
 	// otherwise buys a round trip that has to be followed by the real read.
 	const revalidate =
 		validator !== undefined &&
 		known != null &&
-		known.snapshotId === validator.snapshotId;
+		known.snapshotId === validator.manifest.snapshotId;
 	const read = await readManifest(storage, revalidate ? validator.etag : null);
 	if (read.status === "unchanged") {
 		// Only ever an answer about the validator we sent. A backend that says it
@@ -54,10 +47,11 @@ export async function fetchRemoteManifest(
 				"Storage answered 'not modified' to a read that carried no validator.",
 			);
 		}
-		return known;
+		return validator.manifest;
 	}
 	if (read.status === "absent") {
 		validators.delete(storage);
+		publishedHeads.delete(storage);
 		return null;
 	}
 	const manifest = await decryptJson<Manifest>(key, read.body);
@@ -69,7 +63,8 @@ export async function fetchRemoteManifest(
 	if (read.etag) {
 		validators.set(storage, {
 			etag: read.etag,
-			snapshotId: manifest.snapshotId,
+			manifest,
+			key,
 		});
 	} else {
 		validators.delete(storage);
@@ -91,26 +86,30 @@ function readManifest(
 		);
 }
 
-/**
- * Returns the authoritative remote for diffing.
- *
- * S3-compatible backends don't always serve read-after-write consistently.
- * Naively trusting a stale GET would mark just-pushed files as remote changes
- * pointing to the pre-push hash - and pulling would roll back the user's work.
- * If fetched manifest equals baseline.parentSnapshotId, the local baseline is
- * what we last wrote to S3, so use it as the authoritative remote.
- */
+// Only a complete head actually published by this session can replace a stale read.
 export function reconcileRemoteAgainstBaseline(
 	remote: Manifest | null,
 	baseline: Manifest | null,
+	storage?: ObjectStorage,
+	key?: EncryptionKey,
 ): Manifest | null {
 	if (!remote || !baseline) return remote;
 	if (remote.snapshotId === baseline.snapshotId) return remote;
+	const published = storage ? publishedHeads.get(storage) : undefined;
+	if (
+		published?.key === key &&
+		published?.manifest.snapshotId === baseline.snapshotId &&
+		published.manifest.parentSnapshotId === remote.snapshotId
+	) {
+		return published.manifest;
+	}
 	if (
 		baseline.parentSnapshotId &&
 		remote.snapshotId === baseline.parentSnapshotId
 	) {
-		return baseline;
+		throw new Error(
+			"Storage returned an older manifest. Refresh again before syncing.",
+		);
 	}
 	return remote;
 }
@@ -141,7 +140,12 @@ export async function publishManifestWithGuard(
 	const blob = await encryptJson(key, manifest);
 	// Stale-read reconciliation prevents a lagging backend from appearing as a competing writer.
 	const fetched = await fetchRemoteManifest(storage, key, baseline);
-	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
+	const precheck = reconcileRemoteAgainstBaseline(
+		fetched,
+		baseline,
+		storage,
+		key,
+	);
 	const precheckId = precheck?.snapshotId ?? null;
 	if (precheckId !== expectedParentSnapshotId) {
 		throw new ConcurrentPushError(
@@ -151,8 +155,11 @@ export async function publishManifestWithGuard(
 	}
 	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
 	const verify = await fetchRemoteManifest(storage, key);
-	if (verify?.snapshotId === manifest.snapshotId) return;
-	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {
+	if (
+		verify?.snapshotId === manifest.snapshotId ||
+		(verify && ownSnapshotIds(manifest, storage, key).has(verify.snapshotId))
+	) {
+		publishedHeads.set(storage, { manifest, key });
 		return;
 	}
 	throw new ConcurrentPushError(
@@ -167,13 +174,16 @@ export async function publishManifestWithGuard(
  */
 function ownSnapshotIds(
 	published: Manifest,
-	baseline: Manifest | null,
+	storage: ObjectStorage,
+	key: EncryptionKey,
 ): Set<string> {
 	const ids = new Set<string>();
 	if (published.parentSnapshotId) ids.add(published.parentSnapshotId);
-	if (baseline) {
-		ids.add(baseline.snapshotId);
-		if (baseline.parentSnapshotId) ids.add(baseline.parentSnapshotId);
+	const previous = publishedHeads.get(storage);
+	if (previous?.key === key) {
+		ids.add(previous.manifest.snapshotId);
+		if (previous.manifest.parentSnapshotId)
+			ids.add(previous.manifest.parentSnapshotId);
 	}
 	return ids;
 }
@@ -186,7 +196,7 @@ export function buildManifest(
 	snapshot: Pick<LocalSnapshot, "files" | "emptyFolders">,
 ): Manifest {
 	return {
-		version: MANIFEST_VERSION,
+		version: parent?.version ?? 1,
 		vaultId,
 		snapshotId: randomId(),
 		parentSnapshotId: parent?.snapshotId ?? null,
@@ -194,6 +204,7 @@ export function buildManifest(
 		deviceId,
 		deviceName: deviceName?.trim() || defaultDeviceName(),
 		files: snapshot.files,
+		resetGenerations: parent?.resetGenerations,
 		folders:
 			snapshot.emptyFolders.length > 0 ? snapshot.emptyFolders : undefined,
 	};

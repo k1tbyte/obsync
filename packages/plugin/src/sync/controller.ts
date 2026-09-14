@@ -1,4 +1,5 @@
 import { ESyncLogOperation } from "@/logs/store";
+import type { SettingsSyncCategories } from "@/settings/model";
 import { writeBinary } from "@/vault/io";
 import { autoMergeOp } from "./auto-merge";
 import { selectAutoPushPaths } from "./auto-push";
@@ -21,6 +22,7 @@ import {
 	runAdoptNewVaultFlow,
 	runResetRemoteStorageFlow,
 } from "./operations";
+import { runCategoryResetFlow } from "./operations/config-reset";
 import {
 	SyncControllerRuntimeState,
 	type SyncStatusListener,
@@ -198,6 +200,14 @@ export class SyncController {
 	async resetRemoteStorage(): Promise<boolean> {
 		return this.operations.runFlow(ESyncLogOperation.Reset, (deps, ctx) =>
 			runResetRemoteStorageFlow(deps, ctx),
+		);
+	}
+
+	async resetCategory(
+		category: keyof SettingsSyncCategories,
+	): Promise<boolean> {
+		return this.operations.runFlow(ESyncLogOperation.Reset, (deps, ctx) =>
+			runCategoryResetFlow(deps, ctx, category),
 		);
 	}
 

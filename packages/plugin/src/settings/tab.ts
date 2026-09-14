@@ -10,15 +10,23 @@ import { IGNORE_FILE_NAME } from "@/constants";
 import type { PluginHost } from "@/plugin/host";
 import { EFieldKind } from "@/storage/field-spec";
 import { defaultDeviceName } from "@/sync/device";
+import type { Manifest } from "@/sync/types";
 import {
 	askSettingsTransferInput,
 	notifyError,
 	notifyInfo,
+	openConfirmModal,
 	openInEditor,
 	reportError,
 	showSettingsTransferExport,
 } from "@/ui";
-import { type FieldContext, renderFields, type SettingsField } from "./fields";
+import { createScopePolicy, type ScopePolicy } from "@/vault/scope";
+import {
+	type FieldContext,
+	renderField,
+	renderFields,
+	type SettingsField,
+} from "./fields";
 import { renderLogsView } from "./logs-view";
 import type { ObsyncSettings, SettingsSyncCategories } from "./model";
 import {
@@ -61,7 +69,7 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 	{
 		key: "coreSettings",
 		name: "Core settings",
-		desc: "app, appearance, core/community plugin lists, graph, bookmarks, templates.",
+		desc: "App, appearance, core plugins, graph, bookmarks and templates.",
 	},
 	{ key: "hotkeys", name: "Hotkeys", desc: "hotkeys.json" },
 	{
@@ -71,8 +79,8 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 	},
 	{
 		key: "pluginConfigs",
-		name: "Plugin configs",
-		desc: "All plugin data under the config folder (device-local plugins excluded).",
+		name: "Plugins and their settings",
+		desc: "Plugin files and settings (Obsync and device-local plugins excluded).",
 	},
 	{
 		key: "snippets",
@@ -85,6 +93,23 @@ const SETTINGS_SYNC_ROWS: ReadonlyArray<SettingsSyncRow> = [
 		desc: "themes folder inside the config folder",
 	},
 ];
+
+/** Files and empty folders the remote holds per configuration category. */
+function countRemoteCategories(
+	remote: Manifest | null | undefined,
+	scope: ScopePolicy,
+): Map<keyof SettingsSyncCategories, number> {
+	const counts = new Map<keyof SettingsSyncCategories, number>();
+	const paths = [
+		...Object.keys(remote?.files ?? {}),
+		...(remote?.folders ?? []).map((dir) => `${dir}/`),
+	];
+	for (const path of paths) {
+		const category = scope.getCategory(path);
+		if (category) counts.set(category, (counts.get(category) ?? 0) + 1);
+	}
+	return counts;
+}
 
 const SCOPE_CHANGED = "Sync scope settings changed.";
 const BYTES_PER_MB = 1024 * 1024;
@@ -285,12 +310,29 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	private renderSettingsSyncSection(parent: HTMLElement): void {
 		new Setting(parent).setName("Obsidian configuration scope").setHeading();
 		new Setting(parent).setDesc(
-			"Workspace, cache, trash and device-local plugin data are never synced.",
+			"Workspace, cache, trash and device-local plugin data are never synced. Turning a category off only stops this device from syncing it; the remote keeps its files.",
 		);
-		renderFields(
-			parent,
-			this.fieldContext(),
-			SETTINGS_SYNC_ROWS.map((row) => ({
+		const remote = this.plugin.controller.getSnapshot().result?.remote;
+		if (!remote) {
+			new Setting(parent)
+				.setDesc("Compare with the remote to see which categories it holds.")
+				.addButton((button) =>
+					button.setButtonText("Check remote").onClick(async () => {
+						button.setDisabled(true);
+						await this.plugin.controller.refresh();
+						this.display();
+					}),
+				);
+		}
+		const remoteCounts = countRemoteCategories(
+			remote,
+			createScopePolicy({
+				settingsSync: this.plugin.settings.settingsSync,
+				configDir: this.app.vault.configDir,
+			}),
+		);
+		for (const row of SETTINGS_SYNC_ROWS) {
+			const setting = renderField(parent, this.fieldContext(), {
 				kind: EFieldKind.Toggle,
 				name: row.name,
 				desc: row.desc,
@@ -299,8 +341,40 @@ export class ObsyncSettingTab extends PluginSettingTab {
 					settingsSync: { ...this.plugin.settings.settingsSync, [row.key]: v },
 				}),
 				refreshScope: true,
-			})),
-		);
+			});
+			const count = remoteCounts.get(row.key);
+			if (!count) continue;
+			setting.addButton((button) =>
+				button
+					.setButtonText("Clear on remote")
+					.setTooltip(`${count} remote item(s)`)
+					.setWarning()
+					.onClick(() => void this.handleClearCategoryRemote(row)),
+			);
+		}
+	}
+
+	private async handleClearCategoryRemote(row: SettingsSyncRow): Promise<void> {
+		const confirmed = await openConfirmModal({
+			app: this.app,
+			title: `Clear ${row.name} on remote?`,
+			body: [
+				`Removes every ${row.name} file from the remote storage. Local files stay on every device, and devices with this category enabled re-upload theirs on their next push.`,
+				"Disable the category on every device first if it should stay gone. Update Obsync on your other devices before clearing: older versions refuse the cleared remote.",
+			],
+			confirmLabel: "Clear on remote",
+			confirmClass: "mod-warning",
+		});
+		if (!confirmed) return;
+		if (await this.plugin.controller.resetCategory(row.key)) {
+			notifyInfo(`Cleared ${row.name} on remote.`);
+		} else {
+			notifyError(
+				this.plugin.controller.getSnapshot().error ??
+					"Could not clear the category on the remote.",
+			);
+		}
+		this.display();
 	}
 
 	private renderIgnoreSection(parent: HTMLElement): void {

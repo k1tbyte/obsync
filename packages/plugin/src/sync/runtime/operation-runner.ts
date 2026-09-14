@@ -2,6 +2,7 @@ import { ESyncLogOperation } from "@/logs/store";
 import { errorMessage } from "@/shared/errors";
 import { advanceBaselineForPaths } from "@/sync/baseline";
 import { isCancellation } from "@/sync/cancel";
+import { reconcileBaselineResetGenerations } from "@/sync/config-reset";
 import type { SyncControllerHost } from "@/sync/controller";
 import {
 	type CompareResult,
@@ -54,20 +55,30 @@ export class OperationRunner {
 				},
 			};
 			const result = await compare(depsWithProgress);
-			this.applyResult(result);
 			const identity = session.storage.identity();
+			const baseline = result.remote
+				? reconcileBaselineResetGenerations(
+						session.state.baseline,
+						result.remote,
+						session.scope,
+					)
+				: session.state.baseline;
+			const advanced =
+				result.remote && result.diff.converged.length > 0
+					? advanceBaselineForPaths(
+							baseline,
+							result.remote,
+							new Set(result.diff.converged),
+							result.snapshot.emptyFolders,
+							session.scope,
+						)
+					: baseline;
+
 			const nextSessionState: SessionState = {
 				...session.state,
 				// Both sides reached same content; adopt baseline to prevent phantom conflicts.
-				baseline:
-					result.remote && result.diff.converged.length > 0
-						? advanceBaselineForPaths(
-								session.state.baseline,
-								result.remote,
-								new Set(result.diff.converged),
-								result.snapshot.emptyFolders,
-							)
-						: session.state.baseline,
+				baseline: advanced,
+				vaultId: session.state.vaultId ?? result.remote?.vaultId ?? null,
 				hashCache: result.updatedCache,
 			};
 			await this.deps.host.persistState(
@@ -77,6 +88,7 @@ export class OperationRunner {
 					identity,
 				),
 			);
+			this.applyResult(result);
 		} catch (err) {
 			const message = errorMessage(err);
 			this.deps.runtimeState.setError(message);
@@ -128,15 +140,22 @@ export class OperationRunner {
 			this.deps.runtimeState.clearError();
 			let scope: { signal: AbortSignal; end: () => void } | null = null;
 			try {
-				const session = await this.deps.host.openSession();
+				let session = await this.deps.host.openSession();
 				if (!session) return;
-				let result = this.deps.runtimeState.getResult();
-				if (!result) {
-					// Opened after the scan, which has no signal of its own: offering a
-					// Cancel that cannot stop the scan is worse than offering none.
-					result = await compare(session);
-					this.deps.runtimeState.setResult(result);
+				// Scope and remote resets may have changed since the user opened the diff.
+				const result = await compare(session);
+				if (result.remote) {
+					const baseline = reconcileBaselineResetGenerations(
+						session.state.baseline,
+						result.remote,
+						session.scope,
+					);
+					if (baseline !== session.state.baseline) {
+						session = { ...session, state: { ...session.state, baseline } };
+						await this.buildContext(session).persistState(session.state);
+					}
 				}
+				this.applyResult(result);
 				if (cancellable) scope = this.deps.runtimeState.beginCancellable();
 				const ctx = this.buildContext(session);
 				const outcome = await fn(

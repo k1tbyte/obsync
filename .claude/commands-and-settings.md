@@ -11,6 +11,8 @@
 - Provide a settings tab with sensible defaults and validation; persist via `this.loadData()` / `this.saveData()`.
 - Device transfer exports only the main sync settings as a compact `obsidian://obsync?d=...` URL/QR. The payload uses short field names, omits default-valued fields, and may compress before encryption when that makes the token smaller. Never include the cached passphrase, passphrase cache settings, or local-only display preferences. Import requires the same passphrase and explicit confirmation.
 - Local diagnostics are stored only on the current device in `<configDir>/plugins/obsync/logs.json` and surfaced in the second tab of the plugin settings. They must stay excluded from sync.
+- Configuration categories (core settings, hotkeys, plugin list, plugins, snippets, themes) are per device and default to off. A disabled category is invisible to that device: nothing is scanned, diffed, pulled or published for it, and the remote keeps whatever other devices synced. Turning a category off never deletes anything anywhere. Obsync's own plugin folder is never synced.
+- **Clear on remote** beside a category is the only way to remove a category from the remote. It bumps that category's reset generation so every device forgets its baseline for it instead of reading the removal as deletions; local files stay everywhere, and enabled devices re-upload on their next push. Confirmation-gated.
 
 ## UI copy
 

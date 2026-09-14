@@ -1,5 +1,5 @@
 import { EDiffDirection } from "@/sync/projection";
-import { appendIconButton } from "./rail";
+import { appendIconButton } from "../icon-button";
 
 export interface DiffHeaderState {
 	path: string;

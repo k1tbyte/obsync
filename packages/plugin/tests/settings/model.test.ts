@@ -9,6 +9,21 @@ import {
 import { EStorageBackend, type StorageAdapterConfig } from "@/storage/config";
 
 describe("mergeSettings", () => {
+	it("requires opt-in for every configuration category on a fresh device", () => {
+		expect(Object.values(mergeSettings(null).settingsSync)).toEqual([
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+		]);
+		expect(
+			mergeSettings({
+				settingsSync: { ...DEFAULT_SETTINGS.settingsSync, snippets: true },
+			}).settingsSync.snippets,
+		).toBe(true);
+	});
 	it("defaults historyAutoRefresh to true when absent", () => {
 		expect(mergeSettings(null).historyAutoRefresh).toBe(true);
 		expect(mergeSettings({}).historyAutoRefresh).toBe(true);

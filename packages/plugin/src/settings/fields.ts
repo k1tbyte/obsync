@@ -67,11 +67,12 @@ export function renderFields(
 	}
 }
 
-function renderField(
+/** Returns the row so a caller can attach extra controls beside the field. */
+export function renderField(
 	parent: HTMLElement,
 	ctx: FieldContext,
 	field: SettingsField,
-): void {
+): Setting {
 	const setting = new Setting(parent).setName(field.name);
 	if (field.desc) setting.setDesc(field.desc);
 	if (field.sub) setting.settingEl.addClass(SUB_SETTING_CLASS);
@@ -81,35 +82,32 @@ function renderField(
 	};
 
 	if (field.kind === EFieldKind.Toggle) {
-		setting.addToggle((toggle) =>
+		return setting.addToggle((toggle) =>
 			toggle
 				.setValue(field.get(ctx.plugin.settings))
 				.onChange((value) => apply(field.set(value, ctx.plugin))),
 		);
-		return;
 	}
 
 	if (field.kind === EFieldKind.Number) {
-		setting.addText((text) =>
+		return setting.addText((text) =>
 			text
 				.setValue(field.get(ctx.plugin.settings))
 				.onChange((raw) => apply(field.set(field.parse(raw), ctx.plugin))),
 		);
-		return;
 	}
 
 	if (field.kind === EFieldKind.Slider) {
-		setting.addSlider((slider) =>
+		return setting.addSlider((slider) =>
 			slider
 				.setLimits(field.min, field.max, field.step ?? 1)
 				.setValue(field.get(ctx.plugin.settings))
 				.setDynamicTooltip()
 				.onChange((value) => apply(field.set(value, ctx.plugin))),
 		);
-		return;
 	}
 
-	setting.addText((text) => {
+	return setting.addText((text) => {
 		if (field.kind === EFieldKind.Password) text.inputEl.type = "password";
 		if (field.placeholder) text.setPlaceholder(field.placeholder);
 		text

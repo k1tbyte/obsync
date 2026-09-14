@@ -680,6 +680,32 @@
 	display: none;
 }
 
+/* Conflict rows resolve with compact icons; the text buttons crowded the sidebar. */
+.obsync-conflict-controls,
+.obsync-conflict-preview-actions {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 2px;
+}
+
+.obsync-conflict-controls .obsync-icon-btn,
+.obsync-conflict-preview-actions .obsync-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	min-width: 24px;
+	height: 24px;
+	padding: 0;
+}
+
+.obsync-conflict-controls svg,
+.obsync-conflict-preview-actions svg {
+	width: 14px;
+	height: 14px;
+}
+
 .obsync-diff-hint {
 	flex: 0 0 auto;
 	padding: var(--size-4-3);
@@ -935,15 +961,13 @@
 	caret-color: transparent;
 }
 
-/* The strip between two panes: connectors on a canvas, buttons floating above. */
+/* The strip between two panes: connectors on a canvas, an action popup floating above. */
 .obsync-merge-divider,
 .obsync-compare-divider {
 	position: relative;
-	overflow: hidden;
 	background: var(--background-secondary);
 }
 
-.obsync-divider-canvas,
 .obsync-divider-actions {
 	position: absolute;
 	inset: 0;
@@ -951,8 +975,20 @@
 }
 
 .obsync-divider-canvas {
+	position: absolute;
+	inset: 0;
 	width: 100%;
 	height: 100%;
+	pointer-events: auto;
+}
+
+.obsync-divider-canvas.has-target {
+	cursor: pointer;
+}
+
+.obsync-divider-canvas:focus {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
 }
 
 .obsync-divider-action {
@@ -965,6 +1001,18 @@
 	gap: 2px;
 	padding: 1px 2px;
 	pointer-events: auto;
+}
+
+/* Opened by clicking a connector; wider than the strip, so the strip must not clip it. */
+.obsync-divider-action.is-popup {
+	right: auto;
+	width: auto;
+	z-index: 10;
+	padding: 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
 }
 
 /* One icon button beside a change, in a divider or a source block header. */
@@ -990,10 +1038,6 @@
 
 .obsync-divider-action .obsync-rail-btn {
 	color: rgb(var(--obsync-tone));
-}
-
-.obsync-divider-action.is-quiet .obsync-rail-btn {
-	opacity: 0.65;
 }
 
 .obsync-rail-btn:hover,
@@ -1648,22 +1692,6 @@
 	background: var(--color-green);
 }
 
-.obsync-row-action {
-	padding: 2px var(--size-4-2);
-	font-size: var(--font-ui-smaller);
-	border-radius: var(--radius-s);
-	cursor: pointer;
-	flex-shrink: 0;
-}
-
-.obsync-row-keep {
-	color: var(--color-green);
-}
-
-.obsync-row-accept {
-	color: var(--color-orange);
-}
-
 .obsync-modal-buttons {
 	display: flex;
 	justify-content: flex-end;
@@ -1672,13 +1700,15 @@
 }
 
 @media (max-width: 600px) {
-	.obsync-row-action {
-		padding: var(--size-4-1) var(--size-4-2);
-		min-height: 32px;
-	}
-
 	.obsync-file-row {
 		padding: var(--size-4-1) var(--size-4-2);
+	}
+
+	.obsync-conflict-controls .obsync-icon-btn,
+	.obsync-conflict-preview-actions .obsync-icon-btn {
+		width: 32px;
+		min-width: 32px;
+		height: 32px;
 	}
 }
 

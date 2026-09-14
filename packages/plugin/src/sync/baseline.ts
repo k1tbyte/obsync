@@ -1,5 +1,7 @@
 import { randomId } from "@/crypto";
 import { entryAt, sortedByPath } from "@/shared/records";
+import type { ScopePolicy } from "@/vault/scope";
+import { reconcileBaselineResetGenerations } from "./config-reset";
 import type { CompareResult } from "./engine";
 import type {
 	HashCacheEntry,
@@ -30,6 +32,7 @@ export function advanceSessionAfterPush(
 	state: SessionState,
 	result: CompareResult,
 	manifest: Manifest,
+	scope?: ScopePolicy,
 ): SessionState {
 	return {
 		deviceId: state.deviceId || randomId(),
@@ -40,6 +43,7 @@ export function advanceSessionAfterPush(
 			manifest,
 			publishedDelta(result.remote, manifest),
 			result.snapshot.emptyFolders,
+			scope,
 		),
 		hashCache: result.updatedCache,
 	};
@@ -60,9 +64,13 @@ export function advanceBaselineForPaths(
 	published: Manifest,
 	paths: ReadonlySet<string>,
 	onDisk: ReadonlyArray<string>,
+	scope?: ScopePolicy,
 ): Manifest {
+	const base = scope
+		? reconcileBaselineResetGenerations(previous, published, scope)
+		: previous;
 	const files: Record<string, ManifestEntry> = {
-		...(previous?.files ?? {}),
+		...(base?.files ?? {}),
 	};
 	for (const path of paths) {
 		const entry = entryAt(published.files, path);
@@ -75,8 +83,16 @@ export function advanceBaselineForPaths(
 	return {
 		...published,
 		files,
-		folders: majorityFolders(previous?.folders, published.folders, onDisk),
-		parentSnapshotId: previous?.snapshotId ?? null,
+		folders: scope
+			? [
+					...(base?.folders ?? []).filter((dir) => !scope.canDescend(dir)),
+					...majorityFolders(
+						base?.folders?.filter((dir) => scope.canDescend(dir)),
+						published.folders?.filter((dir) => scope.canDescend(dir)),
+						onDisk,
+					),
+				]
+			: majorityFolders(base?.folders, published.folders, onDisk),
 	};
 }
 

@@ -8,7 +8,7 @@ import {
 	publishManifestWithGuard,
 	reconcileRemoteAgainstBaseline,
 } from "@/sync/manifest";
-import type { Manifest } from "@/sync/types";
+import { EFileKind, type Manifest } from "@/sync/types";
 
 let key: EncryptionKey;
 beforeAll(async () => {
@@ -43,10 +43,27 @@ class StaleReadStorage extends FakeStorage {
 }
 
 describe("reconcileRemoteAgainstBaseline", () => {
-	it("prefers the baseline when the read is our own superseded write", () => {
+	it("recovers a complete published head even when only part of it is in the baseline", async () => {
+		const storage = new FakeStorage();
+		const parent = manifest("s1", null);
+		await seed(storage, parent);
+		const entry = { hash: "h", size: 1, mtime: 0, kind: EFileKind.Vault };
+		const published = {
+			...manifest("s2", "s1"),
+			files: { "acknowledged.md": entry, "remote-only.md": entry },
+		};
+		await publishManifestWithGuard(storage, key, published, "s1");
+		const baseline = { ...published, files: { "acknowledged.md": entry } };
+		expect(
+			reconcileRemoteAgainstBaseline(parent, baseline, storage, key)?.files,
+		).toEqual(published.files);
+	});
+	it("refuses to use a partial or persisted baseline as a complete remote head", () => {
 		const baseline = manifest("s2", "s1");
 		const remote = manifest("s1", null);
-		expect(reconcileRemoteAgainstBaseline(remote, baseline)).toBe(baseline);
+		expect(() => reconcileRemoteAgainstBaseline(remote, baseline)).toThrow(
+			"older manifest",
+		);
 	});
 
 	it("accepts a genuinely newer remote", () => {
@@ -120,7 +137,8 @@ describe("publishManifestWithGuard", () => {
 	it("survives a backend still serving our previous write", async () => {
 		const storage = new StaleReadStorage();
 		const baseline = manifest("s2", "s1");
-		await seed(storage, baseline);
+		await seed(storage, manifest("s1", null));
+		await publishManifestWithGuard(storage, key, baseline, "s1");
 		// Read path is stuck one publish behind.
 		storage.staleBlob = await encryptJson(key, manifest("s1", null));
 

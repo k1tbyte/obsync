@@ -29,6 +29,7 @@ export function renderRailButton(
 	const button = parent.createEl("button", { cls: "obsync-rail-btn" });
 	button.type = "button";
 	button.setAttr("aria-label", action.label);
+	button.setAttr("title", action.label);
 	if (action.active !== undefined) {
 		button.setAttr("aria-pressed", String(action.active));
 	}
@@ -41,18 +42,5 @@ export function renderRailButton(
 		event.stopPropagation();
 		action.run();
 	});
-	return button;
-}
-
-export function appendIconButton(
-	parent: HTMLElement,
-	icon: string,
-	label: string,
-	onClick: () => void,
-): HTMLButtonElement {
-	const button = parent.createEl("button", { cls: "obsync-icon-btn" });
-	button.setAttr("aria-label", label);
-	setIcon(button, icon);
-	button.addEventListener("click", onClick);
 	return button;
 }

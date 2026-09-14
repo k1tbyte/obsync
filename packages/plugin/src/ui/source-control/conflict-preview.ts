@@ -1,4 +1,5 @@
 import type { FileDiffModel } from "@/sync/projection";
+import { appendIconButton } from "../icon-button";
 import type { SourceControlActions } from "./actions";
 
 const CONFLICT_PREVIEW_LINES = 10;
@@ -17,13 +18,13 @@ export function renderConflictPreview(
 	handlers: ConflictPreviewHandlers,
 ): void {
 	const actions = parent.createDiv({ cls: "obsync-conflict-preview-actions" });
-	const keepBtn = actions.createEl("button", { text: "Keep local" });
-	keepBtn.addEventListener("click", (e) => {
+
+	appendIconButton(actions, "arrow-up", "Keep local version", (e) => {
 		e.stopPropagation();
 		void handlers.resolveKeepLocal(path);
 	});
-	const acceptBtn = actions.createEl("button", { text: "Accept remote" });
-	acceptBtn.addEventListener("click", (e) => {
+
+	appendIconButton(actions, "arrow-down", "Accept remote version", (e) => {
 		e.stopPropagation();
 		void handlers.resolveAcceptRemote(path);
 	});

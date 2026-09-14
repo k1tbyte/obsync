@@ -135,7 +135,7 @@ describe("baseline utilities", () => {
 			// "theirs" is only on the remote: listed here, the next push would delete it.
 			expect(next.folders).toEqual(["mine"]);
 			expect(next.snapshotId).toBe("m2");
-			expect(next.parentSnapshotId).toBe("b1");
+			expect(next.parentSnapshotId).toBe(published.parentSnapshotId);
 		});
 
 		it("removes a path the publish dropped", () => {

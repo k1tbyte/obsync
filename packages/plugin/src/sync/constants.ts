@@ -14,7 +14,7 @@ export const REMOTE_SALT_KEY = "salt.bin";
 
 export const REMOTE_KEYFILE_KEY = "keys.json";
 
-export const MANIFEST_VERSION = 1;
+export const MANIFEST_VERSION = 2;
 
 /** Max paths attached to a single log entry, so one big sync cannot flood the log. */
 export const LOG_PATH_LIMIT = 50;

@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS_SYNC: SettingsSyncCategories = {
 	hotkeys: false,
 	pluginList: false,
 	pluginConfigs: false,
-	snippets: true,
+	snippets: false,
 	themes: false,
 };
 

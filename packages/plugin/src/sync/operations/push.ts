@@ -30,7 +30,12 @@ export const pushPathsOp: Operation<ReadonlyArray<string>> = async (
 		ctx.reportProgressSoon(`Pushing ${done}/${total}…`);
 	});
 	ctx.setProgress(null);
-	const state = advanceSessionAfterPush(deps.state, result, manifest);
+	const state = advanceSessionAfterPush(
+		deps.state,
+		result,
+		manifest,
+		deps.scope,
+	);
 	await ctx.persistState(state);
 	await ctx.logInfo(
 		ESyncLogOperation.Push,
