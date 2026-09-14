@@ -24,6 +24,7 @@ export interface ObjectStorage {
 		contentType?: string,
 	): Promise<boolean>;
 	delete(key: string): Promise<void>;
+	/** List all object keys matching the prefix. Returned keys are guaranteed to start with the prefix. */
 	list(prefix: string): Promise<string[]>;
 }
 

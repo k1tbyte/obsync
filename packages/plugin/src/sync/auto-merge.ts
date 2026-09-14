@@ -1,13 +1,17 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
 import { sortedByPath } from "@/shared/records";
+import { mergeWrittenIntoCache } from "@/sync/baseline";
 import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "@/sync/constants";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { tryAutoMergeConflict } from "./conflict-merge";
-import { hasKnownBinaryExtension, textToBytes } from "./content";
+import {
+	hasKnownBinaryExtension,
+	textToBytes,
+	writeLocalFile,
+} from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
-import { writeLocalFile } from "./operations/local-write";
 import type { Manifest, ManifestEntry, SessionState } from "./types";
 
 export async function autoMergeOp(
@@ -16,7 +20,6 @@ export async function autoMergeOp(
 	ctx: OperationContext,
 ): Promise<OperationOutcome> {
 	const localEntries = new Map<string, ManifestEntry | null>();
-	const hashCache = { ...result.updatedCache };
 	// Indexed by conflict position so the log and the baseline pass stay in diff
 	// order no matter which download finishes first.
 	const merged: Array<string | null> = new Array(
@@ -45,11 +48,6 @@ export async function autoMergeOp(
 				conflict.path,
 				textToBytes(text),
 			);
-			hashCache[conflict.path] = {
-				mtime: entry.mtime,
-				size: entry.size,
-				hash: entry.hash,
-			};
 			localEntries.set(conflict.path, entry);
 			merged[index] = conflict.path;
 		},
@@ -60,9 +58,14 @@ export async function autoMergeOp(
 		return { newRemote: result.remote, touchedPaths: new Set() };
 	}
 
+	const nextHashCache = mergeWrittenIntoCache(
+		localEntries,
+		result.updatedCache,
+	);
+
 	// Advances baseline for merged paths so the merged content is treated as a
 	// new local edit, not a conflict.
-	const freshState: SessionState = ctx.getFreshState() ?? deps.state;
+	const freshState: SessionState = ctx.getFreshState();
 	const baseline = freshState.baseline;
 	if (baseline) {
 		const files = { ...baseline.files };
@@ -73,7 +76,7 @@ export async function autoMergeOp(
 		await ctx.persistState({
 			...freshState,
 			baseline: { ...baseline, files },
-			hashCache: sortedByPath(hashCache),
+			hashCache: sortedByPath(nextHashCache),
 		});
 	}
 

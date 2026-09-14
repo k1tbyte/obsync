@@ -50,9 +50,7 @@ export class ShareSessionStore {
 				`"${share.localRoot}" is a file — shared folders need a folder.`,
 			);
 		}
-		// The state has to be loaded, not merely read: a null here would skip the
-		// check below and let an emptied folder push a mass deletion.
-		const state = await this.host.ensureState();
+		const state = this.host.getState();
 		const slot = state.storages[shareSlotKey(share.id)];
 		const syncedBefore =
 			slot?.baseline !== undefined &&
@@ -76,7 +74,7 @@ export class ShareSessionStore {
 	}
 
 	async open(share: SharedFolderConfig): Promise<EngineDependencies> {
-		const state = await this.host.ensureState();
+		const state = this.host.getState();
 		const slot = state.storages[shareSlotKey(share.id)];
 		const session: SessionState = {
 			deviceId: state.deviceId,
@@ -109,7 +107,7 @@ export class ShareSessionStore {
 		share: SharedFolderConfig,
 		session: SessionState,
 	): Promise<void> {
-		const current = await this.host.ensureState();
+		const current = this.host.getState();
 		await this.host.persistState({
 			...current,
 			storages: {
@@ -128,7 +126,7 @@ export class ShareSessionStore {
 
 	/** Drops the share's slot, hash cache and cached storage adapters. */
 	async forget(shareId: string): Promise<void> {
-		const state = await this.host.ensureState();
+		const state = this.host.getState();
 		const storages = { ...state.storages };
 		delete storages[shareSlotKey(shareId)];
 		const shareCaches = { ...(state.shareCaches ?? {}) };

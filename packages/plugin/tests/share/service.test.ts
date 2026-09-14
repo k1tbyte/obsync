@@ -43,10 +43,12 @@ function createHost(settings: ObsyncSettings): ShareServiceHost {
 	return {
 		app: {} as App,
 		getSettings: () => settings,
-		getState: () => null,
-		ensureState: async () => {
-			throw new Error("Not used");
-		},
+		getState: () =>
+			({
+				deviceId: "d1",
+				deviceName: "d1",
+				storages: {},
+			}) as import("@/sync/types").LocalState,
 		persistState: async () => {},
 		log: async () => {},
 	};

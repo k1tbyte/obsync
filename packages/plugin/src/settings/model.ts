@@ -166,23 +166,7 @@ function clamp(value: unknown, bounds: Bounds, fallback: number): number {
 	return Math.min(bounds.max, Math.round(value));
 }
 
-/** Legacy single-field shape, folded on first load. */
-interface LegacyStorageShape {
-	storage?: StorageAdapterConfig;
-}
-
-export interface LegacyAutomationSettings {
-	autoPullOnStartup?: boolean;
-	autoPullIntervalMinutes?: number;
-	autoPushIntervalMinutes?: number;
-	autoRefreshOnFileChange?: boolean;
-	autoPushOnSave?: boolean;
-	autoPushOnSaveCurrentFileOnly?: boolean;
-}
-
-type StoredSettings = Partial<ObsyncSettings> &
-	LegacyStorageShape &
-	LegacyAutomationSettings;
+type StoredSettings = Partial<ObsyncSettings>;
 
 export function mergeSettings(
 	stored: StoredSettings | null | undefined,
@@ -190,10 +174,6 @@ export function mergeSettings(
 	const storageConfigs: Record<string, StorageAdapterConfig> = {
 		...(stored?.storageConfigs ?? {}),
 	};
-	const legacy = stored?.storage;
-	if (legacy && !storageConfigs[legacy.kind]) {
-		storageConfigs[legacy.kind] = legacy;
-	}
 	if (Object.keys(storageConfigs).length === 0) {
 		storageConfigs[DEFAULT_STORAGE.kind] = DEFAULT_STORAGE;
 	}
@@ -205,7 +185,7 @@ export function mergeSettings(
 			getDescriptor(kind as EStorageBackend).defaults().concurrency,
 		);
 	}
-	const requested = stored?.activeStorageKind ?? legacy?.kind;
+	const requested = stored?.activeStorageKind;
 	const activeStorageKind =
 		requested && storageConfigs[requested]
 			? requested
@@ -221,28 +201,13 @@ export function mergeSettings(
 		storageConfigs[shareStorageKind] =
 			getDescriptor(shareStorageKind).defaults();
 	}
-	const legacyAutomation = migrateLegacyAutomationSettings(stored);
 
-	const merged = {
+	const merged: ObsyncSettings = {
 		...DEFAULT_SETTINGS,
 		...(stored ?? {}),
 		storageConfigs,
 		activeStorageKind,
 		shareStorageKind,
-		autoSyncIntervalMinutes:
-			stored?.autoSyncIntervalMinutes ??
-			legacyAutomation.autoSyncIntervalMinutes,
-		autoSyncEnabled:
-			stored?.autoSyncEnabled ??
-			(stored?.autoSyncIntervalMinutes ??
-				legacyAutomation.autoSyncIntervalMinutes) > 0,
-		autoPushAfterSync:
-			stored?.autoPushAfterSync ?? legacyAutomation.autoPushAfterSync,
-		autoPushAfterChange:
-			stored?.autoPushAfterChange ?? legacyAutomation.autoPushAfterChange,
-		autoPushChangedFilesOnly:
-			stored?.autoPushChangedFilesOnly ??
-			legacyAutomation.autoPushChangedFilesOnly,
 		settingsSync: {
 			...DEFAULT_SETTINGS_SYNC,
 			...((stored?.settingsSync as
@@ -250,59 +215,12 @@ export function mergeSettings(
 				| undefined) ?? {}),
 		},
 		sharedFolders: normalizeSharedFolders(stored?.sharedFolders),
-	} as ObsyncSettings & LegacyStorageShape & LegacyAutomationSettings;
+	};
 	for (const [key, bounds] of Object.entries(NUMERIC_BOUNDS)) {
 		const field = key as keyof typeof NUMERIC_BOUNDS;
 		merged[field] = clamp(merged[field], bounds, DEFAULT_SETTINGS[field]);
 	}
-	delete merged.storage;
-	delete merged.autoPullOnStartup;
-	delete merged.autoPullIntervalMinutes;
-	delete merged.autoPushIntervalMinutes;
-	delete merged.autoRefreshOnFileChange;
-	delete merged.autoPushOnSave;
-	delete merged.autoPushOnSaveCurrentFileOnly;
 	return merged;
-}
-
-export function migrateLegacyAutomationSettings(
-	stored: LegacyAutomationSettings | null | undefined,
-): Pick<
-	ObsyncSettings,
-	| "autoSyncEnabled"
-	| "autoSyncIntervalMinutes"
-	| "autoPushAfterSync"
-	| "autoPushAfterChange"
-	| "autoPushChangedFilesOnly"
-> {
-	const enabled = [
-		stored?.autoPullIntervalMinutes,
-		stored?.autoPushIntervalMinutes,
-	].filter(
-		(value): value is number =>
-			typeof value === "number" && Number.isFinite(value) && value > 0,
-	);
-	// A saved shape without legacy intervals never expressed a push
-	// preference; the pull-then-push default keeps its cycle as it was.
-	const hadLegacyIntervals =
-		stored?.autoPullIntervalMinutes !== undefined ||
-		stored?.autoPushIntervalMinutes !== undefined;
-	return {
-		autoSyncEnabled: enabled.length > 0,
-		autoSyncIntervalMinutes:
-			enabled.length > 0
-				? Math.min(...enabled)
-				: DEFAULT_SETTINGS.autoSyncIntervalMinutes,
-		autoPushAfterSync: hadLegacyIntervals
-			? (stored?.autoPushIntervalMinutes ?? 0) > 0
-			: DEFAULT_SETTINGS.autoPushAfterSync,
-		autoPushAfterChange:
-			(stored?.autoPushOnSave ?? DEFAULT_SETTINGS.autoPushAfterChange) &&
-			(stored?.autoRefreshOnFileChange ?? true),
-		autoPushChangedFilesOnly:
-			stored?.autoPushOnSaveCurrentFileOnly ??
-			DEFAULT_SETTINGS.autoPushChangedFilesOnly,
-	};
 }
 
 function normalizeSharedFolders(value: unknown): SharedFolderConfig[] {

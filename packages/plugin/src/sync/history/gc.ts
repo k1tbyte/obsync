@@ -16,10 +16,10 @@ import type { HistoryLog, SnapshotEntry } from "./types";
 const GC_DELETE_CONCURRENCY = 4;
 
 /** GC fires only when retained snapshots exceed max by this fraction... */
-export const FILE_HISTORY_GC_EXCESS_RATIO = 0.3;
+const FILE_HISTORY_GC_EXCESS_RATIO = 0.3;
 
 /** ...or by this absolute count, whichever is larger. Bounds GC frequency. */
-export const FILE_HISTORY_GC_MIN_EXCESS = 10;
+const FILE_HISTORY_GC_MIN_EXCESS = 10;
 
 export function clampMaxSnapshots(value: number): number {
 	if (!Number.isFinite(value)) return FILE_HISTORY_MIN_SNAPSHOTS;

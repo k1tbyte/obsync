@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	advanceBaselineForPaths,
+	majorityFolders,
 	mergeFolderArrays,
 	mergeWrittenIntoCache,
 	publishedDelta,
@@ -94,25 +95,45 @@ describe("baseline utilities", () => {
 		});
 	});
 
+	describe("majorityFolders", () => {
+		it("keeps the folders two of baseline, remote and disk have", () => {
+			const kept = majorityFolders(
+				["settled", "deleted-here", "deleted-there", "deleted-both"],
+				["settled", "deleted-here", "added-there", "added-both"],
+				["settled", "deleted-there", "added-here", "added-both"],
+			);
+			expect(kept.sort()).toEqual([
+				"added-both",
+				"deleted-here",
+				"deleted-there",
+				"settled",
+			]);
+		});
+	});
+
 	describe("advanceBaselineForPaths", () => {
 		it("keeps unpushed remote changes out of the baseline", () => {
 			const previous = manifest("b1", {
 				"mine.md": entry("old"),
 				"theirs.md": entry("theirs-old"),
 			});
-			const published = manifest("m2", {
-				"mine.md": entry("new"),
-				"theirs.md": entry("theirs-new"),
-			});
+			const published = manifest(
+				"m2",
+				{ "mine.md": entry("new"), "theirs.md": entry("theirs-new") },
+				["mine", "theirs"],
+			);
 
 			const next = advanceBaselineForPaths(
 				previous,
 				published,
 				new Set(["mine.md"]),
+				["mine"],
 			);
 
 			expect(next.files["mine.md"]?.hash).toBe("new");
 			expect(next.files["theirs.md"]?.hash).toBe("theirs-old");
+			// "theirs" is only on the remote: listed here, the next push would delete it.
+			expect(next.folders).toEqual(["mine"]);
 			expect(next.snapshotId).toBe("m2");
 			expect(next.parentSnapshotId).toBe("b1");
 		});
@@ -124,6 +145,7 @@ describe("baseline utilities", () => {
 				previous,
 				published,
 				new Set(["gone.md"]),
+				[],
 			);
 			expect(next.files["gone.md"]).toBeUndefined();
 		});

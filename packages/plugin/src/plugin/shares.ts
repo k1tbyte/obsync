@@ -7,7 +7,6 @@ import {
 	SHARE_INVITE_ACTION,
 	ShareSyncService,
 } from "@/share";
-import { loadState } from "@/sync/state";
 import { CreateShareModal, JoinShareModal } from "@/ui";
 
 import type { PluginHost } from "./host";
@@ -38,17 +37,10 @@ function createService(
 	plugin: Plugin & PluginHost,
 	{ logs, statePersister }: ShareRuntimeDeps,
 ): ShareSyncService {
-	const { adapter, configDir } = plugin.app.vault;
 	return new ShareSyncService({
 		app: plugin.app,
 		getSettings: () => plugin.settings,
 		getState: () => statePersister.state,
-		ensureState: async () => {
-			const state =
-				statePersister.state ?? (await loadState(adapter, configDir));
-			statePersister.setInitial(state);
-			return state;
-		},
 		persistState: (state) => statePersister.persist(state),
 		log: (level, message, details) => {
 			const op = ESyncLogOperation.Share;
@@ -84,7 +76,7 @@ function registerTimers(plugin: Plugin, shares: ShareSyncService): void {
 
 function registerMenus(plugin: Plugin & PluginHost): void {
 	plugin.registerObsidianProtocolHandler(SHARE_INVITE_ACTION, (params) => {
-		const data = params.d ?? params.data;
+		const data = params.d;
 		new JoinShareModal(plugin, typeof data === "string" ? data : "").open();
 	});
 	plugin.registerEvent(

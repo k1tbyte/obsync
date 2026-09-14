@@ -56,7 +56,7 @@ export async function loadHunkSides(
 	};
 }
 
-export async function hashSides(sides: HunkSides): Promise<HunkSidesHash> {
+async function hashSides(sides: HunkSides): Promise<HunkSidesHash> {
 	return {
 		left: await sha256Hex(textToBytes(sides.left)),
 		right: await sha256Hex(textToBytes(sides.right)),

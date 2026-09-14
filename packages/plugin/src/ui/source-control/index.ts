@@ -13,7 +13,6 @@ export {
 } from "./modals";
 export { confirmRestore } from "./restore-modal";
 export { rowFromChange, rowFromConflict } from "./row-formatter";
-export { SectionStateManager } from "./section-state-manager";
 export {
 	buildTimelineRows,
 	countsText,
@@ -29,9 +28,5 @@ export {
 } from "./trash-rows";
 export { TrashTab } from "./trash-tab";
 export { buildTree } from "./tree-builder";
-export type { FileRow, SectionRefs, SectionState, TreeNode } from "./types";
-export {
-	ESection,
-	emptySectionRefs,
-	emptySectionState,
-} from "./types";
+export type { FileRow, TreeNode } from "./types";
+export { ESection } from "./types";

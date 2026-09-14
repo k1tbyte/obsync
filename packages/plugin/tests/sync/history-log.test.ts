@@ -1,4 +1,5 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
+import { publishManifest } from "@tests/helpers/manifest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey, encryptJson } from "@/crypto";
 import {
@@ -10,7 +11,6 @@ import { getFileHistory } from "@/sync/history/query";
 import { replayTo } from "@/sync/history/replay";
 import { pinKey, writeHistoryLog } from "@/sync/history/store";
 import type { HistoryLog, SnapshotEntry } from "@/sync/history/types";
-import { publishManifest } from "@/sync/manifest";
 import type { EFileKind, Manifest, ManifestEntry } from "@/sync/types";
 
 let key: EncryptionKey;
@@ -121,7 +121,9 @@ describe("diffManifests / undoChanges", () => {
 		const next = manifest("s2", "s1", { a: entry("A1", 1, 200) });
 		const changes = diffManifests(parent, next);
 		expect(changes.modified.a?.from.mtime).toBe(100);
-		expect(undoChanges(next.files, changes)).toEqual(parent.files);
+		const files = { ...next.files };
+		undoChanges(files, changes);
+		expect(files).toEqual(parent.files);
 	});
 
 	it("classifies a file named like an Object member as added, not modified", () => {
@@ -138,7 +140,9 @@ describe("diffManifests / undoChanges", () => {
 			const parent = chain[index - 1] as Manifest;
 			const current = chain[index] as Manifest;
 			const changes = diffManifests(parent, current);
-			expect(undoChanges(current.files, changes)).toEqual(parent.files);
+			const files = { ...current.files };
+			undoChanges(files, changes);
+			expect(files).toEqual(parent.files);
 		}
 	});
 });

@@ -1,4 +1,5 @@
 import type { PluginHost } from "@/plugin/host";
+import { EConflictStrategy } from "@/sync/controller";
 import { EDiffDirection, type FileDiffModel } from "@/sync/projection";
 import { notifyError, notifyInfo } from "@/ui/notices";
 import { EChoiceKind, type HunkChoices } from "./choices";
@@ -27,7 +28,8 @@ export class DiffOperations {
 		const { path, historyHash } = this.callbacks.state();
 		if (!path || !historyHash) return;
 		await this.runOnFile(
-			() => this.plugin.controller.restoreFileVersion(path, historyHash),
+			() =>
+				this.plugin.controller.history.restoreFileVersion(path, historyHash),
 			"Restored version. Review and push when ready.",
 			"Restore failed",
 		);
@@ -73,7 +75,7 @@ export class DiffOperations {
 					if (!historyHash) return;
 					await this.runOnFile(
 						() =>
-							controller.restoreHistoryHunks(
+							controller.history.restoreHistoryHunks(
 								path,
 								historyHash,
 								choices.selection(EChoiceKind.Restore),
@@ -91,7 +93,11 @@ export class DiffOperations {
 
 	async keepLocal(): Promise<void> {
 		await this.resolve(
-			(path) => this.plugin.controller.resolveConflictKeepLocal(path),
+			(path) =>
+				this.plugin.controller.resolveConflicts(
+					[path],
+					EConflictStrategy.KeepLocal,
+				),
 			"Kept the local version.",
 			"Resolve keep local failed",
 		);
@@ -99,7 +105,11 @@ export class DiffOperations {
 
 	async acceptRemote(): Promise<void> {
 		await this.resolve(
-			(path) => this.plugin.controller.resolveConflictAcceptRemote(path),
+			(path) =>
+				this.plugin.controller.resolveConflicts(
+					[path],
+					EConflictStrategy.AcceptRemote,
+				),
 			"Accepted the remote version.",
 			"Resolve accept remote failed",
 		);

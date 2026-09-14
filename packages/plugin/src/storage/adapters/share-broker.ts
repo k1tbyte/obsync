@@ -12,6 +12,7 @@ import {
 } from "@/storage/field-spec";
 import type { StorageAdapter } from "@/storage/types";
 import { toArrayBuffer } from "@/utils/bytes";
+import { parseListObjects } from "./s3-xml";
 import {
 	assertOk,
 	isRetryableStatus,
@@ -155,14 +156,14 @@ export function createShareBrokerAdapter(
 				});
 				const res = await transfer(signed, {});
 				assertOk(res, "list", keyPrefix);
-				const page = parseListObjectsV2(res.text);
+				const page = parseListObjects(res.text);
 				const base = signed.base ?? "";
 				for (const key of page.keys) {
 					const relative = key.startsWith(base) ? key.slice(base.length) : key;
 					// The prefix itself comes back as a folder marker on some backends.
 					if (relative) keys.push(relative);
 				}
-				cursor = page.cursor;
+				cursor = page.nextToken;
 			} while (cursor);
 			return keys;
 		},
@@ -292,39 +293,6 @@ function brokerError(res: BrokerResponse): string {
 		// Not JSON; the status is all we can report.
 	}
 	return `HTTP ${res.status}`;
-}
-
-function parseListObjectsV2(xml: string): { keys: string[]; cursor?: string } {
-	const keys = [...xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((match) =>
-		decodeXml(match[1] ?? ""),
-	);
-	if (!/<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml)) return { keys };
-	const next =
-		/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/.exec(xml);
-	return { keys, cursor: next ? decodeXml(next[1] ?? "") : undefined };
-}
-
-const XML_ENTITIES: Record<string, string> = {
-	"&amp;": "&",
-	"&lt;": "<",
-	"&gt;": ">",
-	"&quot;": '"',
-	"&apos;": "'",
-};
-
-function decodeXml(value: string): string {
-	return value.replace(
-		/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g,
-		(entity) => XML_ENTITIES[entity] ?? decodeCharRef(entity),
-	);
-}
-
-function decodeCharRef(entity: string): string {
-	const digits = entity.slice(2, -1);
-	const code = entity.startsWith("&#x")
-		? Number.parseInt(digits.slice(1), 16)
-		: Number.parseInt(digits, 10);
-	return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
 }
 
 function normalizeUrl(url: string): string {

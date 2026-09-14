@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveKey, encryptBytes } from "@/crypto";
 import { DEFAULT_SETTINGS, type ObsyncSettings } from "@/settings/model";
 import {
 	createSettingsTransferPackage,
@@ -10,12 +9,12 @@ import {
 	readSettingsTransfer,
 	type SettingsTransferExportOptions,
 } from "@/settings/transfer";
+import { sealTransferToken } from "@/settings/transfer-token";
 import {
 	defaultS3Config,
 	defaultWebDAVConfig,
 	EStorageBackend,
 } from "@/storage";
-import { bytesToBase64Url } from "@/utils/base64";
 
 const PASSPHRASE = "correct horse battery staple";
 
@@ -221,37 +220,57 @@ describe("settings transfer", () => {
 		expect(merged.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes);
 	});
 
-	it("imports the shortest interval from a legacy v4 automation payload", async () => {
-		const url = await createLegacyAutomationTransfer({
-			n: 30,
-			b: 10,
-			p: 1,
-			c: 1,
-			u: 0,
+	it("decodes a token sealed by an earlier build", async () => {
+		const token =
+			"obsidian://obsync?d=5.z.2NGpNeUMm25-DoUTDjXIcg.ASuGCIgIosGkXftPMujrtlSrZ9EMJGhcDQzkbV2Cj_bDxs_GRceYeGuHS2DfsK5Nrq3VovsDO7RPArTZFoUu1fu2_ZwFeoggWtWULJHu63pX2FQ77_sKNACFZi2XP4Zd7teymj2--5meFpr7fY2BOLqSEkGlIrMSOxlBd9oYp-x-psWKryrrfwGXLO1muJMv841Iu32RDkQyj5MXqQYSFa8Mz9JVqzVXY44IseSc8wVqnEuPITT95DnhFsjQQaE154I5OxF2H7fWHmzzcFEkX-BaNsbttuPiX225bZDdc9Z8COQNr8tMNT2zn_mlmX0";
+		const imported = await readSettingsTransfer(token, PASSPHRASE);
+		expect(imported.activeStorageKind).toBe(EStorageBackend.WebDAV);
+		expect(imported.settingsSync).toEqual({
+			coreSettings: true,
+			hotkeys: true,
+			pluginList: true,
+			pluginConfigs: true,
+			snippets: false,
+			themes: true,
 		});
-		const imported = await readSettingsTransfer(url, PASSPHRASE);
-
-		expect(imported.autoSyncIntervalMinutes).toBe(10);
-		expect(imported.autoSyncEnabled).toBe(true);
-		expect(imported.autoPushAfterSync).toBe(true);
-		expect(imported.autoPushAfterChange).toBe(true);
-		expect(imported.autoPushChangedFilesOnly).toBe(true);
-	});
-
-	it("imports a legacy pull-only device as autosync without push", async () => {
-		const url = await createLegacyAutomationTransfer({ n: 15 });
-		const imported = await readSettingsTransfer(url, PASSPHRASE);
-
-		expect(imported.autoSyncEnabled).toBe(true);
-		expect(imported.autoSyncIntervalMinutes).toBe(15);
-		expect(imported.autoPushAfterSync).toBe(false);
-	});
-
-	it("keeps legacy queued push disabled when file refresh was off", async () => {
-		const url = await createLegacyAutomationTransfer({ p: 1, f: 0 });
-		const imported = await readSettingsTransfer(url, PASSPHRASE);
-
-		expect(imported.autoPushAfterChange).toBe(false);
+		expect(imported.ignorePatterns).toBe("*.tmp\n*.swp");
+		expect(imported.ignoreSymlinks).toBe(!DEFAULT_SETTINGS.ignoreSymlinks);
+		expect(imported.maxFileBytes).toBe(DEFAULT_SETTINGS.maxFileBytes + 1024);
+		expect(imported.autoSyncEnabled).toBe(!DEFAULT_SETTINGS.autoSyncEnabled);
+		expect(imported.autoSyncIntervalMinutes).toBe(
+			DEFAULT_SETTINGS.autoSyncIntervalMinutes + 5,
+		);
+		expect(imported.autoPushAfterSync).toBe(
+			!DEFAULT_SETTINGS.autoPushAfterSync,
+		);
+		expect(imported.autoPushAfterChange).toBe(
+			!DEFAULT_SETTINGS.autoPushAfterChange,
+		);
+		expect(imported.autoPushSettleSeconds).toBe(
+			DEFAULT_SETTINGS.autoPushSettleSeconds - 3,
+		);
+		expect(imported.autoPushChangedFilesOnly).toBe(
+			!DEFAULT_SETTINGS.autoPushChangedFilesOnly,
+		);
+		expect(imported.fileHistoryEnabled).toBe(
+			!DEFAULT_SETTINGS.fileHistoryEnabled,
+		);
+		expect(imported.fileHistoryMaxSnapshots).toBe(
+			DEFAULT_SETTINGS.fileHistoryMaxSnapshots + 7,
+		);
+		expect(imported.historyAutoRefresh).toBe(
+			!DEFAULT_SETTINGS.historyAutoRefresh,
+		);
+		expect(imported.realtimeSync).toBe(!DEFAULT_SETTINGS.realtimeSync);
+		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
+		expect(imported.realtimeToken).toBe("relay-secret");
+		expect(imported.storageConfigs?.[EStorageBackend.WebDAV]).toMatchObject({
+			kind: EStorageBackend.WebDAV,
+			baseUrl: "https://dav.example.com/dav/",
+			basePath: "vault/",
+			username: "kit",
+			password: "dav-pass",
+		});
 	});
 
 	it("names an active backend the payload actually carries", async () => {
@@ -282,10 +301,21 @@ describe("settings transfer", () => {
 		);
 	});
 
-	it("rejects legacy v3 transfer tokens", async () => {
-		const v3Token = "obsidian://obsync?d=3.p.AAAA.BBBB";
-		await expect(readSettingsTransfer(v3Token, PASSPHRASE)).rejects.toThrow(
+	it("rejects unsupported transfer tokens", async () => {
+		const v4Token = "obsidian://obsync?d=4.p.AAAA.BBBB";
+		await expect(readSettingsTransfer(v4Token, PASSPHRASE)).rejects.toThrow(
 			/Unsupported Obsync settings transfer token/,
+		);
+	});
+
+	it("rejects a bool field that repeats its default", async () => {
+		const defaultBit = DEFAULT_SETTINGS.autoSyncEnabled ? 1 : 0;
+		const token = await sealTransferToken(
+			new TextEncoder().encode(JSON.stringify({ a: { x: defaultBit } })),
+			PASSPHRASE,
+		);
+		await expect(readSettingsTransfer(token, PASSPHRASE)).rejects.toThrow(
+			/Invalid Obsync settings transfer payload/,
 		);
 	});
 
@@ -346,20 +376,4 @@ function buildLargeValue(): string {
 	)
 		.join("|")
 		.slice(0, 1800);
-}
-
-async function createLegacyAutomationTransfer(
-	automation: Record<string, unknown>,
-): Promise<string> {
-	const salt = new Uint8Array(16);
-	const key = await deriveKey(PASSPHRASE, salt);
-	const bytes = new TextEncoder().encode(JSON.stringify({ a: automation }));
-	const ciphertext = await encryptBytes(key, bytes);
-	const token = [
-		"4",
-		"p",
-		bytesToBase64Url(salt),
-		bytesToBase64Url(ciphertext),
-	].join(".");
-	return `obsidian://obsync?d=${token}`;
 }

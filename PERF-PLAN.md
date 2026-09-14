@@ -329,7 +329,7 @@ rebuilds an identical hash cache and rewrote 3.86 MB for it.
 one matches. The indent is gone: nothing reads this file by eye, and at 20k
 files it cost 0.74 MB per write.
 
-`lastWritten` is deliberately never seeded from `setInitial`. `loadState`
+`lastWritten` is deliberately never seeded from the initial state. `loadState`
 normalises what it read and can mint a device id that has to reach disk, so the
 first persist of a session always writes.
 

@@ -1,11 +1,7 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { decryptBytes, type EncryptionKey, sha256Hex } from "@/crypto";
 import type { StorageAdapter } from "@/storage/types";
-import {
-	REMOTE_LEGACY_SNAPSHOTS_PREFIX,
-	REMOTE_OBJECTS_PREFIX,
-	REMOTE_PINS_PREFIX,
-} from "@/sync/constants";
+import { REMOTE_OBJECTS_PREFIX, REMOTE_PINS_PREFIX } from "@/sync/constants";
 import { runWithConcurrency } from "@/utils/concurrency";
 import {
 	collectChangeHashes,
@@ -32,8 +28,6 @@ export interface VerifyResult {
 export interface CleanResult {
 	deletedObjects: number;
 	deletedPins: number;
-	/** Leftovers from the pre-change-log layout. */
-	deletedLegacy: number;
 }
 
 interface ReachableSet {
@@ -145,10 +139,9 @@ export async function deepCleanOrphans(
 			.map((entry) => pinKey(entry.id)),
 	);
 
-	const [objectKeys, pinKeys, legacyKeys] = await Promise.all([
+	const [objectKeys, pinKeys] = await Promise.all([
 		storage.list(REMOTE_OBJECTS_PREFIX),
 		storage.list(REMOTE_PINS_PREFIX),
-		storage.list(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
 	]);
 
 	// If another device published during listing, its new objects appear as orphans. Bail.
@@ -171,21 +164,13 @@ export async function deepCleanOrphans(
 		[...reachable.hashes].map((hash) => objectKey(hash)),
 	);
 	const orphanObjects = objectKeys.filter(
-		(storageKey) =>
-			storageKey.startsWith(REMOTE_OBJECTS_PREFIX) &&
-			!liveObjectKeys.has(storageKey),
+		(storageKey) => !liveObjectKeys.has(storageKey),
 	);
 	const orphanPins = pinKeys.filter(
-		(storageKey) =>
-			storageKey.startsWith(REMOTE_PINS_PREFIX) && !livePinKeys.has(storageKey),
+		(storageKey) => !livePinKeys.has(storageKey),
 	);
 
-	// Nothing reads the pre-change-log layout, so all of it is orphaned.
-	const legacy = legacyKeys.filter((storageKey) =>
-		storageKey.startsWith(REMOTE_LEGACY_SNAPSHOTS_PREFIX),
-	);
-
-	const targets = [...orphanObjects, ...orphanPins, ...legacy];
+	const targets = [...orphanObjects, ...orphanPins];
 	let done = 0;
 	await runWithConcurrency(targets, concurrency, async (storageKey) => {
 		await storage.delete(storageKey);
@@ -194,7 +179,6 @@ export async function deepCleanOrphans(
 	return {
 		deletedObjects: orphanObjects.length,
 		deletedPins: orphanPins.length,
-		deletedLegacy: legacy.length,
 	};
 }
 
@@ -212,8 +196,5 @@ export function cleanSummary(result: CleanResult): string {
 		`${result.deletedObjects} object(s)`,
 		`${result.deletedPins} pinned snapshot(s)`,
 	];
-	if (result.deletedLegacy > 0) {
-		parts.push(`${result.deletedLegacy} leftover(s) from the old layout`);
-	}
 	return `removed ${parts.join(", ")}.`;
 }

@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { computeHunks, type HunkSelection } from "@/sync/hunks";
 import { EHunkPair, loadHunkSides } from "@/sync/operations";
 import { localHunksOp, pullHunksOp } from "@/sync/operations/hunks";
-import { batchAcceptRemoteOp } from "@/sync/operations/pull";
 import { pushPathsOp } from "@/sync/operations/push";
+import { batchAcceptRemoteOp } from "@/sync/operations/resolve";
 import { recomputeAfterWrite } from "@/sync/session-state";
 
 useEncryptionKey();
@@ -426,5 +426,45 @@ describe("hunk operations on a slot that has never synced", () => {
 		expect(after.diff.localChanges).toHaveLength(0);
 		expect(after.diff.remoteChanges).toHaveLength(0);
 		expect(after.diff.conflicts).toHaveLength(0);
+	});
+});
+
+describe("hunk operations and empty folders", () => {
+	it("a hunk push does not adopt an empty folder only the remote has", async () => {
+		const [a, b] = pairedSessions();
+		await sync(a, "note.md", BASE_TEXT);
+		await b.adapter.mkdir("EmptyFolder");
+		await sync(b, "other.md", "from B\n");
+
+		a.adapter.putText("note.md", TWO_EDITS);
+		const result = await a.compare();
+		await localHunksOp(
+			a.deps(),
+			result,
+			{ path: "note.md", push: pick(0), revert: pick() },
+			a.context(),
+		);
+
+		expect(a.state.baseline?.folders ?? []).toEqual([]);
+	});
+
+	it("a hunk pull does not adopt an empty folder only the remote has", async () => {
+		const [a, b] = pairedSessions();
+		await sync(a, "note.md", BASE_TEXT);
+		b.adapter.putText("note.md", BASE_TEXT);
+		await b.adoptRemote();
+
+		await a.adapter.mkdir("EmptyFolder");
+		await sync(a, "note.md", TWO_EDITS);
+
+		const result = await b.compare();
+		await pullHunksOp(
+			b.deps(),
+			result,
+			{ path: "note.md", selected: pick(0, 1) },
+			b.context(),
+		);
+
+		expect(b.state.baseline?.folders ?? []).toEqual([]);
 	});
 });

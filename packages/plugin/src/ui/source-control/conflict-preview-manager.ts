@@ -28,12 +28,13 @@ export class ConflictPreviewManager {
 		this.pendingTargets.clear();
 	}
 
-	collapse(path: string): void {
-		this.expandedPreviews.delete(path);
-	}
-
-	collapseAll(paths: ReadonlyArray<string>): void {
-		for (const path of paths) this.expandedPreviews.delete(path);
+	/** Keeps only the previews of conflicts that still exist. */
+	prune(conflictPaths: ReadonlyArray<string>): void {
+		if (this.expandedPreviews.size === 0) return;
+		const current = new Set(conflictPaths);
+		for (const path of this.expandedPreviews) {
+			if (!current.has(path)) this.expandedPreviews.delete(path);
+		}
 	}
 
 	isExpanded(path: string): boolean {

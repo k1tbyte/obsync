@@ -18,7 +18,7 @@ export function replayTo(
 	if (snapshots[0]?.id !== head.snapshotId) return null;
 	const reachable = contiguousLength(snapshots);
 
-	let files = head.files;
+	const files = { ...head.files };
 	for (let index = 0; index < reachable; index++) {
 		const entry = snapshots[index];
 		if (!entry) return null;
@@ -31,13 +31,12 @@ export function replayTo(
 				createdAt: entry.createdAt,
 				deviceId: entry.deviceId,
 				deviceName: entry.deviceName,
-				// Copy: at index 0 `files` is still head's own map.
-				files: { ...files },
+				files,
 			};
 		}
 		const changes = log.changes[entry.id];
 		if (!changes) return null;
-		files = undoChanges(files, changes);
+		undoChanges(files, changes);
 	}
 	return null;
 }

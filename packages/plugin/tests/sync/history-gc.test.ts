@@ -1,4 +1,5 @@
 import { FakeStorage } from "@tests/helpers/fake-storage";
+import { publishManifest } from "@tests/helpers/manifest";
 import { describe, expect, it } from "vitest";
 import { deriveKey, type EncryptionKey, encryptJson } from "@/crypto";
 import { diffManifests } from "@/sync/history/changes";
@@ -16,7 +17,7 @@ import {
 	writeHistoryLog,
 } from "@/sync/history/store";
 import type { HistoryLog, SnapshotEntry } from "@/sync/history/types";
-import { objectKey, publishManifest } from "@/sync/manifest";
+import { objectKey } from "@/sync/manifest";
 import type { EFileKind, Manifest } from "@/sync/types";
 
 function manifest(

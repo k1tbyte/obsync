@@ -7,7 +7,7 @@ import {
 	wholeHunks,
 } from "@/sync/hunks";
 
-// Locks semantics of controller.restoreHistoryHunks: applyHunks(current, computeHunks(current, version).hunks, selected)
+// Locks semantics of controller.history.restoreHistoryHunks: applyHunks(current, computeHunks(current, version).hunks, selected)
 // Selected hunks restore OLD content; unselected keep CURRENT.
 // Forward/reverse hunk counts must match so the view's per-hunk index stays valid.
 // Regions are separated by >3 context lines to prevent merging into one hunk.

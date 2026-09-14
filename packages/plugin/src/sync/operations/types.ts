@@ -20,7 +20,7 @@ export interface OperationContext {
 	setProgress: ProgressReporter;
 	reportProgressSoon: ProgressReporter;
 	persistState: (state: SessionState) => Promise<void>;
-	getFreshState: () => SessionState | null;
+	getFreshState: () => SessionState;
 	logInfo: (
 		operation: ESyncLogOperation,
 		message: string,

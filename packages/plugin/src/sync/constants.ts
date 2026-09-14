@@ -10,12 +10,6 @@ export const REMOTE_HISTORY_LOG_KEY = "history.json.enc";
 /** Full manifests for pinned snapshots, so a pin survives its chain being evicted. */
 export const REMOTE_PINS_PREFIX = "pins/";
 
-/**
- * Where history lived before the change log. Nothing reads it; reset and
- * deep-clean sweep it so migrating off the old layout leaves no litter behind.
- */
-export const REMOTE_LEGACY_SNAPSHOTS_PREFIX = "snapshots/";
-
 export const REMOTE_SALT_KEY = "salt.bin";
 
 export const REMOTE_KEYFILE_KEY = "keys.json";

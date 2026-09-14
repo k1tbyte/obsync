@@ -173,7 +173,7 @@ export class DiffView extends ItemView {
 			// destroy the compare panel and its pending choices.
 			if (!this.model) this.renderLoading();
 			if (this.historyHash) {
-				this.model = await this.plugin.controller.getHistoryDiff({
+				this.model = await this.plugin.controller.history.getHistoryDiff({
 					path: this.path,
 					left: {
 						version: {
@@ -193,8 +193,8 @@ export class DiffView extends ItemView {
 				return;
 			}
 			this.model = this.forceText
-				? await this.plugin.controller.getForcedFileDiff(this.path)
-				: await this.plugin.controller.getFileDiff(this.path);
+				? await this.plugin.controller.fileDiffs.getForcedFileDiff(this.path)
+				: await this.plugin.controller.fileDiffs.getFileDiff(this.path);
 
 			if (!this.model) {
 				// No differences remaining; auto-close.
@@ -243,6 +243,7 @@ export class DiffView extends ItemView {
 		if (!header) return;
 		const path = this.path ?? "";
 		const model = this.model;
+		const paths = this.getOrderedPaths();
 		const actions: DiffHeaderActions = {
 			saveResolution: () =>
 				void this.mergePanel.save(this.plugin, path, (resolved) =>
@@ -268,8 +269,8 @@ export class DiffView extends ItemView {
 				direction: model?.direction ?? null,
 				isBinary: model?.isBinary ?? false,
 				isEditing: this.mergePanel.isEditing,
-				canGoPrevFile: this.getAdjacentPath(-1) !== null,
-				canGoNextFile: this.getAdjacentPath(1) !== null,
+				canGoPrevFile: this.getAdjacentPath(paths, -1) !== null,
+				canGoNextFile: this.getAdjacentPath(paths, 1) !== null,
 				restoreLabel: this.against
 					? `Restore ${this.historyLabel}`
 					: "Restore this version",
@@ -379,22 +380,24 @@ export class DiffView extends ItemView {
 	private getNextConflictPath(resolvedPath: string): string | null {
 		const diff = this.plugin.controller.getSnapshot().result?.diff;
 		if (!diff) return null;
-		const conflicts = diff.conflicts
-			.map((c) => c.path)
-			.filter((p) => p !== resolvedPath);
-		if (conflicts.length === 0) return null;
-		return conflicts[0] ?? null;
+		return diff.conflicts.find((c) => c.path !== resolvedPath)?.path ?? null;
 	}
 
-	private getAdjacentPath(delta: number): string | null {
-		const snapshot = this.plugin.controller.getSnapshot();
-		const diff = snapshot.result?.diff;
-		if (!diff || !this.path) return null;
-		const paths = [
+	private getOrderedPaths(): string[] {
+		const diff = this.plugin.controller.getSnapshot().result?.diff;
+		if (!diff) return [];
+		return [
 			...diff.conflicts.map((c) => c.path),
 			...diff.localChanges.map((c) => c.path),
 			...diff.remoteChanges.map((c) => c.path),
 		];
+	}
+
+	private getAdjacentPath(
+		paths: readonly string[],
+		delta: number,
+	): string | null {
+		if (!this.path) return null;
 		const idx = paths.indexOf(this.path);
 		if (idx < 0) return null;
 		const next = idx + delta;
@@ -403,7 +406,8 @@ export class DiffView extends ItemView {
 	}
 
 	private async navigateFile(delta: number): Promise<void> {
-		const target = this.getAdjacentPath(delta);
+		// Re-read at click time: the list captured at render goes stale once anything syncs.
+		const target = this.getAdjacentPath(this.getOrderedPaths(), delta);
 		if (!target) return;
 		this.showFile(target);
 		await this.refreshModel();

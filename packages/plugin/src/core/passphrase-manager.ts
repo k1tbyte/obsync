@@ -1,4 +1,4 @@
-import type { App, DataAdapter } from "obsidian";
+import type { DataAdapter } from "obsidian";
 
 import type { EncryptionKey } from "@/crypto";
 import {
@@ -18,7 +18,6 @@ import {
 	storageIdentity,
 } from "@/storage";
 import { resolveContentKey, rotatePassphrase } from "@/sync/keyfile";
-import { askPassphrase, notifyError } from "@/ui";
 
 interface CachedKey {
 	key: EncryptionKey;
@@ -32,7 +31,7 @@ export class PassphraseManager {
 	private pendingPrompt: Promise<boolean> | null = null;
 
 	constructor(
-		private readonly app: App,
+		private readonly ask: () => Promise<string | null>,
 		private readonly adapter: DataAdapter,
 		private readonly configDir: string,
 		private readonly settings: ObsyncSettings,
@@ -84,7 +83,7 @@ export class PassphraseManager {
 
 	private async runPrompt(replace: boolean): Promise<boolean> {
 		if (!replace && (await this.tryLoadCached())) return true;
-		const value = await askPassphrase(this.app);
+		const value = await this.ask();
 		if (!value) return false;
 		this.passphrase = value;
 		this.cachedKey = null;
@@ -98,8 +97,7 @@ export class PassphraseManager {
 	 */
 	async rotate(next: string): Promise<number | null> {
 		if (!isStorageConfigured(this.settings)) {
-			notifyError("Configure a storage backend first.");
-			return null;
+			throw new Error("Configure a storage backend first.");
 		}
 		if (!(await this.prompt(false))) return null;
 		if (!this.passphrase) return null;

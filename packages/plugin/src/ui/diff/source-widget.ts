@@ -40,7 +40,7 @@ export interface SourceBlock {
 	folded?: boolean;
 }
 
-export function renderSourceBlock(
+function renderSourceBlock(
 	parent: HTMLElement,
 	block: SourceBlock,
 	onResize: () => void,

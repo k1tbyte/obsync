@@ -34,6 +34,9 @@ export interface MergeChange {
 export interface MergeSession {
 	text: string;
 	changes: MergeChange[];
+	baseLines: string[];
+	localLines: string[];
+	remoteLines: string[];
 }
 
 export interface EditPlan {
@@ -73,7 +76,7 @@ interface LineEdit {
 
 export const MERGE_SIDES: readonly EMergeSide[] = ["local", "remote"];
 
-export function otherSide(side: EMergeSide): EMergeSide {
+function otherSide(side: EMergeSide): EMergeSide {
 	return side === "local" ? "remote" : "local";
 }
 
@@ -135,10 +138,12 @@ export function threeWayRegions(
 			}
 			// Outside its own hunks a side equals the base line for line, so the
 			// region's extra base lines map onto that many side lines.
-			const minBase = Math.min(...own.map((hunk) => hunk.base[0]));
-			const maxBase = Math.max(...own.map((hunk) => hunk.base[1]));
-			const minLine = Math.min(...own.map((hunk) => hunk.lines[0]));
-			const maxLine = Math.max(...own.map((hunk) => hunk.lines[1]));
+			const first = own[0] as SideHunk;
+			const last = own[own.length - 1] as SideHunk;
+			const minBase = first.base[0];
+			const maxBase = last.base[1];
+			const minLine = first.lines[0];
+			const maxLine = last.lines[1];
 			return [minLine - (minBase - start), maxLine + (end - maxBase)];
 		};
 		const region: MergeRegion = {
@@ -229,7 +234,7 @@ export function buildMergeSession(
 				change.taken = { ...change.taken, [side]: change.result };
 		}
 	}
-	return { text, changes };
+	return { text, changes, baseLines, localLines, remoteLines };
 }
 
 /** Widens a span to whole lines: from a line start to the next line start or the doc end. */

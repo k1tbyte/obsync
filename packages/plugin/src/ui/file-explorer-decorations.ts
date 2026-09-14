@@ -56,7 +56,7 @@ export function computeDecorations(
 	directLinks: ReadonlyMap<string, string>,
 ): Map<string, PathDecoration> {
 	const out = new Map<string, PathDecoration>();
-	for (const [path, status] of controller.getChangedPathStatuses()) {
+	for (const [path, status] of controller.fileDiffs.getChangedPathStatuses()) {
 		const cls = classifyStatus(status);
 		if (cls) patchDecoration(out, path, { change: cls });
 	}

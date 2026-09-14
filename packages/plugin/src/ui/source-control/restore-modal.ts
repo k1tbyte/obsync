@@ -81,7 +81,7 @@ export function confirmRestore(
 async function loadPreview(
 	options: RestoreConfirmOptions,
 ): Promise<FileDiffModel | null> {
-	return options.plugin.controller.getHistoryDiff({
+	return options.plugin.controller.history.getHistoryDiff({
 		// Diff against the target, not the original path: that is what gets replaced.
 		path: options.target,
 		// Current on the left, so "+" is what the restore brings back.

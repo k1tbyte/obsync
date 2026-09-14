@@ -1,7 +1,8 @@
 import { DEFAULT_CONCURRENCY } from "@/constants";
 import { ESyncLogOperation } from "@/logs/store";
+import { mergeWrittenIntoCache } from "@/sync/baseline";
 import { LOG_PATH_LIMIT } from "@/sync/constants";
-import { writeRemoteObject } from "@/sync/content";
+import { writeRemoteEntry } from "@/sync/content";
 import { EChangeType, type ManifestEntry } from "@/sync/types";
 import { runWithConcurrency } from "@/utils/concurrency";
 import { deletePath } from "@/vault/io";
@@ -14,7 +15,6 @@ export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 	ctx,
 ) => {
 	const touched = new Set(paths);
-	const nextHashCache = { ...result.updatedCache };
 	const localEntries = new Map<string, ManifestEntry | null>();
 	// Indexed once: scanning the change array per path is quadratic, and a
 	// revert of 5,000 files spends 76 ms of it against 1 ms indexed.
@@ -32,27 +32,18 @@ export const revertPathsOp: Operation<ReadonlyArray<string>> = async (
 			if (!change && !baselineEntry) return;
 			if (change?.type === EChangeType.LocalAdd || !baselineEntry) {
 				await deletePath(deps.adapter, path);
-				delete nextHashCache[path];
 				localEntries.set(path, null);
 				return;
 			}
-			const size = await writeRemoteObject(deps, path, baselineEntry.hash);
-			const stat = await deps.adapter.stat(path).catch(() => null);
-			const entry: ManifestEntry = {
-				hash: baselineEntry.hash,
-				size,
-				mtime: stat?.mtime ?? Date.now(),
-				kind: baselineEntry.kind,
-			};
-			nextHashCache[path] = {
-				mtime: entry.mtime,
-				size: entry.size,
-				hash: entry.hash,
-			};
+			const entry = await writeRemoteEntry(deps, path, baselineEntry);
 			localEntries.set(path, entry);
 		},
 	);
-	const freshState = ctx.getFreshState() ?? deps.state;
+	const nextHashCache = mergeWrittenIntoCache(
+		localEntries,
+		result.updatedCache,
+	);
+	const freshState = ctx.getFreshState();
 	await ctx.persistState({ ...freshState, hashCache: nextHashCache });
 	await ctx.logInfo(
 		ESyncLogOperation.Compare,

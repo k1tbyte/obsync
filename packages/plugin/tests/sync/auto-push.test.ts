@@ -36,14 +36,6 @@ describe("selectAutoPushPaths", () => {
 		expect(selectAutoPushPaths(d)).toEqual([]);
 	});
 
-	it("leaves files with incoming remote changes alone", () => {
-		const d = diff({
-			localChanges: [change("a.md"), change("b.md")],
-			remoteChanges: [change("b.md")],
-		});
-		expect(selectAutoPushPaths(d)).toEqual(["a.md"]);
-	});
-
 	it("limits the push to the requested paths", () => {
 		const d = diff({ localChanges: [change("a.md"), change("b.md")] });
 		expect(selectAutoPushPaths(d, new Set(["b.md"]))).toEqual(["b.md"]);

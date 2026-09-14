@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsSyncCategories } from "@/settings/model";
 import { DEFAULT_SETTINGS_SYNC } from "@/settings/model";
 import type { VaultIndex } from "@/vault/file-index";
-import { loadLocalIgnoreMatcher } from "@/vault/ignore";
+import { createIgnoreMatcher } from "@/vault/ignore";
 import { scanVault } from "@/vault/scanner";
 import { createScopePolicy, type ScopeOptions } from "@/vault/scope";
 
@@ -404,10 +404,7 @@ describe("scanVault with a vault index", () => {
 	it("does not resurrect a baseline path the scope no longer includes", async () => {
 		const adapter = vault({ "keep.md": "one", "drafts/old.md": "two" });
 		const index = await indexOf(adapter);
-		const scope = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("drafts/") },
-		);
+		const scope = policy({}, { localIgnore: createIgnoreMatcher("drafts/") });
 
 		const { snapshot } = await scanVault(
 			adapter.asDataAdapter(),
@@ -449,10 +446,7 @@ describe("scanVault with a vault index", () => {
 			"drafts/a.md": "two",
 			"drafts/nested/b.md": "three",
 		});
-		const scope = policy(
-			{},
-			{ localIgnore: await loadLocalIgnoreMatcher("drafts/") },
-		);
+		const scope = policy({}, { localIgnore: createIgnoreMatcher("drafts/") });
 
 		const walked = await scanVault(adapter.asDataAdapter(), scope, options, {});
 		const { snapshot } = await scanVault(

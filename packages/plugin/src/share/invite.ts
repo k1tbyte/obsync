@@ -155,8 +155,7 @@ function extractInviteToken(input: string): string {
 	if (!trimmed) throw new Error("Invite link is empty");
 	try {
 		const url = new URL(trimmed);
-		const data =
-			url.searchParams.get(INVITE_PARAM) ?? url.searchParams.get("data");
+		const data = url.searchParams.get(INVITE_PARAM);
 		if (typeof data === "string" && data.length > 0) return data;
 	} catch {
 		return trimmed;

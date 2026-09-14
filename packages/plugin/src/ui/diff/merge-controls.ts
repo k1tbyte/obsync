@@ -1,4 +1,11 @@
-import type { EMergeSide, MergeChange } from "@/sync/merge-model";
+import type { Text } from "@codemirror/state";
+import {
+	type EMergeSide,
+	type MergeChange,
+	snapToLines,
+} from "@/sync/merge-model";
+import type { DividerItem } from "./divider";
+import { sideSpan } from "./geometry";
 import { renderRailButton } from "./rail";
 
 export interface MergeActions {
@@ -9,7 +16,7 @@ export interface MergeActions {
 
 export type MergeTone = "conflict" | EMergeSide | "base" | "shared";
 
-export const TONE_LABEL: Record<MergeTone, string> = {
+const TONE_LABEL: Record<MergeTone, string> = {
 	local: "Local",
 	remote: "Remote",
 	shared: "Both sides",
@@ -74,6 +81,31 @@ export function sideActions(
 	if (status === "applied") return [reject];
 	if (status === "ignored") return [accept];
 	return side === "local" ? [reject, accept] : [accept, reject];
+}
+
+/** The connectors between one side pane and the result: one per change that side took part in. */
+export function dividerItems(
+	changes: readonly MergeChange[],
+	side: EMergeSide,
+	sideDoc: Text,
+	resultDoc: Text,
+	handlers: MergeActions,
+): DividerItem[] {
+	const items: DividerItem[] = [];
+	for (const change of changes) {
+		const status = change.status[side];
+		if (status === "none") continue;
+		items.push({
+			key: change.index,
+			near: sideSpan(sideDoc, change[side]),
+			far: snapToLines(resultDoc, change.taken[side] ?? change.result),
+			tone: toneOf(change, side),
+			actions: sideActions(change, side, handlers),
+			// A decided side keeps one quiet button, so any auto-merged change can still be rejected.
+			quiet: status !== "open",
+		});
+	}
+	return items;
 }
 
 export function toneOf(change: MergeChange, side: EMergeSide): MergeTone {

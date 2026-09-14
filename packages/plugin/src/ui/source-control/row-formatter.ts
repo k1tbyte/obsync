@@ -3,13 +3,13 @@ import type { Conflict, FileChange } from "@/sync/types";
 import { type ChangeAction, changeActionOf } from "@/ui/change-action";
 import type { FileRow } from "./types";
 
-const STATUS_LETTERS: Record<ChangeAction, string> = {
+export const STATUS_LETTERS: Record<ChangeAction, string> = {
 	add: "A",
 	modify: "M",
 	delete: "D",
 };
 
-const STATUS_CLASSES: Record<ChangeAction, string> = {
+export const STATUS_CLASSES: Record<ChangeAction, string> = {
 	add: "obsync-status-add",
 	modify: "obsync-status-modify",
 	delete: "obsync-status-delete",

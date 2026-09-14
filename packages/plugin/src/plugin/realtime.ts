@@ -86,11 +86,11 @@ export class PluginRealtime {
 			serverUrl: settings.realtimeServerUrl,
 			channelId,
 			token: settings.realtimeToken || undefined,
-			deviceId: currentDevice?.id,
-			deviceName: currentDevice?.name,
+			deviceId: currentDevice.id,
+			deviceName: currentDevice.name,
 			onRemoteSync: () => this.onRemoteSync?.(),
 			onPresenceChange: (devices) =>
-				this.emitDevices(filterCurrentDevice(devices, currentDevice?.id)),
+				this.emitDevices(filterCurrentDevice(devices, currentDevice.id)),
 			onConnectionChange: (connected) => {
 				if (!connected) this.emitDevices([]);
 				this.emitStatus(connected);
@@ -130,9 +130,8 @@ export class PluginRealtime {
 
 function filterCurrentDevice(
 	devices: readonly RealtimePresenceDevice[],
-	currentDeviceId: string | undefined,
+	currentDeviceId: string,
 ): RealtimePresenceDevice[] {
-	if (!currentDeviceId) return [...devices];
 	return devices.filter((device) => device.id !== currentDeviceId);
 }
 

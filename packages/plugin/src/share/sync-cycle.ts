@@ -2,6 +2,7 @@ import { isTextMergeCandidate } from "@/sync/auto-merge";
 import {
 	advanceSessionAfterPush,
 	buildSessionState,
+	majorityFolders,
 	mergeWrittenIntoCache,
 } from "@/sync/baseline";
 import { freeConflictCopyPath } from "@/sync/conflict-copy";
@@ -180,7 +181,13 @@ async function resolveConflicts(
 	}
 
 	if (resolved === 0) return { baseline: null, copies };
-	return { baseline: { ...template, files }, copies };
+	// The template may be the remote, and not all of its folders are on disk.
+	const folders = majorityFolders(
+		deps.state.baseline?.folders,
+		remote?.folders,
+		result.snapshot.emptyFolders,
+	);
+	return { baseline: { ...template, files, folders }, copies };
 }
 
 /**

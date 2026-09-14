@@ -1,3 +1,4 @@
+import { sha256Hex } from "@/crypto";
 import type { S3StorageConfig } from "@/storage/config";
 
 /**
@@ -102,7 +103,7 @@ export function createS3Signer(config: S3StorageConfig): S3Signer {
 			ALGORITHM,
 			amzDate,
 			scope,
-			toHex(await sha256(canonicalRequest)),
+			await sha256Hex(encoder.encode(canonicalRequest)),
 		].join("\n");
 		const signature = toHex(
 			await hmac(await signingKey(dateStamp), stringToSign),
@@ -171,14 +172,7 @@ async function payloadDigest(
 ): Promise<string> {
 	if (!body) return EMPTY_PAYLOAD_SHA256;
 	if (protocol === "https:") return UNSIGNED_PAYLOAD;
-	return toHex(await crypto.subtle.digest("SHA-256", toBufferSource(body)));
-}
-
-/** A view into a larger buffer must not be handed to WebCrypto whole. */
-function toBufferSource(bytes: Uint8Array): ArrayBuffer {
-	return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
-		? (bytes.buffer as ArrayBuffer)
-		: (bytes.slice().buffer as ArrayBuffer);
+	return sha256Hex(body);
 }
 
 /**
@@ -225,10 +219,6 @@ function importHmacKey(raw: BufferSource): Promise<CryptoKey> {
 
 function hmac(key: CryptoKey, data: string): Promise<ArrayBuffer> {
 	return crypto.subtle.sign("HMAC", key, encoder.encode(data));
-}
-
-function sha256(data: string): Promise<ArrayBuffer> {
-	return crypto.subtle.digest("SHA-256", encoder.encode(data));
 }
 
 function toHex(buffer: ArrayBuffer): string {

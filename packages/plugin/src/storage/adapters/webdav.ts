@@ -9,6 +9,7 @@ import {
 	type SettingsFieldSpec,
 } from "@/storage/field-spec";
 import type { ConditionalRead, StorageAdapter } from "@/storage/types";
+import { bytesToBase64 } from "@/utils/base64";
 import { toArrayBuffer } from "@/utils/bytes";
 import {
 	assertOk,
@@ -27,7 +28,6 @@ const HTTP_OK_MAX = 299;
 const HTTP_NOT_FOUND = 404;
 const HTTP_NOT_MODIFIED = 304;
 const HTTP_METHOD_NOT_ALLOWED = 405;
-const _HTTP_CONFLICT = 409;
 const HTTP_MULTI_STATUS = 207;
 const HTTP_PRECONDITION_FAILED = 412;
 
@@ -283,9 +283,7 @@ async function davRequest(
  * UTF-8 encoded before base64 or `btoa` throws. */
 function basicCredentials(username: string, password: string): string {
 	const bytes = new TextEncoder().encode(`${username}:${password}`);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary);
+	return bytesToBase64(bytes);
 }
 
 function assertConfig(config: WebDAVStorageConfig): void {

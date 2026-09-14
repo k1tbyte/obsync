@@ -27,6 +27,12 @@ interface OperationRunnerDeps {
 export class OperationRunner {
 	constructor(private readonly deps: OperationRunnerDeps) {}
 
+	private applyResult(result: CompareResult): void {
+		this.deps.runtimeState.setResult(result);
+		this.deps.clearFileDiffs();
+		this.deps.runtimeState.setStaleReason(null);
+	}
+
 	async refresh(): Promise<void> {
 		await this.deps.runtimeState.enqueue(async () => {
 			await this.refreshNow();
@@ -48,9 +54,7 @@ export class OperationRunner {
 				},
 			};
 			const result = await compare(depsWithProgress);
-			this.deps.runtimeState.setResult(result);
-			this.deps.clearFileDiffs();
-			this.deps.runtimeState.setStaleReason(null);
+			this.applyResult(result);
 			const identity = session.storage.identity();
 			const nextSessionState: SessionState = {
 				...session.state,
@@ -61,6 +65,7 @@ export class OperationRunner {
 								session.state.baseline,
 								result.remote,
 								new Set(result.diff.converged),
+								result.snapshot.emptyFolders,
 							)
 						: session.state.baseline,
 				hashCache: result.updatedCache,
@@ -96,9 +101,7 @@ export class OperationRunner {
 				if (!session) return false;
 				const ctx = this.buildContext(session);
 				const { compareResult } = await flow(session, ctx);
-				this.deps.runtimeState.setResult(compareResult);
-				this.deps.clearFileDiffs();
-				this.deps.runtimeState.setStaleReason(null);
+				this.applyResult(compareResult);
 				return true;
 			} catch (err) {
 				const message = errorMessage(err);
@@ -141,20 +144,17 @@ export class OperationRunner {
 					result,
 					ctx,
 				);
-				const freshState =
-					projectSession(
-						this.deps.host.getState(),
-						session.storage.identity(),
-					) ?? session.state;
+				const freshState = projectSession(
+					this.deps.host.getState(),
+					session.storage.identity(),
+				);
 				const recomputed = recomputeAfterWrite(
 					result,
 					freshState,
 					outcome,
 					session.scope,
 				);
-				this.deps.runtimeState.setResult(recomputed);
-				this.deps.clearFileDiffs();
-				this.deps.runtimeState.setStaleReason(null);
+				this.applyResult(recomputed);
 				if (outcome.cancelled) {
 					this.deps.runtimeState.setStaleReason(
 						outcome.touchedPaths.size === 0
@@ -184,15 +184,7 @@ export class OperationRunner {
 					this.deps.runtimeState.clearResult();
 					this.deps.clearFileDiffs();
 					this.deps.runtimeState.broadcast();
-					try {
-						await this.refreshNow();
-					} catch (refreshErr) {
-						this.deps.runtimeState.setError(
-							refreshErr instanceof Error
-								? refreshErr.message
-								: String(refreshErr),
-						);
-					}
+					await this.refreshNow();
 					await this.deps.host.logWarn(operation, err.message);
 					return;
 				}

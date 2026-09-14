@@ -1,4 +1,3 @@
-import type { App } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 
 import { DeviceName } from "@/core/device-name";
@@ -7,11 +6,6 @@ import { defaultDeviceName } from "@/sync/device";
 import type { LocalState } from "@/sync/types";
 
 describe("DeviceName", () => {
-	it("falls back to the platform default before any state is loaded", () => {
-		const { device } = setup(null);
-		expect(device.current()).toBe(defaultDeviceName());
-	});
-
 	it("reads the name out of the loaded state", () => {
 		const { device } = setup(state("Work laptop"));
 		expect(device.current()).toBe("Work laptop");
@@ -48,26 +42,18 @@ describe("DeviceName", () => {
 	});
 });
 
-function setup(initial: LocalState | null): {
+function setup(initial: LocalState): {
 	device: DeviceName;
 	persister: { persist: ReturnType<typeof vi.fn> };
 	onRenamed: ReturnType<typeof vi.fn>;
 } {
 	const persister = {
 		state: initial,
-		setInitial: vi.fn(),
 		persist: vi.fn(async () => undefined),
 	};
 	const onRenamed = vi.fn();
-	const app = {
-		vault: { adapter: {}, configDir: ".obsidian" },
-	} as unknown as App;
 	return {
-		device: new DeviceName(
-			app,
-			persister as unknown as StatePersister,
-			onRenamed,
-		),
+		device: new DeviceName(persister as unknown as StatePersister, onRenamed),
 		persister,
 		onRenamed,
 	};

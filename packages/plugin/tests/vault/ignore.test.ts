@@ -1,13 +1,10 @@
 import type { DataAdapter } from "obsidian";
 import { describe, expect, it } from "vitest";
-import {
-	loadLocalIgnoreMatcher,
-	loadSharedIgnoreMatcher,
-} from "@/vault/ignore";
+import { createIgnoreMatcher, loadSharedIgnoreMatcher } from "@/vault/ignore";
 
 describe("ignore matcher loading", () => {
 	it("loads local ignore patterns from settings only", async () => {
-		const matcher = await loadLocalIgnoreMatcher("*.jpg\nnode_modules/");
+		const matcher = createIgnoreMatcher("*.jpg\nnode_modules/");
 
 		expect(matcher.ignores("photo.jpg")).toBe(true);
 		expect(matcher.ignores("folder/photo.jpg")).toBe(true);
@@ -16,7 +13,7 @@ describe("ignore matcher loading", () => {
 	});
 
 	it("strips leading slashes before matching", async () => {
-		const matcher = await loadLocalIgnoreMatcher("root-file.txt");
+		const matcher = createIgnoreMatcher("root-file.txt");
 		expect(matcher.ignores("/root-file.txt")).toBe(true);
 	});
 
@@ -32,7 +29,7 @@ describe("ignore matcher loading", () => {
 	});
 
 	it("returns pass-through if no local patterns", async () => {
-		const matcher = await loadLocalIgnoreMatcher("");
+		const matcher = createIgnoreMatcher("");
 		expect(matcher.ignores("any-file.txt")).toBe(false);
 	});
 

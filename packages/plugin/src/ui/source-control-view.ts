@@ -95,22 +95,20 @@ export class SourceControlView extends ItemView {
 		super(leaf);
 		this.plugin = plugin;
 		this.previews = new ConflictPreviewManager({
-			loadPreview: (path) => this.plugin.controller.getFileDiff(path),
+			loadPreview: (path) => this.plugin.controller.fileDiffs.getFileDiff(path),
+		});
+		this.actions = new SourceControlActions({
+			plugin,
+			showHistory: (path) => this.showHistory(path),
+			openDiff: (path) => openDiffView(this.plugin, path),
 		});
 		this.changes = new ChangesTab(
 			plugin,
 			this.previews,
-			() => this.actions,
+			this.actions,
 			() => this.render(this.plugin.controller.getSnapshot(), true),
 			(path) => openDiffView(this.plugin, path),
 		);
-		this.actions = new SourceControlActions({
-			plugin,
-			sections: this.changes.sectionState(),
-			previews: this.previews,
-			showHistory: (path) => this.showHistory(path),
-			openDiff: (path) => openDiffView(this.plugin, path),
-		});
 	}
 
 	getViewType(): string {

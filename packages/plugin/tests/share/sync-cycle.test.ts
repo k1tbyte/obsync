@@ -177,6 +177,23 @@ describe("shared folder sync cycle", () => {
 		expect(bob.vault.readText("B/doc.md")).toBe("v2\n");
 	});
 
+	it("keeps an empty folder when a first sync resolves a conflict", async () => {
+		const storage = new FakeStorage();
+		const alice = new Participant("alice", "A", storage);
+		const bob = new Participant("bob", "B", storage);
+		alice.vault.putText("A/doc.md", "alice\n");
+		await alice.vault.mkdir("A/Empty");
+		await alice.sync();
+
+		bob.vault.putText("B/doc.md", "bob\n");
+		const outcome = await bob.sync();
+		expect(outcome.conflictCopies).toHaveLength(1);
+
+		// Bob never had the folder, so his push must not publish it as deleted.
+		await alice.sync();
+		expect(await alice.vault.exists("A/Empty")).toBe(true);
+	});
+
 	it("never syncs dot-directories inside the share", async () => {
 		const storage = new FakeStorage();
 		const alice = new Participant("alice", "A", storage);

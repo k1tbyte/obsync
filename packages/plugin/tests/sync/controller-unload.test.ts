@@ -4,7 +4,7 @@ import { SyncControllerRuntimeState } from "@/sync/runtime/controller-state";
 
 describe("SyncControllerRuntimeState.dispose", () => {
 	it("drops the compare result, which unload leaves reachable otherwise", () => {
-		const state = new SyncControllerRuntimeState({ emit: () => undefined });
+		const state = new SyncControllerRuntimeState();
 		state.setResult({
 			diff: { localChanges: [], remoteChanges: [], conflicts: [] },
 		} as unknown as CompareResult);

@@ -49,10 +49,9 @@ export function recomputeAfterWrite(
 
 /** Flattens persisted per-storage state into session view. */
 export function projectSession(
-	local: LocalState | null,
+	local: LocalState,
 	identity: string,
-): SessionState | null {
-	if (!local) return null;
+): SessionState {
 	const slot = local.storages[identity];
 	return {
 		deviceId: local.deviceId,
@@ -65,17 +64,17 @@ export function projectSession(
 
 /** Writes session back into its storage slot, leaving other storages untouched. */
 export function mergeSessionIntoLocal(
-	current: LocalState | null,
+	current: LocalState,
 	session: SessionState,
 	identity: string,
 ): LocalState {
-	const storages: LocalState["storages"] = { ...(current?.storages ?? {}) };
+	const storages: LocalState["storages"] = { ...current.storages };
 	if (session.vaultId !== null) {
 		storages[identity] = {
 			vaultId: session.vaultId,
 			baseline: session.baseline,
 		};
-	} else if (current?.storages[identity] && session.baseline !== null) {
+	} else if (current.storages[identity] && session.baseline !== null) {
 		// Preserve vaultId if engine returned baseline without vaultId (defensive).
 		storages[identity] = {
 			vaultId: current.storages[identity].vaultId,
@@ -90,6 +89,6 @@ export function mergeSessionIntoLocal(
 		storages,
 		hashCache: session.hashCache,
 		// Preserve share service caches.
-		shareCaches: current?.shareCaches ?? {},
+		shareCaches: current.shareCaches,
 	};
 }
