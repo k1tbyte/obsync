@@ -1,0 +1,24 @@
+name = "obsync-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-14"
+
+# Share tokens and per-share storage registrations. No id: wrangler creates the
+# namespace on the first deploy and keeps it bound on every later one.
+[[kv_namespaces]]
+binding = "SHARE_TOKENS"
+
+# Realtime relay: one SQLite-backed Durable Object per room, so the whole
+# worker stays inside the Workers free tier.
+[durable_objects]
+bindings = [
+  { name = "SYNC_RELAY", class_name = "SyncRelay" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncRelay"]
+
+# Secrets (never hardcode; the Deploy Relay workflow uploads them):
+# - RELAY_SECRET          admin auth for shared folders; relay room tokens derive from it
+# - GDRIVE_CLIENT_ID      optional, only for the Google Drive token exchange
+# - GDRIVE_CLIENT_SECRET

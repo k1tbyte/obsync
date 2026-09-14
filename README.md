@@ -109,31 +109,26 @@ A shared folder lets another person (or another vault) sync one folder with you 
 - Each share syncs to its own storage location (`<prefix>/shares/<share-id>/`) and is encrypted with its own random key — not your vault passphrase. Invitees can decrypt only the share.
 - Invitees never receive storage credentials. They get a token that the broker exchanges for short-lived presigned URLs scoped to that share's prefix, so their access is bounded by the storage service itself and can be revoked per person.
 - Shares need S3-compatible storage (S3, R2, MinIO), which the broker signs against. Your vault itself can still live on WebDAV or Google Drive — point shares at an S3 bucket regardless.
-- Create a share from the folder context menu (**Obsync: Share folder…**) or **Settings → Obsync → Shared folders**. Set the broker URL and admin secret there first.
+- Create a share from the folder context menu (**Obsync: Share folder…**) or **Settings → Obsync → Shared folders**. Set up the relay server under **Settings → Obsync → Connection** first.
 - Invites are `obsidian://obsync-share?d=…` links encrypted with an invite passphrase that you communicate separately. Each link is issued for one named person and can be revoked from **People…** without disturbing anyone else.
 - Joining downloads the share into a folder you choose; the folder name does not have to match the sharer's.
-- Sync is automatic: local edits under the share, a periodic re-check, and (optionally) a PartyKit relay room per share for instant propagation between participants.
+- Sync is automatic: local edits under the share, a periodic re-check, and a relay room per share for instant propagation between participants.
 - Conflicts never lose data: concurrent text edits are three-way merged; anything unmergeable keeps your version and writes the other version next to it as `name (conflict from <device> <date>).md`; a deletion never beats an edit.
 - Shared folders remain part of your normal vault sync too, so your own backup still covers them. The folder is therefore stored twice: once under your vault key, once under the share key. That separation is what keeps a participant's access from ever reaching the rest of the vault.
 - Removing a share means different things on each side. The owner stops sharing: every invite is revoked and the share's encrypted copy is deleted from storage (the files stay in the vault, covered by the normal vault sync). A participant just leaves: their local files stay and nobody else is affected.
 
-### Running the broker
+### Running the relay
 
-The broker is `packages/auth-worker`, deployed to your own Cloudflare account — the credentials it holds are yours, and no one else's traffic passes through it.
+The relay is `packages/relay`, one Cloudflare Worker deployed to your own account — the credentials it holds are yours, and no one else's traffic passes through it. One deployment serves every optional role: realtime sync signals, the share broker, and the Google Drive token exchange.
 
-1. `wrangler kv namespace create SHARE_TOKENS`, then paste the id into `wrangler.toml`.
-2. Set the secrets: `SHARE_ADMIN_SECRET`, `SHARE_S3_ENDPOINT`, `SHARE_S3_BUCKET`, `SHARE_S3_ACCESS_KEY_ID`, `SHARE_S3_SECRET_ACCESS_KEY` (`wrangler secret put <name>`).
-3. Scope that S3 key to `<SHARE_S3_PREFIX>shares/*` only. The broker then cannot reach the main vault even if it is compromised:
+1. Fork this repository. In **Settings → Obsync → Connection → Relay server**, select **Generate** to create a relay secret; it is copied to the clipboard.
+2. Add repository secrets under **Settings → Secrets and variables → Actions**: `CLOUDFLARE_API_TOKEN` (Cloudflare's *Edit Cloudflare Workers* template is enough), `CLOUDFLARE_ACCOUNT_ID` and `RELAY_SECRET`. `GDRIVE_CLIENT_ID` and `GDRIVE_CLIENT_SECRET` are only needed for your own Google Drive token exchange.
+3. Run the **Deploy Relay** workflow. The first run creates the KV namespace and the Durable Object; the run summary shows the worker URL.
+4. Paste that URL into **Relay server URL** and select **Test**.
 
-```json
-{ "Effect": "Allow",
-  "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-  "Resource": "arn:aws:s3:::<bucket>/shares/*" }
-```
+Shared folders need no extra setup: when you share a folder, the plugin registers that share's S3 location and credentials with the relay. The relay therefore holds the key of your share storage, which is your vault key when both use the same S3 settings; vault objects stay encrypted with your passphrase either way.
 
-4. `pnpm --filter obsync-auth-worker run deploy`, then put the worker URL and `SHARE_ADMIN_SECRET` into **Settings → Obsync → Shared folders**.
-
-Object bytes go straight between participants and S3; the broker only signs, so it stays well inside the Workers free tier. If the broker is offline, participants pause until it returns — you keep syncing, since your own device holds the real credentials.
+Object bytes go straight between participants and S3; the broker only signs, so it stays well inside the Workers free tier. The relay is one hibernating SQLite-backed Durable Object per room, which also stays inside the free tier. If the relay is offline, participants pause until it returns — you keep syncing, since your own device holds the real credentials.
 
 ## Device transfer
 
@@ -167,16 +162,16 @@ Obsync has no telemetry. Sync logs are local to the current device and are exclu
 
 ### What each optional service can see
 
-Obsync works with nothing but your storage bucket. The two optional services below are the only other places anything goes, and both are yours to self-host.
+Obsync works with nothing but your storage bucket. The optional services below are the only other places anything goes, and all of them are the same self-hosted Cloudflare Worker (`packages/relay`).
 
-**The relay** (optional, for instant propagation) never sees vault content, filenames or keys. It does see, for each room it carries: the room id, which is derived from the storage identity (`s3|<bucket>/<prefix>`) or the share id; the device names and ids you set; and the timing of every sync. A share's participants are given a room token scoped to that one room, so holding it does not open any other room on the same relay.
+**The relay** (optional, for instant propagation) never sees vault content, filenames or keys. It does see, for each room it carries: the room id, which is derived from the storage identity (`s3|<bucket>/<prefix>`) or the share id; the device names and ids you set; and the timing of every sync. A share's participants join that share's room with their own share token, so it opens no other room and stops working once you revoke them.
 
-**The share broker** (optional, only for shared folders) signs one URL per object and never sees object bytes or the share key. It does see the object keys inside `<prefix>shares/<share-id>/`, which are content hashes rather than filenames, and it holds the participant tokens you issue.
+**The share broker** (optional, only for shared folders) signs one URL per object and never sees object bytes or the share key. It does see the object keys inside `<prefix>shares/<share-id>/`, which are content hashes rather than filenames; it holds the participant tokens you issue and the S3 location and credentials of every share you own.
 
 ### Google Drive and the default auth server
 
-Google's OAuth flow needs a client secret, which cannot ship inside a plugin. Obsync therefore performs the token exchange on a small worker. **The `Auth server URL` field defaults to `https://obsync-auth.kitbyte.workers.dev`, a worker run by this plugin's author.** With that default, your Google refresh token is sent to it on every token refresh, and it can mint access tokens for the Drive folder you granted.
+Google's OAuth flow needs a client secret, which cannot ship inside a plugin. Obsync therefore performs the token exchange on a small worker. **The `Auth server URL` field defaults to `https://obsync-relay.kitbyte.workers.dev`, a worker run by this plugin's author.** With that default, your Google refresh token is sent to it on every token refresh, and it can mint access tokens for the Drive folder you granted.
 
-Deploy your own copy of `packages/auth-worker` and point the field at it if you would rather not rely on someone else's. It is the same worker as the share broker, and the same deploy covers both.
+Deploy your own copy of `packages/relay` and point the field at it if you would rather not rely on someone else's. It is the same worker as the realtime relay and the share broker, and one deploy covers all three.
 
 Google Drive is supported on a best-effort basis: it has no conditional writes, so two devices writing the same new object at the same moment can leave two files with one name. Do not use it for shared folders; use an S3-compatible bucket for those.

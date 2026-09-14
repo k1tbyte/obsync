@@ -1,22 +1,59 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { fingerprint } from "../src/secret";
 import { EShareRole, handleShareRequest, type ShareEnv } from "../src/share";
 import { FakeKV } from "./helpers/fake-kv";
 
 const ADMIN = "admin-secret";
 const SHARE = "share1";
+const STORAGE = {
+	endpoint: "https://s3.example.com",
+	region: "us-east-1",
+	bucket: "bucket",
+	prefix: "vault",
+	accessKeyId: "AKIA",
+	secretAccessKey: "secret",
+	forcePathStyle: true,
+};
 
-function makeEnv(kv = new FakeKV()): ShareEnv & { SHARE_TOKENS: FakeKV } {
+type TestEnv = ShareEnv & { SHARE_TOKENS: FakeKV; dropped: string[] };
+
+function makeEnv(kv = new FakeKV()): TestEnv {
+	const dropped: string[] = [];
+	// Rooms record which grants the broker asked them to disconnect.
+	const rooms = {
+		idFromName: (name: string) => ({ name }),
+		get: (id: { name: string }) => ({
+			setName: async () => undefined,
+			dropGrant: async (grant: string) => {
+				dropped.push(`${id.name} ${grant}`);
+			},
+		}),
+	};
 	return {
 		SHARE_TOKENS: kv,
-		SHARE_ADMIN_SECRET: ADMIN,
-		SHARE_S3_ENDPOINT: "https://s3.example.com",
-		SHARE_S3_REGION: "us-east-1",
-		SHARE_S3_BUCKET: "bucket",
-		SHARE_S3_PREFIX: "vault",
-		SHARE_S3_ACCESS_KEY_ID: "AKIA",
-		SHARE_S3_SECRET_ACCESS_KEY: "secret",
-		SHARE_S3_FORCE_PATH_STYLE: "true",
-	} as unknown as ShareEnv & { SHARE_TOKENS: FakeKV };
+		RELAY_SECRET: ADMIN,
+		SYNC_RELAY: rooms,
+		dropped,
+	} as unknown as TestEnv;
+}
+
+/** A share whose owner has already registered its storage, as the plugin does. */
+async function registeredEnv(kv = new FakeKV()): Promise<TestEnv> {
+	const env = makeEnv(kv);
+	expect((await register(env)).status).toBe(200);
+	return env;
+}
+
+function register(
+	env: ShareEnv,
+	storage: unknown = STORAGE,
+	shareId = SHARE,
+): Promise<Response> {
+	return call(env, `/share/shares/${shareId}`, {
+		method: "PUT",
+		admin: true,
+		body: JSON.stringify(storage),
+	});
 }
 
 async function call(
@@ -53,6 +90,14 @@ async function issue(
 	return ((await response.json()) as { token: string }).token;
 }
 
+function sign(env: ShareEnv, token: string, body: unknown): Promise<Response> {
+	return call(env, "/share/sign", {
+		method: "POST",
+		token,
+		body: JSON.stringify(body),
+	});
+}
+
 describe("broker routing", () => {
 	it("ignores anything outside /share/", async () => {
 		const url = new URL("https://broker.example.com/refresh");
@@ -80,14 +125,16 @@ describe("admin authentication", () => {
 			["/share/tokens", "POST"],
 			["/share/tokens?shareId=share1", "GET"],
 			["/share/tokens/p1?shareId=share1", "DELETE"],
+			["/share/shares/share1", "PUT"],
+			["/share/shares/share1", "DELETE"],
 		] as const) {
 			const response = await call(env, path, { method, body: undefined });
-			expect(response.status).toBe(401);
+			expect(response.status, `${method} ${path}`).toBe(401);
 		}
 	});
 
-	it("refuses when the deployment has no admin secret configured", async () => {
-		const env = { ...makeEnv(), SHARE_ADMIN_SECRET: "" };
+	it("refuses when the deployment has no relay secret configured", async () => {
+		const env = { ...makeEnv(), RELAY_SECRET: "" };
 		const response = await call(env, "/share/tokens", {
 			method: "POST",
 			admin: true,
@@ -97,26 +144,95 @@ describe("admin authentication", () => {
 	});
 });
 
+describe("storage registration", () => {
+	it("keeps a participant waiting until the owner registers the share", async () => {
+		const env = makeEnv();
+		const token = await issue(env, "p1");
+
+		const response = await sign(env, token, { op: "get", key: "objects/a" });
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			error: "storage_not_registered",
+		});
+	});
+
+	it("rejects storage with missing or mistyped fields", async () => {
+		const env = makeEnv();
+		for (const storage of [
+			null,
+			{ ...STORAGE, bucket: "" },
+			{ ...STORAGE, endpoint: "not a url" },
+			{ ...STORAGE, secretAccessKey: 5 },
+			{ ...STORAGE, forcePathStyle: "yes" },
+		]) {
+			const response = await register(env, storage);
+			expect(response.status, JSON.stringify(storage)).toBe(400);
+		}
+	});
+
+	it("refuses a share id that could reshape the key space", async () => {
+		const response = await register(makeEnv(), STORAGE, "..%2Fother");
+		expect(response.status).toBe(400);
+	});
+
+	it("signs against the latest registered location", async () => {
+		const env = await registeredEnv();
+		const token = await issue(env, "p1");
+		await register(env, { ...STORAGE, bucket: "moved" });
+
+		const response = await sign(env, token, { op: "get", key: "objects/a" });
+
+		const body = (await response.json()) as { url: string };
+		expect(new URL(body.url).pathname).toBe(
+			"/moved/vault/shares/share1/objects/a",
+		);
+	});
+
+	it("writes to KV only when the registration changed", async () => {
+		const kv = new FakeKV();
+		const env = await registeredEnv(kv);
+		const put = vi.spyOn(kv, "put");
+
+		expect((await register(env)).status).toBe(200);
+
+		expect(put).not.toHaveBeenCalled();
+	});
+});
+
+describe("ending a share", () => {
+	it("revokes every token and forgets the storage", async () => {
+		const env = await registeredEnv();
+		const first = await issue(env, "p1");
+		await issue(env, "p2");
+
+		const ended = await call(env, `/share/shares/${SHARE}`, {
+			method: "DELETE",
+			admin: true,
+		});
+
+		expect(await ended.json()).toEqual({ revoked: 2 });
+		expect(
+			(await sign(env, first, { op: "get", key: "objects/a" })).status,
+		).toBe(401);
+		expect([...env.SHARE_TOKENS.map.keys()]).toEqual([]);
+		expect(env.dropped).toHaveLength(2);
+	});
+});
+
 describe("token issuing", () => {
 	it("destroys the previous token when a participant is re-invited", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const first = await issue(env, "p1");
 		const second = await issue(env, "p1");
 		expect(second).not.toBe(first);
 
-		const stale = await call(env, "/share/sign", {
-			method: "POST",
-			token: first,
-			body: JSON.stringify({ op: "get", key: "objects/abc" }),
-		});
-		expect(stale.status).toBe(401);
-
-		const fresh = await call(env, "/share/sign", {
-			method: "POST",
-			token: second,
-			body: JSON.stringify({ op: "get", key: "objects/abc" }),
-		});
-		expect(fresh.status).toBe(200);
+		const body = { op: "get", key: "objects/abc" };
+		expect((await sign(env, first, body)).status).toBe(401);
+		expect((await sign(env, second, body)).status).toBe(200);
+		expect(env.dropped).toEqual([
+			`obsync-share-share1 ${await fingerprint(first)}`,
+		]);
 	});
 
 	it("refuses a share id that could reshape the key space", async () => {
@@ -161,7 +277,7 @@ describe("token issuing", () => {
 
 describe("token revocation", () => {
 	it("stops the revoked token from signing anything", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
 
 		const revoked = await call(env, `/share/tokens/p1?shareId=${SHARE}`, {
@@ -170,12 +286,22 @@ describe("token revocation", () => {
 		});
 		expect(await revoked.json()).toEqual({ revoked: true });
 
-		const after = await call(env, "/share/sign", {
-			method: "POST",
-			token,
-			body: JSON.stringify({ op: "get", key: "objects/abc" }),
-		});
+		const after = await sign(env, token, { op: "get", key: "objects/abc" });
 		expect(after.status).toBe(401);
+	});
+
+	it("closes the revoked participant's open relay sockets", async () => {
+		const env = makeEnv();
+		const token = await issue(env, "p1");
+
+		await call(env, `/share/tokens/p1?shareId=${SHARE}`, {
+			method: "DELETE",
+			admin: true,
+		});
+
+		expect(env.dropped).toEqual([
+			`obsync-share-share1 ${await fingerprint(token)}`,
+		]);
 	});
 
 	it("survives a participant id that is not valid percent-encoding", async () => {
@@ -194,7 +320,7 @@ describe("token revocation", () => {
 
 describe("signing", () => {
 	it("refuses a request with no token", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const response = await call(env, "/share/sign", {
 			method: "POST",
 			body: JSON.stringify({ op: "get", key: "objects/abc" }),
@@ -203,13 +329,9 @@ describe("signing", () => {
 	});
 
 	it("confines the signed key to the share", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
-		const response = await call(env, "/share/sign", {
-			method: "POST",
-			token,
-			body: JSON.stringify({ op: "get", key: "objects/abc" }),
-		});
+		const response = await sign(env, token, { op: "get", key: "objects/abc" });
 
 		const body = (await response.json()) as { url: string; method: string };
 		expect(body.method).toBe("GET");
@@ -219,7 +341,7 @@ describe("signing", () => {
 	});
 
 	it("refuses a key that tries to leave the share", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
 		for (const key of [
 			"../../manifest.json.enc",
@@ -228,43 +350,27 @@ describe("signing", () => {
 			"a\\b",
 			"",
 		]) {
-			const response = await call(env, "/share/sign", {
-				method: "POST",
-				token,
-				body: JSON.stringify({ op: "get", key }),
-			});
+			const response = await sign(env, token, { op: "get", key });
 			expect(response.status, key).toBe(400);
 		}
 	});
 
 	it("keeps a read-only participant from writing", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1", EShareRole.ReadOnly);
 
 		for (const op of ["put", "delete"]) {
-			const response = await call(env, "/share/sign", {
-				method: "POST",
-				token,
-				body: JSON.stringify({ op, key: "objects/abc" }),
-			});
+			const response = await sign(env, token, { op, key: "objects/abc" });
 			expect(response.status, op).toBe(403);
 		}
-		const read = await call(env, "/share/sign", {
-			method: "POST",
-			token,
-			body: JSON.stringify({ op: "get", key: "objects/abc" }),
-		});
+		const read = await sign(env, token, { op: "get", key: "objects/abc" });
 		expect(read.status).toBe(200);
 	});
 
 	it("scopes a listing to the share and reports its base", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
-		const response = await call(env, "/share/sign", {
-			method: "POST",
-			token,
-			body: JSON.stringify({ op: "list" }),
-		});
+		const response = await sign(env, token, { op: "list" });
 
 		const body = (await response.json()) as { url: string; base: string };
 		expect(body.base).toBe("vault/shares/share1/");
@@ -274,18 +380,14 @@ describe("signing", () => {
 	});
 
 	it("rejects an unknown op rather than signing something arbitrary", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
-		const response = await call(env, "/share/sign", {
-			method: "POST",
-			token,
-			body: JSON.stringify({ op: "post", key: "objects/abc" }),
-		});
+		const response = await sign(env, token, { op: "post", key: "objects/abc" });
 		expect(response.status).toBe(400);
 	});
 
 	it("rejects a null JSON body", async () => {
-		const env = makeEnv();
+		const env = await registeredEnv();
 		const token = await issue(env, "p1");
 		const response = await call(env, "/share/sign", {
 			method: "POST",

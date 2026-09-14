@@ -9,10 +9,9 @@ import {
 	type ShareBrokerStorageConfig,
 	type StorageAdapterConfig,
 } from "@/storage/config";
-import { deriveRoomToken } from "@/sync/realtime";
 import { base64UrlToBytes, bytesToBase64Url } from "@/utils/base64";
 import { deflateBytes, inflateBytes } from "@/utils/compress";
-import { type SharedFolderConfig, shareChannelId } from "./types";
+import type { SharedFolderConfig } from "./types";
 
 export const SHARE_INVITE_ACTION = "obsync-share";
 const INVITE_VERSION = 1;
@@ -34,10 +33,6 @@ export interface ShareInvite {
 	name: string;
 	keyB64: string;
 	storage: StorageAdapterConfig;
-	relayUrl?: string;
-	/** Scoped to this share's room: an invite never carries the deployment
-	 * secret, which would open every other share's room too. */
-	relayRoomToken?: string;
 }
 
 interface InvitePayload {
@@ -45,7 +40,6 @@ interface InvitePayload {
 	n: string;
 	k: string;
 	s: CompactStorageConfig;
-	r?: { u: string; t?: string };
 }
 
 /**
@@ -71,13 +65,6 @@ export async function createShareInviteUrl(
 		k: share.keyB64,
 		s: compactStorageConfig(brokerStorage),
 	};
-	if (share.relayUrl) {
-		payload.r = { u: share.relayUrl };
-		const secret = share.relayToken;
-		if (secret) {
-			payload.r.t = await deriveRoomToken(secret, shareChannelId(share.id));
-		}
-	}
 	const salt = randomBytes(INVITE_SALT_BYTES);
 	const key = await deriveKey(passphrase, salt);
 	const plaintext = encoder.encode(JSON.stringify(payload));
@@ -145,8 +132,6 @@ export async function readShareInvite(
 		name: payload.n,
 		keyB64: payload.k,
 		storage: expandStorageConfig(payload.s),
-		relayUrl: payload.r?.u,
-		relayRoomToken: payload.r?.t,
 	};
 }
 
@@ -189,13 +174,6 @@ function isInvitePayload(value: unknown): value is InvitePayload {
 		if (key === "kind") continue;
 		if (!(key in defaults)) return false;
 		if (entry !== undefined && typeof entry !== typeof defaults[key]) {
-			return false;
-		}
-	}
-	if (payload.r !== undefined) {
-		if (!payload.r || typeof payload.r !== "object") return false;
-		if (typeof payload.r.u !== "string") return false;
-		if (payload.r.t !== undefined && typeof payload.r.t !== "string") {
 			return false;
 		}
 	}

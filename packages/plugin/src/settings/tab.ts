@@ -33,6 +33,7 @@ import {
 	renderAutomationSection,
 	renderBackendSection,
 	renderMaintenanceSection,
+	renderRelaySection,
 	renderSecuritySection,
 	renderSharesSection,
 } from "./sections";
@@ -257,6 +258,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
 	private renderConnectionTab(parent: HTMLElement): void {
 		renderBackendSection(parent, this.plugin, () => this.display());
 		renderSecuritySection(parent, this.plugin, () => this.display());
+		renderRelaySection(parent, this.fieldContext());
 		this.renderTransferSection(parent);
 		this.renderAdvancedSection(parent);
 	}

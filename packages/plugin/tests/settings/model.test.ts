@@ -40,6 +40,22 @@ describe("mergeSettings", () => {
 		expect(mergeSettings({ showFileSizes: false }).showFileSizes).toBe(false);
 	});
 
+	it("drops the retired relay and broker fields but keeps the relay config", () => {
+		const merged = mergeSettings({
+			relayUrl: "https://relay.example",
+			relaySecret: "secret",
+			realtimeToken: "old-token",
+			shareBrokerAdminSecret: "old-admin",
+		} as Parameters<typeof mergeSettings>[0]);
+
+		expect(merged).toMatchObject({
+			relayUrl: "https://relay.example",
+			relaySecret: "secret",
+		});
+		expect(merged).not.toHaveProperty("realtimeToken");
+		expect(merged).not.toHaveProperty("shareBrokerAdminSecret");
+	});
+
 	it("backfills missing per-storage concurrency from backend defaults", () => {
 		const merged = mergeSettings({
 			activeStorageKind: EStorageBackend.GoogleDrive,

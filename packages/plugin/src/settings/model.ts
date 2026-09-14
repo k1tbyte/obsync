@@ -59,8 +59,10 @@ export interface ObsyncSettings {
 	fileHistoryMaxSnapshots: number;
 	historyAutoRefresh: boolean;
 	realtimeSync: boolean;
-	realtimeServerUrl: string;
-	realtimeToken: string;
+	/** Self-hosted worker (packages/relay): realtime signals and the share broker. */
+	relayUrl: string;
+	/** The worker's RELAY_SECRET; relay room tokens derive from it. */
+	relaySecret: string;
 	cachePassphrase: boolean;
 	/** Folders shared with others, each with its own encrypted remote and key. */
 	sharedFolders: SharedFolderConfig[];
@@ -69,9 +71,6 @@ export interface ObsyncSettings {
 	 * vault syncing to Google Drive can still share over S3 without switching.
 	 */
 	shareStorageKind: EStorageBackend;
-	/** Self-hosted broker that signs share access for invitees. */
-	shareBrokerUrl: string;
-	shareBrokerAdminSecret: string;
 	showStatusBar: boolean;
 	showRibbonIcon: boolean;
 	showFileExplorerIndicators: boolean;
@@ -99,13 +98,11 @@ export const DEFAULT_SETTINGS: ObsyncSettings = {
 	fileHistoryMaxSnapshots: DEFAULT_FILE_HISTORY_MAX_SNAPSHOTS,
 	historyAutoRefresh: true,
 	realtimeSync: false,
-	realtimeServerUrl: "",
-	realtimeToken: "",
+	relayUrl: "",
+	relaySecret: "",
 	cachePassphrase: true,
 	sharedFolders: [],
 	shareStorageKind: EStorageBackend.S3,
-	shareBrokerUrl: "",
-	shareBrokerAdminSecret: "",
 	showStatusBar: true,
 	showRibbonIcon: true,
 	showFileExplorerIndicators: true,
@@ -134,6 +131,21 @@ export function isStorageConfigured(settings: ObsyncSettings): boolean {
 export function isShareStorageConfigured(settings: ObsyncSettings): boolean {
 	return isAdapterConfigured(shareStorage(settings));
 }
+
+export type RelayConfig = Pick<ObsyncSettings, "relayUrl" | "relaySecret">;
+
+/** Both or nothing: the URL alone opens no room and signs nothing. */
+export function isRelayConfigured(relay: RelayConfig): boolean {
+	return Boolean(relay.relayUrl && relay.relaySecret);
+}
+
+/** Replaced by relayUrl/relaySecret; two of them held secrets, so they are not kept around. */
+const RETIRED_KEYS = [
+	"realtimeServerUrl",
+	"realtimeToken",
+	"shareBrokerUrl",
+	"shareBrokerAdminSecret",
+] as const;
 
 /** Bounds for numeric settings. Clamping here prevents invalid values from files or tokens. */
 const NUMERIC_BOUNDS = {
@@ -220,6 +232,7 @@ export function mergeSettings(
 		const field = key as keyof typeof NUMERIC_BOUNDS;
 		merged[field] = clamp(merged[field], bounds, DEFAULT_SETTINGS[field]);
 	}
+	for (const key of RETIRED_KEYS) Reflect.deleteProperty(merged, key);
 	return merged;
 }
 

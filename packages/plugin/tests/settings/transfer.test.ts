@@ -23,8 +23,8 @@ describe("settings transfer", () => {
 		const settings = buildSettings({
 			activeStorageKind: EStorageBackend.WebDAV,
 			realtimeSync: true,
-			realtimeServerUrl: "wss://relay.example.com",
-			realtimeToken: "relay-secret",
+			relayUrl: "https://relay.example.com",
+			relaySecret: "relay-secret",
 			autoPushAfterChange: true,
 			autoSyncEnabled: true,
 			autoSyncIntervalMinutes: 25,
@@ -54,8 +54,8 @@ describe("settings transfer", () => {
 			[EStorageBackend.WebDAV]: settings.storageConfigs[EStorageBackend.WebDAV],
 		});
 		expect(imported.realtimeSync).toBe(true);
-		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
-		expect(imported.realtimeToken).toBe("relay-secret");
+		expect(imported.relayUrl).toBe("https://relay.example.com");
+		expect(imported.relaySecret).toBe("relay-secret");
 		expect(imported.autoPushAfterChange).toBe(true);
 		expect(imported.autoSyncEnabled).toBe(true);
 		expect(imported.autoSyncIntervalMinutes).toBe(25);
@@ -108,8 +108,8 @@ describe("settings transfer", () => {
 	it("exports only the selected categories", async () => {
 		const settings = buildSettings({
 			realtimeSync: true,
-			realtimeServerUrl: "wss://relay.example.com",
-			realtimeToken: "relay-secret",
+			relayUrl: "https://relay.example.com",
+			relaySecret: "relay-secret",
 			autoPushAfterChange: true,
 			ignorePatterns: "*.tmp",
 			ignoreSymlinks: false,
@@ -130,8 +130,8 @@ describe("settings transfer", () => {
 		expect(imported.ignoreSymlinks).toBeUndefined();
 		expect(imported.autoPushAfterChange).toBeUndefined();
 		expect(imported.realtimeSync).toBe(true);
-		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
-		expect(imported.realtimeToken).toBe("relay-secret");
+		expect(imported.relayUrl).toBe("https://relay.example.com");
+		expect(imported.relaySecret).toBe("relay-secret");
 	});
 
 	it("round-trips every transferable field when each differs from defaults", async () => {
@@ -158,8 +158,8 @@ describe("settings transfer", () => {
 			fileHistoryMaxSnapshots: DEFAULT_SETTINGS.fileHistoryMaxSnapshots + 7,
 			historyAutoRefresh: !DEFAULT_SETTINGS.historyAutoRefresh,
 			realtimeSync: !DEFAULT_SETTINGS.realtimeSync,
-			realtimeServerUrl: "wss://relay.example.com",
-			realtimeToken: "relay-secret",
+			relayUrl: "https://relay.example.com",
+			relaySecret: "relay-secret",
 			storageConfigs: {
 				[EStorageBackend.WebDAV]: {
 					...defaultWebDAVConfig(),
@@ -198,8 +198,8 @@ describe("settings transfer", () => {
 		);
 		expect(imported.historyAutoRefresh).toBe(settings.historyAutoRefresh);
 		expect(imported.realtimeSync).toBe(settings.realtimeSync);
-		expect(imported.realtimeServerUrl).toBe(settings.realtimeServerUrl);
-		expect(imported.realtimeToken).toBe(settings.realtimeToken);
+		expect(imported.relayUrl).toBe(settings.relayUrl);
+		expect(imported.relaySecret).toBe(settings.relaySecret);
 	});
 
 	it("clamps a crafted token that carries an out-of-range number", async () => {
@@ -262,8 +262,9 @@ describe("settings transfer", () => {
 			!DEFAULT_SETTINGS.historyAutoRefresh,
 		);
 		expect(imported.realtimeSync).toBe(!DEFAULT_SETTINGS.realtimeSync);
-		expect(imported.realtimeServerUrl).toBe("wss://relay.example.com");
-		expect(imported.realtimeToken).toBe("relay-secret");
+		// Sealed when the relay URL was a wss:// endpoint; the value round-trips as is.
+		expect(imported.relayUrl).toBe("wss://relay.example.com");
+		expect(imported.relaySecret).toBe("relay-secret");
 		expect(imported.storageConfigs?.[EStorageBackend.WebDAV]).toMatchObject({
 			kind: EStorageBackend.WebDAV,
 			baseUrl: "https://dav.example.com/dav/",
@@ -322,8 +323,8 @@ describe("settings transfer", () => {
 	it("marks oversized exports as link-only", async () => {
 		const settings = buildSettings({
 			realtimeSync: true,
-			realtimeServerUrl: "wss://relay.example.com",
-			realtimeToken: buildLargeValue(),
+			relayUrl: "https://relay.example.com",
+			relaySecret: buildLargeValue(),
 			ignorePatterns: buildLargeValue(),
 			storageConfigs: {
 				[EStorageBackend.S3]: {

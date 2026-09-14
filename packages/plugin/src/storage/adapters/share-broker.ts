@@ -90,7 +90,7 @@ export const SHARE_BROKER_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 		key: "brokerUrl",
 		name: "Broker URL",
 		desc: "The share owner's broker. Supplied by the invite link.",
-		placeholder: "https://obsync-auth.example.workers.dev",
+		placeholder: "https://obsync-relay.example.workers.dev",
 	},
 	{
 		kind: EFieldKind.Password,

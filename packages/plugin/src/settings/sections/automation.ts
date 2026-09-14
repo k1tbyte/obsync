@@ -14,6 +14,7 @@ import {
 	renderFields,
 	type SettingsField,
 } from "@/settings/fields";
+import { isRelayConfigured } from "@/settings/model";
 import { EFieldKind } from "@/storage/field-spec";
 import { clampMaxSnapshots } from "@/sync/history";
 
@@ -104,27 +105,9 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Toggle,
 		name: "Real-time sync signals",
-		desc: "Connect via WebSocket to instantly notify other devices when you push. Other devices will auto-pull immediately.",
+		desc: "Notify other devices through the relay server (Connection tab) the moment you push, so they pull immediately.",
 		get: (s) => s.realtimeSync,
 		set: (v) => ({ realtimeSync: v }),
-		after: restartRelay,
-	},
-	{
-		kind: EFieldKind.Text,
-		name: "Relay server URL",
-		desc: "WebSocket endpoint for sync signals.",
-		placeholder: "wss://...",
-		get: (s) => s.realtimeServerUrl,
-		set: (v) => ({ realtimeServerUrl: v.trim() }),
-		after: restartRelay,
-	},
-	{
-		kind: EFieldKind.Password,
-		name: "Relay token",
-		desc: "Secret token required by the relay server. Must match the TOKEN set at deploy time.",
-		placeholder: "••••••••",
-		get: (s) => s.realtimeToken,
-		set: (v) => ({ realtimeToken: v.trim() }),
 		after: restartRelay,
 	},
 ];
@@ -193,6 +176,9 @@ function clampAutoSyncMinutes(raw: string): number {
 
 function describeRelayStatus(plugin: PluginHost, connected: boolean): string {
 	if (!plugin.settings.realtimeSync) return "Relay is disabled.";
+	if (!isRelayConfigured(plugin.settings)) {
+		return "Set up the relay server under Connection.";
+	}
 	return connected ? "● Connected" : "○ Not connected";
 }
 

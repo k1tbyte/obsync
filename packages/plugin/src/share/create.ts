@@ -18,8 +18,6 @@ export function createSharedFolderConfig(input: {
 	localRoot: string;
 	name: string;
 	baseStorage: StorageAdapterConfig;
-	relayUrl?: string;
-	relayToken?: string;
 }): SharedFolderConfig {
 	const id = randomId();
 	const localRoot = assertValidShareRoot(input.localRoot);
@@ -30,8 +28,6 @@ export function createSharedFolderConfig(input: {
 		localRoot,
 		keyB64: bytesToBase64Url(randomBytes(SHARE_KEY_BYTES)),
 		storage: deriveShareStorageConfig(input.baseStorage, id),
-		relayUrl: input.relayUrl?.trim() || undefined,
-		relayToken: input.relayToken?.trim() || undefined,
 		createdAt: Date.now(),
 	};
 }
@@ -47,8 +43,6 @@ export function joinedSharedFolderConfig(
 		localRoot: root,
 		keyB64: invite.keyB64,
 		storage: invite.storage,
-		relayUrl: invite.relayUrl,
-		relayRoomToken: invite.relayRoomToken,
 		createdAt: Date.now(),
 	};
 }
@@ -92,6 +86,24 @@ export function withCurrentCredentials(
 		accessKeyId: base.accessKeyId,
 		secretAccessKey: base.secretAccessKey,
 	};
+}
+
+/**
+ * What the relay signs a share's requests with: the pinned location and current
+ * credentials, minus `shares/<id>`. The relay re-appends it, so a wrong
+ * registration can never open more than that one share.
+ */
+export function brokerShareStorage(
+	share: SharedFolderConfig,
+	base: StorageAdapterConfig,
+): S3StorageConfig {
+	const storage = assertShareableStorage(withCurrentCredentials(share, base));
+	const suffix = `shares/${share.id}`;
+	if (!storage.prefix.endsWith(suffix)) {
+		throw new Error(`Share "${share.name}" is not stored under ${suffix}.`);
+	}
+	const prefix = storage.prefix.slice(0, -suffix.length);
+	return { ...storage, prefix: prefix.replace(/\/+$/, "") };
 }
 
 function joinPrefix(prefix: string, suffix: string): string {

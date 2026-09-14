@@ -1,5 +1,10 @@
 import type { PluginHost } from "@/plugin/host";
-import { activeStorage } from "@/settings/model";
+import {
+	activeStorage,
+	isRelayConfigured,
+	type RelayConfig,
+} from "@/settings/model";
+import { checkRelay } from "@/share";
 import { errorMessage } from "@/shared/errors";
 import {
 	createStorageAdapter,
@@ -40,5 +45,20 @@ export async function testConnection(
 			ok: false,
 			message: `Could not reach ${target}: ${errorMessage(err)}`,
 		};
+	}
+}
+
+/** Tells a wrong URL (unreachable, HTTP 404) apart from a wrong secret. */
+export async function testRelay(
+	relay: RelayConfig,
+): Promise<ConnectionTestResult> {
+	if (!isRelayConfigured(relay)) {
+		return { ok: false, message: "Enter the relay URL and secret first." };
+	}
+	try {
+		await checkRelay(relay);
+		return { ok: true, message: "Connected. The relay accepts this secret." };
+	} catch (err) {
+		return { ok: false, message: errorMessage(err) };
 	}
 }

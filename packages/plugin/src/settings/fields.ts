@@ -3,9 +3,11 @@ import { Setting } from "obsidian";
 import type { PluginHost } from "@/plugin/host";
 import { EFieldKind } from "@/storage/field-spec";
 
+import type { ConnectionTestResult } from "./connection-test";
 import type { ObsyncSettings } from "./model";
 
 const SUB_SETTING_CLASS = "obsync-sub-setting";
+const ERROR_DESC_CLASS = "obsync-settings-error";
 
 export interface FieldContext {
 	plugin: PluginHost;
@@ -113,6 +115,27 @@ export function renderField(
 		text
 			.setValue(field.get(ctx.plugin.settings))
 			.onChange((value) => apply(field.set(value, ctx.plugin)));
+	});
+}
+
+/** A Test button whose outcome replaces the row description. */
+export function renderCheckRow(
+	parent: HTMLElement,
+	name: string,
+	desc: string,
+	run: () => Promise<ConnectionTestResult>,
+): void {
+	const setting = new Setting(parent).setName(name).setDesc(desc);
+	setting.addButton((button) => {
+		button.setButtonText("Test").onClick(async () => {
+			button.setDisabled(true);
+			button.setButtonText("Testing…");
+			const result = await run();
+			setting.setDesc(result.message);
+			setting.descEl.toggleClass(ERROR_DESC_CLASS, !result.ok);
+			button.setDisabled(false);
+			button.setButtonText("Test");
+		});
 	});
 }
 

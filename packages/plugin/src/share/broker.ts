@@ -1,104 +1,124 @@
 import { requestUrl } from "obsidian";
 
 import { DEFAULT_CONCURRENCY } from "@/constants";
+import { isRelayConfigured, type RelayConfig } from "@/settings/model";
 import {
 	EStorageBackend,
+	type S3StorageConfig,
 	type ShareBrokerStorageConfig,
 } from "@/storage/config";
 
 /**
- * Admin client for the owner's self-hosted broker.
+ * Admin client for the owner's self-hosted relay.
  *
- * Only the owner holds the admin secret; it mints and revokes the per-person
- * tokens that go into invites. Participants never see it.
+ * Only the owner holds the relay secret; it registers share storage and mints
+ * and revokes the per-person tokens that go into invites. Participants never see it.
  */
-
-export interface BrokerAdmin {
-	url: string;
-	adminSecret: string;
-}
 
 export interface ShareParticipant {
 	participantId: string;
 }
 
-export function isBrokerConfigured(admin: BrokerAdmin): boolean {
-	return Boolean(admin.url.trim() && admin.adminSecret.trim());
+/** Resolves when the URL reaches a relay that accepts the secret. */
+export async function checkRelay(relay: RelayConfig): Promise<void> {
+	await adminRequest(relay, "/status", { method: "GET" });
 }
 
 export async function issueShareToken(
-	admin: BrokerAdmin,
+	relay: RelayConfig,
 	shareId: string,
 	participantId: string,
 	label?: string,
 ): Promise<ShareBrokerStorageConfig> {
-	const body = await adminRequest<{ token: string }>(admin, "/share/tokens", {
+	const body = await adminRequest<{ token: string }>(relay, "/share/tokens", {
 		method: "POST",
 		body: { shareId, participantId, label },
 	});
 	return {
 		kind: EStorageBackend.ShareBroker,
-		brokerUrl: normalizeUrl(admin.url),
+		brokerUrl: normalizeUrl(relay.relayUrl),
 		shareToken: body.token,
 		concurrency: DEFAULT_CONCURRENCY,
 	};
 }
 
+/** `storage.prefix` is the base prefix: the relay appends `shares/<id>` itself. */
+export async function registerShareStorage(
+	relay: RelayConfig,
+	shareId: string,
+	storage: S3StorageConfig,
+): Promise<void> {
+	const {
+		endpoint,
+		region,
+		bucket,
+		prefix,
+		accessKeyId,
+		secretAccessKey,
+		forcePathStyle,
+	} = storage;
+	await adminRequest(relay, sharePath(shareId), {
+		method: "PUT",
+		body: {
+			endpoint,
+			region,
+			bucket,
+			prefix,
+			accessKeyId,
+			secretAccessKey,
+			forcePathStyle,
+		},
+	});
+}
+
 export async function revokeShareToken(
-	admin: BrokerAdmin,
+	relay: RelayConfig,
 	shareId: string,
 	participantId: string,
 ): Promise<boolean> {
 	const path = `/share/tokens/${encodeURIComponent(participantId)}?shareId=${encodeURIComponent(shareId)}`;
-	const body = await adminRequest<{ revoked: boolean }>(admin, path, {
+	const body = await adminRequest<{ revoked: boolean }>(relay, path, {
 		method: "DELETE",
 	});
 	return body.revoked;
 }
 
 export async function listShareParticipants(
-	admin: BrokerAdmin,
+	relay: RelayConfig,
 	shareId: string,
 ): Promise<ShareParticipant[]> {
 	const path = `/share/tokens?shareId=${encodeURIComponent(shareId)}`;
 	const body = await adminRequest<{ participants: ShareParticipant[] }>(
-		admin,
+		relay,
 		path,
 		{ method: "GET" },
 	);
 	return body.participants ?? [];
 }
 
-/** Used when the owner stops sharing, so no token outlives the share. */
-export async function revokeAllShareTokens(
-	admin: BrokerAdmin,
+/** Used when the owner stops sharing: every token is revoked and the relay forgets the storage. */
+export async function endShare(
+	relay: RelayConfig,
 	shareId: string,
-): Promise<number> {
-	const participants = await listShareParticipants(admin, shareId);
-	let revoked = 0;
-	for (const participant of participants) {
-		if (await revokeShareToken(admin, shareId, participant.participantId)) {
-			revoked++;
-		}
-	}
-	return revoked;
+): Promise<void> {
+	await adminRequest(relay, sharePath(shareId), { method: "DELETE" });
 }
 
 async function adminRequest<T>(
-	admin: BrokerAdmin,
+	relay: RelayConfig,
 	path: string,
 	options: { method: string; body?: unknown },
 ): Promise<T> {
-	if (!isBrokerConfigured(admin)) {
+	if (!isRelayConfigured(relay)) {
 		throw new Error(
-			"Set the share broker URL and admin secret under Settings → Obsync → Shared folders.",
+			"Set the relay server URL and secret under Settings → Obsync → Connection.",
 		);
 	}
 	const res = await requestUrl({
-		url: `${normalizeUrl(admin.url)}${path}`,
+		url: `${normalizeUrl(relay.relayUrl)}${path}`,
 		method: options.method,
 		headers: {
-			"X-Obsync-Admin": admin.adminSecret,
+			"X-Obsync-Admin": relay.relaySecret,
 			"Content-Type": "application/json",
 		},
 		...(options.body === undefined
@@ -107,14 +127,18 @@ async function adminRequest<T>(
 		throw: false,
 	});
 	if (res.status !== 200) {
-		throw new Error(`Share broker error: ${brokerMessage(res)}`);
+		throw new Error(`Relay error: ${relayMessage(res)}`);
 	}
 	return res.json as T;
 }
 
+function sharePath(shareId: string): string {
+	return `/share/shares/${encodeURIComponent(shareId)}`;
+}
+
 /** An edge error page is HTML, and Obsidian parses `.json` lazily: reading it
  * would throw a SyntaxError over the status the caller actually needs. */
-function brokerMessage(res: { status: number; json?: unknown }): string {
+function relayMessage(res: { status: number; json?: unknown }): string {
 	try {
 		const detail = res.json as { message?: string } | undefined;
 		if (detail?.message) return detail.message;

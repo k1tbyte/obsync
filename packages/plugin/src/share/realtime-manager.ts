@@ -1,18 +1,26 @@
-import { RealtimeClient } from "@/sync/realtime";
+import { isRelayConfigured, type ObsyncSettings } from "@/settings/model";
+import { EStorageBackend } from "@/storage/config";
+import { RealtimeClient, type RealtimeClientOptions } from "@/sync/realtime";
 
 import type { ShareStatusStore } from "./status-store";
 import { type SharedFolderConfig, shareChannelId } from "./types";
 
+type RelayTarget = Pick<
+	RealtimeClientOptions,
+	"serverUrl" | "token" | "roomToken"
+>;
+
 interface ShareRealtimeDeps {
+	getSettings(): ObsyncSettings;
 	deviceId(): string | undefined;
 	deviceName(): string | undefined;
 	onRemoteSync(shareId: string): void;
 }
 
 /**
- * One relay client per share with a relay URL. Connections are keyed by the
- * settings they were opened with, so editing a relay token reconnects instead
- * of leaving the client talking to the old room.
+ * One relay client per share that can reach a relay. Connections are keyed by
+ * the target they were opened with, so a rotated secret reconnects instead of
+ * leaving the client talking to the old room.
  */
 export class ShareRealtimeManager {
 	private readonly clients = new Map<
@@ -34,15 +42,8 @@ export class ShareRealtimeManager {
 		let changed = false;
 
 		for (const [id, entry] of [...this.clients]) {
-			const share = byId.get(id);
-			if (
-				share &&
-				!share.paused &&
-				share.relayUrl &&
-				cfgKey(share) === entry.cfgKey
-			) {
-				continue;
-			}
+			const target = this.targetOf(byId.get(id));
+			if (target && cfgKey(target) === entry.cfgKey) continue;
 			entry.client.dispose();
 			this.clients.delete(id);
 			changed =
@@ -50,9 +51,9 @@ export class ShareRealtimeManager {
 				changed;
 		}
 		for (const share of shares) {
-			if (share.paused || !share.relayUrl) continue;
 			if (this.clients.has(share.id)) continue;
-			this.connect(share, share.relayUrl);
+			const target = this.targetOf(share);
+			if (target) this.connect(share, target);
 		}
 		return changed;
 	}
@@ -66,12 +67,25 @@ export class ShareRealtimeManager {
 		this.clients.clear();
 	}
 
-	private connect(share: SharedFolderConfig, serverUrl: string): void {
+	/** Owned shares use this device's relay; a joined share reaches its owner's relay with its share token. */
+	private targetOf(share: SharedFolderConfig | undefined): RelayTarget | null {
+		if (!share || share.paused) return null;
+		if (share.storage.kind === EStorageBackend.ShareBroker) {
+			const { brokerUrl, shareToken } = share.storage;
+			return brokerUrl && shareToken
+				? { serverUrl: brokerUrl, roomToken: shareToken }
+				: null;
+		}
+		const settings = this.deps.getSettings();
+		return isRelayConfigured(settings)
+			? { serverUrl: settings.relayUrl, token: settings.relaySecret }
+			: null;
+	}
+
+	private connect(share: SharedFolderConfig, target: RelayTarget): void {
 		const client = new RealtimeClient({
-			serverUrl,
+			...target,
 			channelId: shareChannelId(share.id),
-			token: share.relayToken || undefined,
-			roomToken: share.relayRoomToken || undefined,
 			deviceId: this.deps.deviceId(),
 			deviceName: this.deps.deviceName(),
 			onRemoteSync: () => this.deps.onRemoteSync(share.id),
@@ -88,12 +102,11 @@ export class ShareRealtimeManager {
 				});
 			},
 		});
-		this.clients.set(share.id, { client, cfgKey: cfgKey(share) });
+		this.clients.set(share.id, { client, cfgKey: cfgKey(target) });
 		client.connect();
 	}
 }
 
-/** Everything a connection depends on, so a change to any of it reconnects. */
-function cfgKey(share: SharedFolderConfig): string {
-	return `${share.relayUrl}|${share.relayToken ?? ""}|${share.relayRoomToken ?? ""}`;
+function cfgKey(target: RelayTarget): string {
+	return `${target.serverUrl}|${target.token ?? ""}|${target.roomToken ?? ""}`;
 }

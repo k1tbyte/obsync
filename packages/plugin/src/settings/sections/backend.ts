@@ -1,6 +1,7 @@
 import { Setting } from "obsidian";
 
 import type { PluginHost } from "@/plugin/host";
+import { renderCheckRow } from "@/settings/fields";
 import { getDescriptor, listBackends } from "@/storage";
 import type { EStorageBackend } from "@/storage/config";
 
@@ -47,23 +48,10 @@ export function renderBackendSection(
 		});
 
 	renderStorageFields(parent, plugin, settings.activeStorageKind);
-	renderConnectionTest(parent, plugin);
-}
-
-/** Answers "are these credentials right?" without publishing anything. */
-function renderConnectionTest(parent: HTMLElement, plugin: PluginHost): void {
-	const setting = new Setting(parent)
-		.setName("Test connection")
-		.setDesc("Checks the credentials above by reading from the remote.");
-	setting.addButton((button) => {
-		button.setButtonText("Test").onClick(async () => {
-			button.setDisabled(true);
-			button.setButtonText("Testing…");
-			const result = await testConnection(plugin);
-			setting.setDesc(result.message);
-			setting.descEl.toggleClass("obsync-settings-error", !result.ok);
-			button.setDisabled(false);
-			button.setButtonText("Test");
-		});
-	});
+	renderCheckRow(
+		parent,
+		"Test connection",
+		"Checks the credentials above by reading from the remote.",
+		() => testConnection(plugin),
+	);
 }

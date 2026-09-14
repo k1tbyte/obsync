@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
 	assertShareableStorage,
+	brokerShareStorage,
 	createSharedFolderConfig,
 	deriveShareStorageConfig,
 	joinedSharedFolderConfig,
 	participantIdFromName,
 } from "@/share/create";
 import { createShareInviteUrl, readShareInvite } from "@/share/invite";
-import { isOwnedShare, shareChannelId } from "@/share/types";
+import { isOwnedShare } from "@/share/types";
 import { defaultS3Config } from "@/storage/adapters/s3";
 import { defaultWebDAVConfig } from "@/storage/adapters/webdav";
 import {
@@ -15,7 +16,6 @@ import {
 	type S3StorageConfig,
 	type ShareBrokerStorageConfig,
 } from "@/storage/config";
-import { deriveRoomToken } from "@/sync/realtime";
 
 function baseStorage(): S3StorageConfig {
 	return {
@@ -43,8 +43,6 @@ describe("share invites", () => {
 			localRoot: "Projects/Team",
 			name: "Team notes",
 			baseStorage: baseStorage(),
-			relayUrl: "wss://relay.example.dev",
-			relayToken: "secret",
 		});
 		const url = await createShareInviteUrl(
 			share,
@@ -58,29 +56,6 @@ describe("share invites", () => {
 		expect(invite.name).toBe("Team notes");
 		expect(invite.keyB64).toBe(share.keyB64);
 		expect(invite.storage).toEqual(brokerStorage());
-		expect(invite.relayUrl).toBe("wss://relay.example.dev");
-		// The room token, never the deployment secret it was derived from.
-		expect(invite.relayRoomToken).toMatch(/^[0-9a-f]{64}$/);
-		expect(invite.relayRoomToken).toBe(
-			await deriveRoomToken("secret", shareChannelId(share.id)),
-		);
-	});
-
-	it("never hands a participant the deployment relay secret", async () => {
-		const share = createSharedFolderConfig({
-			localRoot: "Team",
-			name: "Team",
-			baseStorage: baseStorage(),
-			relayUrl: "wss://relay.example.dev",
-			relayToken: "deployment-secret",
-		});
-
-		const url = await createShareInviteUrl(share, "pw", brokerStorage());
-		const invite = await readShareInvite(url, "pw");
-
-		// Holding the deployment secret would let a participant derive the room
-		// token of every other share on the same relay.
-		expect(JSON.stringify(invite)).not.toContain("deployment-secret");
 	});
 
 	it("never leaks storage credentials into the invite", async () => {
@@ -164,6 +139,54 @@ describe("deriveShareStorageConfig", () => {
 	it("refuses backends that cannot presign", () => {
 		expect(() => assertShareableStorage(defaultWebDAVConfig())).toThrow(
 			/S3-compatible/,
+		);
+	});
+});
+
+describe("brokerShareStorage", () => {
+	it("hands the relay the pinned base location with current credentials", () => {
+		const share = createSharedFolderConfig({
+			localRoot: "Team",
+			name: "Team",
+			baseStorage: baseStorage(),
+		});
+
+		const storage = brokerShareStorage(share, {
+			...baseStorage(),
+			bucket: "moved-bucket",
+			accessKeyId: "AK2",
+		});
+
+		expect(storage).toMatchObject({
+			bucket: "vault-bucket",
+			prefix: "my-vault",
+			accessKeyId: "AK2",
+		});
+	});
+
+	it("keeps an empty base prefix empty", () => {
+		const share = createSharedFolderConfig({
+			localRoot: "Team",
+			name: "Team",
+			baseStorage: { ...baseStorage(), prefix: "" },
+		});
+
+		expect(brokerShareStorage(share, baseStorage()).prefix).toBe("");
+	});
+
+	it("refuses a share that is not stored under its own prefix", () => {
+		const share = createSharedFolderConfig({
+			localRoot: "Team",
+			name: "Team",
+			baseStorage: baseStorage(),
+		});
+		const moved = {
+			...share,
+			storage: { ...baseStorage(), prefix: "my-vault" },
+		};
+
+		expect(() => brokerShareStorage(moved, baseStorage())).toThrow(
+			/not stored under/,
 		);
 	});
 });

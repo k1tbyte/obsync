@@ -1,10 +1,9 @@
 export { conflictCopyPath } from "@/sync/conflict-copy";
 export {
-	type BrokerAdmin,
-	isBrokerConfigured,
+	checkRelay,
+	endShare,
 	issueShareToken,
 	listShareParticipants,
-	revokeAllShareTokens,
 	revokeShareToken,
 } from "./broker";
 export {
