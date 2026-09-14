@@ -1,6 +1,6 @@
 import { setIcon } from "obsidian";
 
-import type { ShareIndicatorState } from "../share";
+import type { ShareIndicatorState } from "@/share";
 
 export interface ShareIndicatorPresentation {
 	state: ShareIndicatorState;

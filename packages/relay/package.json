@@ -5,9 +5,11 @@
 	"scripts": {
 		"dev": "partykit dev",
 		"deploy": "partykit deploy",
-		"typecheck": "tsc -noEmit"
+		"typecheck": "tsc -noEmit",
+		"test": "vitest run --passWithNoTests"
 	},
 	"devDependencies": {
-		"partykit": "^0.0.111"
+		"partykit": "^0.0.111",
+		"vitest": "^4.1.11"
 	}
 }

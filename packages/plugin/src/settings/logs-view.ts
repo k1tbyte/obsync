@@ -3,8 +3,9 @@ import {
 	ESyncLogLevel,
 	ESyncLogOperation,
 	type SyncLogEntry,
-} from "../logs/store";
-import type ObsyncPlugin from "../main";
+} from "@/logs/store";
+import type { PluginHost } from "@/plugin/host";
+import { formatTimestamp } from "@/shared/format";
 
 const LOG_LEVEL_LABELS: Record<ESyncLogLevel, string> = {
 	[ESyncLogLevel.Info]: "Info",
@@ -29,7 +30,7 @@ const OPERATION_LABELS: Record<ESyncLogOperation, string> = {
 
 export function renderLogsView(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	onRefresh: () => void,
 ): void {
 	new Setting(parent).setName("Logs").setHeading();
@@ -54,12 +55,12 @@ export function renderLogsView(
 				.setButtonText("Clear logs")
 				.setWarning()
 				.onClick(async () => {
-					await plugin.clearLogs();
+					await plugin.logs.clear();
 					onRefresh();
 				}),
 		);
 
-	const entries = plugin.getLogs();
+	const entries = plugin.logs.getEntries();
 	if (entries.length === 0) {
 		parent.createEl("p", { text: "No logs yet." });
 		return;
@@ -89,8 +90,4 @@ function renderLogEntry(parent: HTMLElement, entry: SyncLogEntry): void {
 	for (const detail of entry.details) {
 		list.createEl("li", { text: detail });
 	}
-}
-
-function formatTimestamp(timestamp: number): string {
-	return new Date(timestamp).toLocaleString();
 }

@@ -1,4 +1,4 @@
-import type { FileDiffModel } from "../../sync/projection";
+import type { FileDiffModel } from "@/sync/projection";
 import {
 	type ConflictPreviewHandlers,
 	renderConflictPreview,
@@ -12,6 +12,10 @@ export class ConflictPreviewManager {
 	private readonly loadPreview: (path: string) => Promise<FileDiffModel | null>;
 	private readonly previewCache = new Map<string, FileDiffModel | null>();
 	private readonly loadingPreviews = new Set<string>();
+	private readonly pendingTargets = new Map<
+		string,
+		{ previewEl: HTMLElement; handlers: ConflictPreviewHandlers }
+	>();
 	private readonly expandedPreviews = new Set<string>();
 
 	constructor(deps: ConflictPreviewManagerDeps) {
@@ -21,14 +25,16 @@ export class ConflictPreviewManager {
 	clearCache(): void {
 		this.previewCache.clear();
 		this.loadingPreviews.clear();
+		this.pendingTargets.clear();
 	}
 
-	collapse(path: string): void {
-		this.expandedPreviews.delete(path);
-	}
-
-	collapseAll(paths: ReadonlyArray<string>): void {
-		for (const path of paths) this.expandedPreviews.delete(path);
+	/** Keeps only the previews of conflicts that still exist. */
+	prune(conflictPaths: ReadonlyArray<string>): void {
+		if (this.expandedPreviews.size === 0) return;
+		const current = new Set(conflictPaths);
+		for (const path of this.expandedPreviews) {
+			if (!current.has(path)) this.expandedPreviews.delete(path);
+		}
 	}
 
 	isExpanded(path: string): boolean {
@@ -52,13 +58,28 @@ export class ConflictPreviewManager {
 			return;
 		}
 		previewEl.setText("Loading diff…");
+		// The element may be detached by a re-render, so remember and fill the newest one.
+		this.pendingTargets.set(path, { previewEl, handlers });
 		if (this.loadingPreviews.has(path)) return;
 		this.loadingPreviews.add(path);
-		void this.loadPreview(path).then((model) => {
-			this.previewCache.set(path, model);
-			this.loadingPreviews.delete(path);
-			this.renderInto(previewEl, model, path, handlers);
-		});
+		void this.loadPreview(path)
+			.then((model) => {
+				this.previewCache.set(path, model);
+				this.settle(path, model);
+			})
+			.catch(() => {
+				// Not cached: a transient failure should be retried on the next open.
+				this.settle(path, null);
+			});
+	}
+
+	private settle(path: string, model: FileDiffModel | null): void {
+		this.loadingPreviews.delete(path);
+		const target = this.pendingTargets.get(path);
+		this.pendingTargets.delete(path);
+		if (target) {
+			this.renderInto(target.previewEl, model, path, target.handlers);
+		}
 	}
 
 	private renderInto(

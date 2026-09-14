@@ -1,20 +1,20 @@
 import {
-	DATA_KEY_BYTES,
-	KEYFILE_VERSION,
-	REMOTE_KEYFILE_KEY,
-} from "../constants";
-import {
 	decryptBytes,
 	deriveKey,
 	type EncryptionKey,
 	encryptBytes,
 	importAesKey,
 	randomBytes,
-} from "../crypto";
-import { errorMessage } from "../shared/errors";
-import type { ObjectStorage } from "../storage/types";
-import { base64ToBytes, bytesToBase64 } from "../utils/base64";
+} from "@/crypto";
+import { errorMessage } from "@/shared/errors";
+import type { ObjectStorage } from "@/storage/types";
+import { REMOTE_KEYFILE_KEY } from "@/sync/constants";
+import { base64ToBytes, bytesToBase64 } from "@/utils/base64";
 import { loadOrCreateSalt } from "./session";
+
+const KEYFILE_VERSION = 1;
+
+const DATA_KEY_BYTES = 32;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -23,12 +23,11 @@ const INITIAL_EPOCH = 1;
 
 /**
  * Envelope keyfile stored plaintext at {@link REMOTE_KEYFILE_KEY}. `wrapped`
- * is itself ciphertext (the random data key encrypted under the
- * passphrase-derived KEK), so the file leaks nothing without the passphrase.
+ * is ciphertext, so it leaks nothing without the passphrase.
  */
 export interface Keyfile {
 	version: number;
-	/** Bumped on every rotation; serves as the remote rotation marker. */
+	/** Bumped on every rotation. */
 	epoch: number;
 	/** base64 of `encryptBytes(KEK, rawDataKey)`. */
 	wrapped: string;
@@ -41,7 +40,6 @@ export interface ResolvedContentKey {
 	epoch: number;
 }
 
-/** Thrown when the passphrase cannot unwrap the data key (wrong or rotated). */
 export class PassphraseRotatedError extends Error {
 	constructor() {
 		super(
@@ -57,17 +55,32 @@ export async function readKeyfile(
 	const bytes = await storage.get(REMOTE_KEYFILE_KEY);
 	if (!bytes) return null;
 	try {
-		return JSON.parse(decoder.decode(bytes)) as Keyfile;
+		const parsed = JSON.parse(decoder.decode(bytes)) as unknown;
+		if (!isKeyfile(parsed)) {
+			// Malformed keyfile avoids a false rotation hunt.
+			throw new Error("unexpected shape");
+		}
+		return parsed;
 	} catch (err) {
-		// Present but unparseable. Returning null would make the caller mint a
-		// fresh data key and orphan every encrypted object — fail loudly.
+		// Present but unparseable. Returning null would orphan encrypted objects - fail loudly.
 		throw new Error(
 			`Keyfile present but unreadable; refusing to treat it as absent: ${errorMessage(err)}`,
 		);
 	}
 }
 
-export async function writeKeyfile(
+function isKeyfile(value: unknown): value is Keyfile {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<Keyfile>;
+	return (
+		typeof candidate.version === "number" &&
+		typeof candidate.epoch === "number" &&
+		typeof candidate.wrapped === "string" &&
+		candidate.wrapped.length > 0
+	);
+}
+
+async function writeKeyfile(
 	storage: ObjectStorage,
 	keyfile: Keyfile,
 ): Promise<void> {
@@ -78,10 +91,21 @@ export async function writeKeyfile(
 	);
 }
 
+/** Returns false when the keyfile already existed. */
+async function createKeyfile(
+	storage: ObjectStorage,
+	keyfile: Keyfile,
+): Promise<boolean> {
+	return storage.putIfAbsent(
+		REMOTE_KEYFILE_KEY,
+		encoder.encode(JSON.stringify(keyfile)),
+		"application/json",
+	);
+}
+
 /**
- * Resolves the content (data) key for the vault. Creates the keyfile with a
- * fresh random data key on first use. The data key is constant for the life
- * of the vault; only its passphrase wrapping changes on rotation.
+ * Resolves the content key, creating it on first use. The data key is constant;
+ * only its passphrase wrapping changes on rotation.
  */
 export async function resolveContentKey(
 	storage: ObjectStorage,
@@ -98,19 +122,27 @@ export async function resolveContentKey(
 
 	const raw = randomBytes(DATA_KEY_BYTES);
 	const now = Date.now();
-	await writeKeyfile(storage, {
+	const wrapped = await wrapRawKey(kek, raw);
+	await createKeyfile(storage, {
 		version: KEYFILE_VERSION,
 		epoch: INITIAL_EPOCH,
-		wrapped: await wrapRawKey(kek, raw),
+		wrapped,
 		createdAt: now,
 		rotatedAt: now,
 	});
-	return { contentKey: await importAesKey(raw), epoch: INITIAL_EPOCH };
+	// A backend ignoring the condition might report success after overwriting.
+	// We read back the winner - minting a second key would orphan existing data.
+	const winner = await readKeyfile(storage);
+	if (!winner) {
+		throw new Error("Keyfile vanished while it was being created.");
+	}
+	const winnerRaw = await unwrapRawKey(kek, winner.wrapped);
+	return { contentKey: await importAesKey(winnerRaw), epoch: winner.epoch };
 }
 
 /**
- * Re-wraps the existing data key under a new passphrase. O(1): no content is
- * re-encrypted because the data key is unchanged. Returns the new epoch.
+ * Re-wraps data key under a new passphrase without re-encrypting content.
+ * Returns the new epoch.
  */
 export async function rotatePassphrase(
 	storage: ObjectStorage,
@@ -126,13 +158,21 @@ export async function rotatePassphrase(
 	const raw = await unwrapRawKey(oldKek, keyfile.wrapped);
 	const newKek = await deriveKey(newPassphrase, salt);
 	const nextEpoch = keyfile.epoch + 1;
+	const wrapped = await wrapRawKey(newKek, raw);
 	await writeKeyfile(storage, {
 		version: KEYFILE_VERSION,
 		epoch: nextEpoch,
-		wrapped: await wrapRawKey(newKek, raw),
+		wrapped,
 		createdAt: keyfile.createdAt,
 		rotatedAt: Date.now(),
 	});
+	// Throws if another device's concurrent rotation won.
+	const landed = await readKeyfile(storage);
+	if (landed?.wrapped !== wrapped) {
+		throw new Error(
+			"Another device changed the passphrase at the same time. Re-open the vault and try again.",
+		);
+	}
 	return nextEpoch;
 }
 
@@ -147,9 +187,15 @@ async function unwrapRawKey(
 	kek: EncryptionKey,
 	wrapped: string,
 ): Promise<Uint8Array> {
+	let raw: Uint8Array;
 	try {
-		return await decryptBytes(kek, base64ToBytes(wrapped));
+		raw = await decryptBytes(kek, base64ToBytes(wrapped));
 	} catch {
 		throw new PassphraseRotatedError();
 	}
+	// A truncated key would import as a weaker AES variant instead of failing.
+	if (raw.length !== DATA_KEY_BYTES) {
+		throw new Error("Keyfile holds a data key of the wrong size.");
+	}
+	return raw;
 }

@@ -1,10 +1,17 @@
-import type { ESyncLogOperation } from "../../logs/store";
-import type { Manifest, SessionState } from "../../types";
-import type { CompareResult, EngineDependencies } from "../engine";
+import type { ESyncLogOperation } from "@/logs/store";
+import type { CompareResult, EngineDependencies } from "@/sync/engine";
+import type { Manifest, ManifestEntry, SessionState } from "@/sync/types";
 
 export interface OperationOutcome {
 	newRemote: Manifest | null;
 	touchedPaths: ReadonlySet<string>;
+	/**
+	 * Actual on-disk state of touched paths. Prevents `recomputeAfterWrite` from incorrectly
+	 * assuming baseline/remote state after partial hunk apply.
+	 */
+	localEntries?: ReadonlyMap<string, ManifestEntry | null>;
+	/** Stopped early at the user's request, having done part of the work. */
+	cancelled?: boolean;
 }
 
 export type ProgressReporter = (text: string | null) => void;
@@ -13,7 +20,7 @@ export interface OperationContext {
 	setProgress: ProgressReporter;
 	reportProgressSoon: ProgressReporter;
 	persistState: (state: SessionState) => Promise<void>;
-	getFreshState: () => SessionState | null;
+	getFreshState: () => SessionState;
 	logInfo: (
 		operation: ESyncLogOperation,
 		message: string,

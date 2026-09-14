@@ -1,76 +1,78 @@
-import "./polyfills";
-import { type ObsidianProtocolData, Plugin, TFolder } from "obsidian";
+import { Plugin } from "obsidian";
 
 import { registerCommands } from "@/commands";
-import type { LogService, PassphraseManager, StatePersister } from "@/core";
-import { registerEditorSigns, type SignsHandle } from "@/editor/signs";
-import { ESyncLogOperation, type SyncLogEntry } from "@/logs/store";
 import {
-	activeStorage,
+	DeviceName,
+	type LogService,
+	type PassphraseManager,
+	type StatePersister,
+} from "@/core";
+import { registerEditorSigns, type SignsHandle } from "@/editor/signs";
+import {
 	DEFAULT_SETTINGS,
 	isStorageConfigured,
 	mergeSettings,
 	type ObsyncSettings,
 } from "@/settings/model";
 import type { ObsyncSettingTab } from "@/settings/tab";
-import {
-	createSettingsTransferPackage as buildSettingsTransferPackage,
-	mergeTransferredSettings,
-	readSettingsTransfer,
-	type SettingsTransferExportOptions,
-	type SettingsTransferPackage,
-	TRANSFER_ACTION,
-} from "@/settings/transfer";
-import {
-	findShareForPath,
-	SHARE_INVITE_ACTION,
-	type SharedFolderConfig,
-	ShareSyncService,
-} from "@/share";
-import { createStorageAdapter, handleStorageProtocol } from "@/storage";
-import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
-import { defaultDeviceName } from "@/sync/device";
-import { rotatePassphrase } from "@/sync/keyfile";
-import type { RealtimePresenceDevice } from "@/sync/realtime";
+import { SettingsTransferController } from "@/settings/transfer-controller";
+import type { SharedFolderConfig, ShareSyncService } from "@/share";
+import { reportWarning } from "@/shared/diagnostics";
+import type { SyncController } from "@/sync/controller";
 import { registerScheduler } from "@/sync/scheduler";
-import { loadState } from "@/sync/state";
+import type { IndicatorHandle } from "@/ui";
+
 import {
-	confirmAdoptNewVault,
-	confirmSettingsTransferImport,
-	type IndicatorHandle,
-	notifyError,
-	notifyInfo,
-} from "@/ui";
-import { CreateShareModal, JoinShareModal } from "@/ui/modals/share-modals";
-import { bootstrapPluginRuntime } from "./plugin/bootstrap";
+	bootstrapPluginRuntime,
+	disposePluginRuntime,
+} from "./plugin/bootstrap";
 import {
-	registerFileHistoryMenu,
 	registerIgnoreFileRefresh,
 	registerStatePersistenceFlush,
+	registerWorkspaceMenus,
 } from "./plugin/events";
+import type { PluginHost } from "./plugin/host";
+import {
+	type IgnoreStateHandle,
+	registerIgnoreState,
+} from "./plugin/ignore-state";
+import { registerProtocolHandlers } from "./plugin/protocols";
 import { PluginRealtime } from "./plugin/realtime";
+import { registerShares } from "./plugin/shares";
 import {
 	refreshOpenHistoryViewsAfterPush,
+	refreshOpenSourceControlViews,
 	registerPluginUi,
 } from "./plugin/ui";
-
-const VAULT_MISMATCH_ERROR = "Remote vault id does not match local";
+import { registerVaultAdoptionPrompt } from "./plugin/vault-adoption";
 
 const SCOPE_REFRESH_DEBOUNCE_MS = 800;
 
-export default class ObsyncPlugin extends Plugin {
+/** Runs a teardown step without letting its failure abort the rest. */
+function safely(step: () => void): void {
+	try {
+		step();
+	} catch (err) {
+		reportWarning("A teardown step failed during unload.", err);
+	}
+}
+
+export default class ObsyncPlugin extends Plugin implements PluginHost {
 	settings: ObsyncSettings = DEFAULT_SETTINGS;
 	controller!: SyncController;
-	shares: ShareSyncService | null = null;
+	logs!: LogService;
+	passphrase!: PassphraseManager;
+	realtime!: PluginRealtime;
+	device!: DeviceName;
+	transfer!: SettingsTransferController;
+	shares!: ShareSyncService;
+	ignoreState!: IgnoreStateHandle;
 	private settingsTab?: ObsyncSettingTab;
-	private logs!: LogService;
 	private statePersister!: StatePersister;
-	private passphraseManager!: PassphraseManager;
 	private scopeRefreshTimer: number | null = null;
-	private realtime: PluginRealtime | null = null;
-	private adoptPromptActive = false;
 	private editorSigns: SignsHandle | null = null;
 	private fileIndicators: IndicatorHandle | null = null;
+	private unloaded = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -78,23 +80,41 @@ export default class ObsyncPlugin extends Plugin {
 			app: this.app,
 			settings: this.settings,
 			onPushComplete: () => {
-				this.realtime?.notifySync();
+				this.realtime.notifySync();
 				refreshOpenHistoryViewsAfterPush(this);
 			},
+			persistSettings: () => this.saveSettings(),
 		});
+		// Obsidian can unload a plugin while its onload is still awaiting, and this
+		// one awaits a 3 MB state file. A teardown registered past that point is
+		// never run, so the sockets, timers and views would outlive the plugin.
+		if (this.unloaded) {
+			disposePluginRuntime(runtime);
+			return;
+		}
 		this.logs = runtime.logs;
 		this.statePersister = runtime.statePersister;
-		this.passphraseManager = runtime.passphraseManager;
+		this.passphrase = runtime.passphraseManager;
 		this.controller = runtime.controller;
 		this.realtime = new PluginRealtime(this.controller, () => this.settings);
-		this.initRealtime();
-		this.initShares();
-
-		this.register(
-			this.controller.subscribe((snapshot) => {
-				void this.maybePromptAdoptVault(snapshot);
-			}),
+		this.device = new DeviceName(this.statePersister, () =>
+			this.realtime.restart(),
 		);
+		this.transfer = new SettingsTransferController({
+			app: this.app,
+			settings: this.settings,
+			passphrase: this.passphrase,
+			saveSettings: () => this.saveSettings(),
+			onSettingsReplaced: () => this.onSettingsReplaced(),
+		});
+		this.realtime.restart();
+		this.shares = registerShares(this, {
+			logs: this.logs,
+			statePersister: this.statePersister,
+		});
+		this.ignoreState = registerIgnoreState(this);
+
+		registerVaultAdoptionPrompt(this, this.controller);
 
 		const registeredUi = registerPluginUi(this, this.controller);
 		this.settingsTab = registeredUi.settingsTab;
@@ -103,97 +123,51 @@ export default class ObsyncPlugin extends Plugin {
 
 		registerCommands(this);
 		registerScheduler(this, this.controller);
-		registerFileHistoryMenu(this);
-
+		registerWorkspaceMenus(this);
 		registerIgnoreFileRefresh(this);
 		registerStatePersistenceFlush(this, this.statePersister);
-		this.registerObsidianProtocolHandler(TRANSFER_ACTION, (params) => {
-			void this.handleSettingsTransferProtocol(params);
-		});
 
-		this.registerObsidianProtocolHandler("obsync-auth", (params) => {
-			void handleStorageProtocol(
-				params,
-				activeStorage(this.settings),
-				async () => {
-					await this.saveSettings();
-					// Re-render the open Settings tab so auth status updates without
-					// the user closing and reopening it.
-					this.settingsTab?.display();
-				},
-			);
-		});
+		// Re-render the open Settings tab so auth status updates without the
+		// user closing and reopening it.
+		registerProtocolHandlers(this, () => this.settingsTab?.display());
 	}
 
 	onunload(): void {
+		this.unloaded = true;
 		if (this.scopeRefreshTimer !== null) {
 			window.clearTimeout(this.scopeRefreshTimer);
 			this.scopeRefreshTimer = null;
 		}
-		this.editorSigns?.dispose();
+		// Each teardown is isolated: one that throws must not leave the rest of
+		// the plugin timers, sockets and listeners running after unload.
+		safely(() => this.editorSigns?.dispose());
 		this.editorSigns = null;
 		this.fileIndicators = null;
-		this.statePersister?.dispose();
-		this.controller?.dispose();
-		this.passphraseManager?.dispose();
-		this.realtime?.dispose();
-		this.realtime = null;
-		this.shares?.dispose();
-		this.shares = null;
+		safely(() => this.statePersister?.dispose());
+		safely(() => this.controller?.dispose());
+		safely(() => this.passphrase?.dispose());
+		safely(() => this.realtime?.dispose());
+		safely(() => this.shares?.dispose());
+		safely(() => this.logs?.dispose());
 	}
 
-	private initShares(): void {
-		this.shares = new ShareSyncService({
-			app: this.app,
-			getSettings: () => this.settings,
-			getState: () => this.statePersister.state,
-			ensureState: async () => {
-				const state =
-					this.statePersister.state ??
-					(await loadState(this.app.vault.adapter, this.app.vault.configDir));
-				this.statePersister.setInitial(state);
-				return state;
-			},
-			persistState: (state) => this.statePersister.persist(state),
-			log: (level, message, details) => {
-				const op = ESyncLogOperation.Share;
-				if (level === "error") return this.logs.error(op, message, details);
-				if (level === "warn") return this.logs.warn(op, message, details);
-				return this.logs.info(op, message, details);
-			},
-		});
-		this.shares.start(this);
-		this.registerObsidianProtocolHandler(SHARE_INVITE_ACTION, (params) => {
-			const data = params.d ?? params.data;
-			new JoinShareModal(this, typeof data === "string" ? data : "").open();
-		});
-		this.registerEvent(
-			this.app.workspace.on("file-menu", (menu, file) => {
-				if (!(file instanceof TFolder)) return;
-				const share = findShareForPath(this.settings.sharedFolders, file.path);
-				menu.addItem((item) =>
-					item
-						.setTitle(
-							share ? "Obsync: Sync shared folder" : "Obsync: Share folder…",
-						)
-						.setIcon("users")
-						.onClick(() => {
-							if (share) {
-								this.shares?.scheduleSync(share.id);
-								return;
-							}
-							new CreateShareModal(this, file.path).open();
-						}),
-				);
-			}),
-		);
+	async loadSettings(): Promise<void> {
+		const data = (await this.loadData()) as Partial<ObsyncSettings> | null;
+		this.settings = mergeSettings(data);
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+		// Every settings write funnels through here, and any of them can change
+		// the room or the credentials the relay client is using.
+		this.realtime.restartIfChanged();
 	}
 
 	async addSharedFolder(share: SharedFolderConfig): Promise<void> {
 		this.settings.sharedFolders.push(share);
 		await this.saveSettings();
-		this.shares?.refresh();
-		this.shares?.scheduleSync(share.id);
+		this.shares.refresh();
+		this.shares.scheduleSync(share.id);
 	}
 
 	async removeSharedFolder(shareId: string): Promise<void> {
@@ -201,7 +175,12 @@ export default class ObsyncPlugin extends Plugin {
 			(share) => share.id !== shareId,
 		);
 		await this.saveSettings();
-		await this.shares?.forgetShareState(shareId);
+		await this.shares.forgetShareState(shareId);
+	}
+
+	async resetLocalState(): Promise<void> {
+		await this.statePersister.reset();
+		this.controller.invalidate("Local state reset.");
 	}
 
 	refreshEditorSigns(enabled: boolean): void {
@@ -212,24 +191,8 @@ export default class ObsyncPlugin extends Plugin {
 		this.fileIndicators?.refresh(enabled);
 	}
 
-	private async maybePromptAdoptVault(
-		snapshot: SyncStatusSnapshot,
-	): Promise<void> {
-		const isMismatch = snapshot.error?.includes(VAULT_MISMATCH_ERROR) ?? false;
-		if (!isMismatch) {
-			this.adoptPromptActive = false;
-			return;
-		}
-		if (this.adoptPromptActive) return;
-		this.adoptPromptActive = true;
-		const confirmed = await confirmAdoptNewVault(this.app);
-		if (!confirmed) return;
-		try {
-			await this.controller.adoptNewVault();
-			notifyInfo("Adopted new remote vault.");
-		} catch (err) {
-			notifyError("Operation failed", err);
-		}
+	refreshSourceControlView(): void {
+		refreshOpenSourceControlViews(this);
 	}
 
 	scheduleScopeRefresh(reason = "Sync scope changed."): void {
@@ -246,143 +209,19 @@ export default class ObsyncPlugin extends Plugin {
 		}, SCOPE_REFRESH_DEBOUNCE_MS);
 	}
 
-	async createSettingsTransferPackage(
-		options: SettingsTransferExportOptions,
-	): Promise<SettingsTransferPackage | null> {
-		const passphrase = await this.requireTransferPassphrase();
-		if (!passphrase) return null;
-		return buildSettingsTransferPackage(this.settings, passphrase, options);
-	}
-
-	async importSettingsTransfer(input: string): Promise<boolean> {
-		const passphrase = await this.requireTransferPassphrase();
-		if (!passphrase) return false;
-		const imported = await readSettingsTransfer(input, passphrase);
-		const merged = mergeTransferredSettings(this.settings, imported);
-		const confirmed = await confirmSettingsTransferImport(this.app, merged);
-		if (!confirmed) return false;
-		await this.applyImportedSettings(merged);
-		return true;
-	}
-
-	getDeviceName(): string {
-		return this.statePersister.state?.deviceName ?? defaultDeviceName();
-	}
-
-	async setDeviceName(name: string): Promise<void> {
-		const trimmed = name.trim() || defaultDeviceName();
-		const base =
-			this.statePersister.state ??
-			(await loadState(this.app.vault.adapter, this.app.vault.configDir));
-		this.statePersister.setInitial(base);
-		await this.statePersister.persist({ ...base, deviceName: trimmed });
-		this.realtime?.restart();
-	}
-
-	async loadSettings(): Promise<void> {
-		const data = (await this.loadData()) as Partial<ObsyncSettings> | null;
-		this.settings = mergeSettings(data);
-	}
-
-	async saveSettings(): Promise<void> {
-		await this.saveData(this.settings);
-	}
-
-	getLogs(): readonly SyncLogEntry[] {
-		return this.logs.getEntries();
-	}
-
-	async clearLogs(): Promise<void> {
-		await this.logs.clear();
-	}
-
-	async resetLocalState(): Promise<void> {
-		await this.statePersister.reset();
-		this.controller.invalidate("Local state reset.");
-	}
-
-	hasPassphrase(): boolean {
-		return this.passphraseManager.has();
-	}
-
-	async forgetPassphrase(): Promise<void> {
-		await this.passphraseManager.forget();
-	}
-
-	async promptPassphrase(replace: boolean): Promise<boolean> {
-		return this.passphraseManager.prompt(replace);
-	}
-
 	/**
-	 * Rotates the vault passphrase by re-wrapping the data key. No content is
-	 * re-encrypted. Returns the new key epoch, or null if it could not run.
+	 * Imported settings change the backend, the relay and the shares; without
+	 * this the services keep running against the previous configuration until
+	 * Obsidian is restarted.
 	 */
-	async changePassphrase(newPassphrase: string): Promise<number | null> {
-		if (!isStorageConfigured(this.settings)) {
-			notifyError("Configure a storage backend first.");
-			return null;
-		}
-		if (!(await this.passphraseManager.prompt(false))) return null;
-		const current = this.passphraseManager.current();
-		if (!current) return null;
-		const storage = createStorageAdapter(activeStorage(this.settings));
-		const epoch = await rotatePassphrase(storage, current, newPassphrase);
-		await this.passphraseManager.replacePassphrase(newPassphrase);
-		return epoch;
-	}
-
-	private async requireTransferPassphrase(): Promise<string | null> {
-		if (!(await this.passphraseManager.prompt(false))) return null;
-		return this.passphraseManager.current();
-	}
-
-	/** Applies the settings the user just confirmed in the import dialog. */
-	private async applyImportedSettings(merged: ObsyncSettings): Promise<void> {
-		Object.assign(this.settings, merged);
-		this.passphraseManager.invalidateKey();
-		await this.saveSettings();
-		await this.passphraseManager.persistIfEnabled();
+	private onSettingsReplaced(): void {
+		void this.ignoreState.refresh();
+		this.realtime.restart();
+		this.shares.refresh();
+		this.refreshEditorSigns(this.settings.showEditorChangeSigns);
+		this.refreshFileIndicators(this.settings.showFileExplorerIndicators);
+		this.refreshSourceControlView();
+		this.settingsTab?.display();
 		this.scheduleScopeRefresh("Settings imported.");
-	}
-
-	private async handleSettingsTransferProtocol(
-		params: ObsidianProtocolData,
-	): Promise<void> {
-		const data = params.d ?? params.data;
-		if (typeof data !== "string") {
-			notifyError("settings transfer data is missing.");
-			return;
-		}
-		try {
-			const imported = await this.importSettingsTransfer(data);
-			if (imported) notifyInfo("settings imported.");
-		} catch (err) {
-			notifyError("settings transfer failed", err);
-		}
-	}
-
-	isRealtimeConnected(): boolean {
-		return this.realtime?.isConnected() ?? false;
-	}
-
-	subscribeRealtimeStatus(fn: (connected: boolean) => void): () => void {
-		if (!this.realtime) return () => undefined;
-		return this.realtime.subscribe(fn);
-	}
-
-	getRealtimeDevices(): readonly RealtimePresenceDevice[] {
-		return this.realtime?.getDevices() ?? [];
-	}
-
-	subscribeRealtimeDevices(
-		fn: (devices: readonly RealtimePresenceDevice[]) => void,
-	): () => void {
-		if (!this.realtime) return () => undefined;
-		return this.realtime.subscribeDevices(fn);
-	}
-
-	/** Start or restart the realtime WebSocket connection based on current settings. */
-	initRealtime(): void {
-		this.realtime?.restart();
 	}
 }

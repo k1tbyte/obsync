@@ -1,72 +1,24 @@
-import { diff3Merge, mergeDiff3 } from "node-diff3";
 import type { DataAdapter } from "obsidian";
-
-import type { Conflict } from "../types";
-import { writeBinary } from "../vault/io";
 import {
 	loadLocalText,
 	loadRemoteText,
 	type RemoteFetchOptions,
-	textToBytes,
 } from "./content";
-
-const LOCAL_LABEL = "Local";
-const BASE_LABEL = "Base";
-const REMOTE_LABEL = "Remote";
-
-/** Matches any git-style conflict marker at the start of a line. */
-const CONFLICT_MARKER_RE = /^(<{7}|\|{7}|={7}|>{7})/m;
-
-export interface MergedConflict {
-	/** Three-way merged text with git-style markers around real conflicts. */
-	text: string;
-	/** True when at least one region could not be merged automatically. */
-	hasConflicts: boolean;
-}
+import { buildMergeSession, countUnresolved } from "./merge-model";
+import type { Conflict } from "./types";
 
 /**
- * Produces an editable three-way merge buffer. Non-conflicting changes from
- * both sides are merged automatically; genuine conflicts are wrapped in
- * `<<<<<<< Local / ||||||| Base / ======= / >>>>>>> Remote` markers for the
- * user to resolve by hand.
- */
-export function buildMergedConflict(
-	base: string,
-	local: string,
-	remote: string,
-): MergedConflict {
-	const result = mergeDiff3(
-		local.split("\n"),
-		base.split("\n"),
-		remote.split("\n"),
-		{
-			excludeFalseConflicts: true,
-			label: { a: LOCAL_LABEL, o: BASE_LABEL, b: REMOTE_LABEL },
-		},
-	);
-	return { text: result.result.join("\n"), hasConflicts: result.conflict };
-}
-
-/** True if the text still contains an unresolved conflict marker. */
-export function hasUnresolvedMarkers(text: string): boolean {
-	return CONFLICT_MARKER_RE.test(text);
-}
-
-/**
- * Attempts a clean three-way merge of one conflict and writes the result to
- * disk. Returns false — leaving the file untouched — when a side is binary,
- * missing, or has no common ancestor, or when any region is a real conflict
- * that a human has to resolve.
- *
- * Callers should gate on `isTextMergeCandidate` first so an oversized or
- * known-binary path is rejected before anything is downloaded.
+ * Attempts clean three-way merge, returning text or null. Returns null - leaving
+ * file untouched - when a side is binary, missing, has no ancestor, or has a
+ * real conflict. Caller must write result.
+ * Callers should gate on `isTextMergeCandidate` to avoid unnecessary downloads.
  */
 export async function tryAutoMergeConflict(
 	deps: RemoteFetchOptions & { adapter: DataAdapter },
 	conflict: Conflict,
-): Promise<boolean> {
+): Promise<string | null> {
 	if (!conflict.baselineHash || !conflict.localHash || !conflict.remoteHash) {
-		return false;
+		return null;
 	}
 	const [baseText, remoteText, localText] = await Promise.all([
 		loadRemoteText(deps, conflict.baselineHash),
@@ -74,23 +26,15 @@ export async function tryAutoMergeConflict(
 		loadLocalText(deps.adapter, conflict.path),
 	]);
 	if (baseText === null || remoteText === null || localText === null) {
-		return false;
+		return null;
 	}
-	const regions = diff3Merge(
-		toLines(localText),
-		toLines(baseText),
-		toLines(remoteText),
-	);
-	if (regions.some((region) => "conflict" in region)) return false;
-	const merged = regions
-		.flatMap((region) => ("ok" in region ? region.ok : []))
-		.join("\n");
-	await writeBinary(deps.adapter, conflict.path, textToBytes(merged));
-	return true;
+	// The same regions the merge editor shows, so a file it calls clean opens without conflicts.
+	const { text, changes } = buildMergeSession(baseText, localText, remoteText);
+	if (countUnresolved(changes) > 0) return null;
+	return text.split("\n").join(eolOf(localText));
 }
 
-/** Splits text into lines after normalising CRLF so a mixed-EOL pair does not
- * produce a spurious whole-file diff in the three-way merge. */
-function toLines(value: string): string[] {
-	return value.replace(/\r\n/g, "\n").split("\n");
+/** The merge compares on LF, so the file's own endings have to be put back. */
+export function eolOf(value: string): string {
+	return value.includes("\r\n") ? "\r\n" : "\n";
 }

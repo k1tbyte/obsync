@@ -1,7 +1,7 @@
-import type { Plugin } from "obsidian";
+import type { App, Plugin } from "obsidian";
 
-import { SOURCE_CONTROL_VIEW_TYPE } from "../constants";
-import type { SyncController, SyncStatusSnapshot } from "../sync/controller";
+import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
+import type { SyncController, SyncStatusSnapshot } from "@/sync/controller";
 import { openSourceControlView } from "./source-control-view";
 
 export interface RealtimeStatusHandle {
@@ -14,12 +14,18 @@ export function registerRibbon(
 	controller: SyncController,
 	realtimeStatus: RealtimeStatusHandle,
 ): void {
+	// Through a holder rather than `plugin` directly: the click listener rides on
+	// a DOM element other plugins keep in their own event maps after unload, and
+	// whatever its closure captures is kept with it.
+	const host: { app: App | null } = { app: plugin.app };
+	plugin.register(() => {
+		host.app = null;
+	});
 	const icon = plugin.addRibbonIcon("refresh-cw", "Obsync", () => {
-		void openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+		if (host.app)
+			void openSourceControlView(host.app, SOURCE_CONTROL_VIEW_TYPE);
 	});
 	icon.addClass("obsync-ribbon-icon");
-
-	const dot = icon.createSpan({ cls: "obsync-relay-dot" });
 
 	const apply = (snapshot: SyncStatusSnapshot): void => {
 		const pending = snapshot.pendingLocal + snapshot.pendingRemote;
@@ -29,8 +35,12 @@ export function registerRibbon(
 		icon.setAttr("aria-label", buildLabel(snapshot));
 	};
 
+	// A class on the button, drawn by CSS. Obsidian's `setIcon` takes the first
+	// child for the icon and appends a new one after removing it, so an element
+	// of ours sitting beside the icon makes a second call throw our element away
+	// and leave two icons behind - which is what a ribbon re-skin does.
 	const applyRelay = (connected: boolean): void => {
-		dot.toggleClass("is-connected", connected);
+		icon.toggleClass("is-relay-connected", connected);
 	};
 
 	apply(controller.getSnapshot());

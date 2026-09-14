@@ -1,6 +1,7 @@
 export { DiffView } from "./diff-view";
 export { registerFileContextIndicators } from "./file-context-indicators";
 export { registerFileExplorerIndicators } from "./file-explorer-indicators";
+export { addIgnoreMenuItem } from "./ignore-action";
 export type { IndicatorHandle } from "./indicator-handle";
 export {
 	deepCleanOrphanedObjects,
@@ -12,16 +13,13 @@ export {
 	askNewPassphrase,
 	askPassphrase,
 	askSettingsTransferInput,
+	brokerAdmin,
+	CreateShareModal,
 	confirmRemoteReset,
 	confirmSettingsTransferImport,
-	PassphraseModal,
-	RemoteResetModal,
-	type RemoteResetTarget,
-	type ReportActions,
-	SettingsTransferConfirmModal,
-	SettingsTransferExportModal,
-	SettingsTransferImportModal,
-	SyncReportModal,
+	JoinShareModal,
+	openPromiseModal,
+	ShareInviteModal,
 	showSettingsTransferExport,
 } from "./modals";
 export {
@@ -31,7 +29,8 @@ export {
 	runWithNotice,
 } from "./notices";
 export { openInEditor, revealInFileExplorer } from "./obsidian-helpers";
-export { type RealtimeStatusHandle, registerRibbon } from "./ribbon";
+export { addPushMenuItem } from "./push-action";
+export { registerRibbon } from "./ribbon";
 export {
 	confirmAdoptNewVault,
 	confirmBatchResolve,
@@ -40,6 +39,7 @@ export {
 } from "./source-control";
 export {
 	openDiffView,
+	openSourceControlDeleted,
 	openSourceControlHistory,
 	openSourceControlView,
 	SourceControlView,

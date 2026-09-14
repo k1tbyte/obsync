@@ -1,7 +1,7 @@
 import { Modal, Setting } from "obsidian";
 
-import type ObsyncPlugin from "../../main";
-import { activeStorage, isStorageConfigured } from "../../settings/model";
+import type { PluginHost } from "@/plugin/host";
+import { isShareStorageConfigured, shareStorage } from "@/settings/model";
 import {
 	assertShareableStorage,
 	type BrokerAdmin,
@@ -15,10 +15,10 @@ import {
 	readShareInvite,
 	type SharedFolderConfig,
 	shareNameToFolder,
-} from "../../share";
-import { notifyError, notifyInfo } from "../notices";
+} from "@/share";
+import { notifyError, notifyInfo } from "@/ui/notices";
 
-export function brokerAdmin(plugin: ObsyncPlugin): BrokerAdmin {
+export function brokerAdmin(plugin: PluginHost): BrokerAdmin {
 	return {
 		url: plugin.settings.shareBrokerUrl,
 		adminSecret: plugin.settings.shareBrokerAdminSecret,
@@ -26,7 +26,7 @@ export function brokerAdmin(plugin: ObsyncPlugin): BrokerAdmin {
 }
 
 /** Returns the share whose root equals or nests the given root, if any. */
-export function findShareOverlap(
+function findShareOverlap(
 	shares: ReadonlyArray<SharedFolderConfig>,
 	root: string,
 ): SharedFolderConfig | undefined {
@@ -42,13 +42,14 @@ export function findShareOverlap(
 }
 
 export class CreateShareModal extends Modal {
+	private submitting = false;
 	private folder: string;
 	private name = "";
 	private relayUrl: string;
 	private relayToken: string;
 
 	constructor(
-		private readonly plugin: ObsyncPlugin,
+		private readonly plugin: PluginHost,
 		folderPath?: string,
 	) {
 		super(plugin.app);
@@ -124,6 +125,9 @@ export class CreateShareModal extends Modal {
 	}
 
 	private async submit(): Promise<void> {
+		// Prevent double-click from minting two keys and calling broker twice.
+		if (this.submitting) return;
+		this.submitting = true;
 		try {
 			const root = normalizeShareRoot(this.folder);
 			if (!root) throw new Error("Enter a folder to share.");
@@ -131,10 +135,12 @@ export class CreateShareModal extends Modal {
 			if (stat?.type !== "folder") {
 				throw new Error(`"${root}" is not a folder in this vault.`);
 			}
-			if (!isStorageConfigured(this.plugin.settings)) {
-				throw new Error("Configure a storage backend first.");
+			assertShareableStorage(shareStorage(this.plugin.settings));
+			if (!isShareStorageConfigured(this.plugin.settings)) {
+				throw new Error(
+					"Fill in the share storage credentials under Settings → Obsync → Shared folders first.",
+				);
 			}
-			assertShareableStorage(activeStorage(this.plugin.settings));
 			if (!isBrokerConfigured(brokerAdmin(this.plugin))) {
 				throw new Error(
 					"Set the share broker URL and admin secret under Settings → Obsync → Shared folders first.",
@@ -152,7 +158,7 @@ export class CreateShareModal extends Modal {
 			const share = createSharedFolderConfig({
 				localRoot: root,
 				name: this.name,
-				baseStorage: activeStorage(this.plugin.settings),
+				baseStorage: shareStorage(this.plugin.settings),
 				relayUrl: this.relayUrl,
 				relayToken: this.relayToken,
 			});
@@ -162,6 +168,8 @@ export class CreateShareModal extends Modal {
 			new ShareInviteModal(this.plugin, share).open();
 		} catch (err) {
 			notifyError("Could not create share", err);
+		} finally {
+			this.submitting = false;
 		}
 	}
 }
@@ -173,7 +181,7 @@ export class ShareInviteModal extends Modal {
 	private resultEl: HTMLElement | null = null;
 
 	constructor(
-		private readonly plugin: ObsyncPlugin,
+		private readonly plugin: PluginHost,
 		private readonly share: SharedFolderConfig,
 	) {
 		super(plugin.app);
@@ -287,7 +295,7 @@ export class JoinShareModal extends Modal {
 	private folder = "";
 
 	constructor(
-		private readonly plugin: ObsyncPlugin,
+		private readonly plugin: PluginHost,
 		prefillLink?: string,
 	) {
 		super(plugin.app);

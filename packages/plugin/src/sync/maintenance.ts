@@ -1,20 +1,18 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { decryptBytes, type EncryptionKey, sha256Hex } from "@/crypto";
+import type { StorageAdapter } from "@/storage/types";
+import { REMOTE_OBJECTS_PREFIX, REMOTE_PINS_PREFIX } from "@/sync/constants";
+import { runWithConcurrency } from "@/utils/concurrency";
 import {
-	DEFAULT_CONCURRENCY,
-	REMOTE_OBJECTS_PREFIX,
-	REMOTE_SNAPSHOT_INDEX_KEY,
-	REMOTE_SNAPSHOTS_PREFIX,
-} from "../constants";
-import { decryptBytes, type EncryptionKey, sha256Hex } from "../crypto";
-import type { StorageAdapter } from "../storage/types";
-import type { Manifest } from "../types";
-import { runWithConcurrency } from "../utils/concurrency";
-import { collectHashes } from "./history/gc";
-import {
-	fetchArchivedManifest,
-	readSnapshotIndex,
-	snapshotKey,
-} from "./history/store";
+	collectChangeHashes,
+	collectHashes,
+	type HistoryLog,
+	pinKey,
+	readHistoryLog,
+	readPinManifest,
+} from "./history";
 import { fetchRemoteManifest, objectKey } from "./manifest";
+import type { Manifest } from "./types";
 
 export interface MaintenanceOptions {
 	concurrency?: number;
@@ -29,30 +27,52 @@ export interface VerifyResult {
 
 export interface CleanResult {
 	deletedObjects: number;
-	deletedSnapshots: number;
+	deletedPins: number;
 }
 
-/** Loads HEAD + every archived snapshot manifest reachable from the index. */
-async function reachableManifests(
+interface ReachableSet {
+	hashes: Set<string>;
+	head: Manifest | null;
+	log: HistoryLog;
+	/** False when a pinned manifest could not be read, so the live set is unknown. */
+	complete: boolean;
+}
+
+/** Every hash reachable from HEAD, the retained change records, and the pins. */
+async function reachableHashes(
 	storage: StorageAdapter,
 	key: EncryptionKey,
-	concurrency: number,
-): Promise<Manifest[]> {
-	const manifests: Manifest[] = [];
-	const head = await fetchRemoteManifest(storage, key);
-	if (head) manifests.push(head);
-	const index = await readSnapshotIndex(storage, key);
-	await runWithConcurrency(index.entries, concurrency, async (entry) => {
-		const m = await fetchArchivedManifest(storage, key, entry.snapshotId);
-		if (m) manifests.push(m);
-	});
-	return manifests;
+): Promise<ReachableSet> {
+	const [head, log] = await Promise.all([
+		fetchRemoteManifest(storage, key),
+		readHistoryLog(storage, key),
+	]);
+	const hashes = new Set<string>();
+	if (head) collectHashes(head, hashes);
+	let complete = true;
+	for (const entry of log.snapshots) {
+		const changes = log.changes[entry.id];
+		if (!changes) {
+			complete = false;
+			continue;
+		}
+		collectChangeHashes(changes, hashes);
+	}
+	for (const entry of log.snapshots) {
+		if (!entry.pinned) continue;
+		const manifest = await readPinManifest(storage, key, entry.id);
+		if (!manifest) {
+			complete = false;
+			continue;
+		}
+		collectHashes(manifest, hashes);
+	}
+	return { hashes, head, log, complete };
 }
 
 /**
- * Checks every content object referenced by HEAD or any archived snapshot is
- * present (and, when `deep`, decrypts and re-hashes it). Catches silent backend
- * corruption / missing objects.
+ * Checks referenced content objects are present (and optionally decrypts/hashes via `deep`).
+ * Catches missing objects or silent backend corruption.
  */
 export async function verifyRemote(
 	storage: StorageAdapter,
@@ -61,11 +81,14 @@ export async function verifyRemote(
 	options: MaintenanceOptions = {},
 ): Promise<VerifyResult> {
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const manifests = await reachableManifests(storage, key, concurrency);
-	const hashes = new Set<string>();
-	for (const m of manifests) collectHashes(m, hashes);
+	const reachable = await reachableHashes(storage, key);
+	if (!reachable.complete) {
+		throw new Error(
+			"Some history records could not be read, so the check would be incomplete. Try again later.",
+		);
+	}
 
-	const list = [...hashes];
+	const list = [...reachable.hashes];
 	const missing: string[] = [];
 	const corrupt: string[] = [];
 	let done = 0;
@@ -87,43 +110,67 @@ export async function verifyRemote(
 }
 
 /**
- * Full list-sweep counterpart to the manifest-delta GC: removes object blobs
- * and archived snapshots not reachable from HEAD ∪ the snapshot index. Requires
- * a backend that can list (same constraint as reset).
+ * Removes objects and pin manifests not reachable from HEAD or the history log.
+ * Requires a backend that can list.
  */
 export async function deepCleanOrphans(
 	storage: StorageAdapter,
 	key: EncryptionKey,
 	options: MaintenanceOptions = {},
 ): Promise<CleanResult> {
-	if (!storage.capabilities.canList) {
+	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
+	const reachable = await reachableHashes(storage, key);
+	// An unreadable record means the live set is unknown, so we cannot safely delete.
+	if (!reachable.complete) {
 		throw new Error(
-			"This storage backend does not support listing; deep-clean is unavailable.",
+			"Some history records could not be read, so orphans cannot be identified safely. Try again later.",
 		);
 	}
-	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	const manifests = await reachableManifests(storage, key, concurrency);
-	const liveHashes = new Set<string>();
-	for (const m of manifests) collectHashes(m, liveHashes);
+	// Without head, objects from an in-progress upload would look like orphans.
+	if (!reachable.head) {
+		throw new Error(
+			"No manifest is published on this remote, so nothing can be identified as an orphan.",
+		);
+	}
 
-	const index = await readSnapshotIndex(storage, key);
-	const liveSnapshotKeys = new Set<string>([
-		REMOTE_SNAPSHOT_INDEX_KEY,
-		...index.entries.map((e) => snapshotKey(e.snapshotId)),
+	const livePinKeys = new Set(
+		reachable.log.snapshots
+			.filter((entry) => entry.pinned)
+			.map((entry) => pinKey(entry.id)),
+	);
+
+	const [objectKeys, pinKeys] = await Promise.all([
+		storage.list(REMOTE_OBJECTS_PREFIX),
+		storage.list(REMOTE_PINS_PREFIX),
 	]);
 
-	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
-	const liveObjectKeys = new Set([...liveHashes].map((h) => objectKey(h)));
+	// If another device published during listing, its new objects appear as orphans. Bail.
+	const headNow = await fetchRemoteManifest(storage, key);
+	if ((headNow?.snapshotId ?? null) !== (reachable.head?.snapshotId ?? null)) {
+		throw new Error(
+			"Another device pushed while cleaning; nothing was deleted. Try again.",
+		);
+	}
+	// Pinning does not move HEAD, so the head check alone would let a pin created
+	// during the listing look like an orphan.
+	const logNow = await readHistoryLog(storage, key);
+	if (pinnedSignature(logNow) !== pinnedSignature(reachable.log)) {
+		throw new Error(
+			"Another device changed a pinned snapshot while cleaning; nothing was deleted. Try again.",
+		);
+	}
+
+	const liveObjectKeys = new Set(
+		[...reachable.hashes].map((hash) => objectKey(hash)),
+	);
 	const orphanObjects = objectKeys.filter(
-		(k) => k.startsWith(REMOTE_OBJECTS_PREFIX) && !liveObjectKeys.has(k),
+		(storageKey) => !liveObjectKeys.has(storageKey),
+	);
+	const orphanPins = pinKeys.filter(
+		(storageKey) => !livePinKeys.has(storageKey),
 	);
 
-	const snapshotKeys = await storage.list(REMOTE_SNAPSHOTS_PREFIX);
-	const orphanSnapshots = snapshotKeys.filter(
-		(k) => k.startsWith(REMOTE_SNAPSHOTS_PREFIX) && !liveSnapshotKeys.has(k),
-	);
-
-	const targets = [...orphanObjects, ...orphanSnapshots];
+	const targets = [...orphanObjects, ...orphanPins];
 	let done = 0;
 	await runWithConcurrency(targets, concurrency, async (storageKey) => {
 		await storage.delete(storageKey);
@@ -131,6 +178,23 @@ export async function deepCleanOrphans(
 	});
 	return {
 		deletedObjects: orphanObjects.length,
-		deletedSnapshots: orphanSnapshots.length,
+		deletedPins: orphanPins.length,
 	};
+}
+
+function pinnedSignature(log: HistoryLog): string {
+	return log.snapshots
+		.filter((entry) => entry.pinned)
+		.map((entry) => entry.id)
+		.sort()
+		.join(",");
+}
+
+/** One sentence for the log and the notice, so both stay in step. */
+export function cleanSummary(result: CleanResult): string {
+	const parts = [
+		`${result.deletedObjects} object(s)`,
+		`${result.deletedPins} pinned snapshot(s)`,
+	];
+	return `removed ${parts.join(", ")}.`;
 }

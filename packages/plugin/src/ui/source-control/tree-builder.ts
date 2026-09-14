@@ -1,4 +1,4 @@
-import type { FileRow, MutableTreeNode, TreeNode } from "./types";
+import type { FileRow, MutableTreeNode, TreeNode, VisualRow } from "./types";
 
 export function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
 	const root = createFolderNode("", "");
@@ -29,4 +29,36 @@ export function buildTree(rows: ReadonlyArray<FileRow>): TreeNode {
 
 function createFolderNode(name: string, fullPath: string): MutableTreeNode {
 	return { name, fullPath, children: [], folders: new Map() };
+}
+
+/**
+ * Walks the tree in display order, skipping what a collapsed folder hides. The
+ * old markup built every descendant and left CSS to hide it, so collapsing a
+ * folder saved nothing at all.
+ */
+export function flattenTree(
+	node: TreeNode,
+	isExpanded: (folderPath: string) => boolean,
+	depth = 0,
+	out: VisualRow[] = [],
+): VisualRow[] {
+	for (const child of node.children) {
+		if (child.row) {
+			out.push({ depth, name: child.name, row: child.row });
+			continue;
+		}
+		const collapsed = !isExpanded(child.fullPath);
+		out.push({
+			depth,
+			name: child.name,
+			folderPath: child.fullPath,
+			collapsed,
+		});
+		if (!collapsed) flattenTree(child, isExpanded, depth + 1, out);
+	}
+	return out;
+}
+
+export function flattenRows(rows: ReadonlyArray<FileRow>): VisualRow[] {
+	return rows.map((row) => ({ depth: 0, name: row.path, row }));
 }

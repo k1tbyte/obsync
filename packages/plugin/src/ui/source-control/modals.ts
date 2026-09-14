@@ -1,6 +1,7 @@
 import { type App, Modal } from "obsidian";
 
-import { EConflictStrategy } from "../../sync/controller";
+import { EConflictStrategy } from "@/sync/controller";
+import { openPromiseModal } from "@/ui/modals/promise-modal";
 
 export interface ConfirmModalOptions {
 	app: App;
@@ -14,14 +15,11 @@ export interface ConfirmModalOptions {
 export function openConfirmModal(
 	options: ConfirmModalOptions,
 ): Promise<boolean> {
-	return new Promise((resolve) => {
+	return openPromiseModal<boolean>((answer) => {
 		const modal = new Modal(options.app);
-		let settled = false;
 		const finish = (confirmed: boolean): void => {
-			if (settled) return;
-			settled = true;
+			answer(confirmed);
 			modal.close();
-			resolve(confirmed);
 		};
 		modal.titleEl.setText(options.title);
 		for (const paragraph of options.body) {
@@ -35,9 +33,8 @@ export function openConfirmModal(
 		const okBtn = buttons.createEl("button", { text: options.confirmLabel });
 		okBtn.addClass(options.confirmClass ?? "mod-cta");
 		okBtn.addEventListener("click", () => finish(true));
-		modal.onClose = (): void => finish(false);
-		modal.open();
-	});
+		return modal;
+	}, false);
 }
 
 export function confirmBatchResolve(
@@ -82,4 +79,82 @@ export function showIgnoredFiles(app: App, paths: ReadonlyArray<string>): void {
 		list.createEl("li", { cls: "obsync-file-name", text: p });
 	}
 	modal.open();
+}
+
+/** Revert discards local edits that were never pushed, so it is confirmed. */
+export function confirmRevert(
+	app: App,
+	paths: ReadonlyArray<string>,
+): Promise<boolean> {
+	const first = paths.slice(0, 5);
+	return openConfirmModal({
+		app,
+		title:
+			paths.length === 1
+				? `Revert "${paths[0]}"?`
+				: `Revert ${paths.length} file(s)?`,
+		body: [
+			"Local changes to these files are replaced with the last synced version. This cannot be undone.",
+			...first,
+			...(paths.length > first.length
+				? [`… and ${paths.length - first.length} more`]
+				: []),
+		],
+		confirmLabel: "Revert",
+		cancelLabel: "Keep my changes",
+		confirmClass: "mod-warning",
+	});
+}
+
+export interface PromptModalOptions {
+	app: App;
+	title: string;
+	description?: string;
+	initialValue: string;
+	confirmLabel: string;
+	/** Announced for the field; the description alone is not tied to the input. */
+	label: string;
+	/** Lets an empty answer through, for fields whose whole point is clearing. */
+	allowEmpty?: boolean;
+}
+
+/** Answers with the trimmed text, or null when dismissed (or left empty). */
+export function openPromptModal(
+	options: PromptModalOptions,
+): Promise<string | null> {
+	return openPromiseModal<string | null>((answer) => {
+		const modal = new Modal(options.app);
+		const finish = (value: string | null): void => {
+			answer(value);
+			modal.close();
+		};
+		modal.titleEl.setText(options.title);
+		if (options.description) {
+			modal.contentEl.createEl("p", { text: options.description });
+		}
+		const input = modal.contentEl.createEl("input", {
+			type: "text",
+			cls: "obsync-prompt-input",
+		});
+		input.setAttr("aria-label", options.label);
+		input.value = options.initialValue;
+		const submit = (): void => {
+			const value = input.value.trim();
+			finish(value || (options.allowEmpty ? "" : null));
+		};
+		input.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.key !== "Enter") return;
+			event.preventDefault();
+			submit();
+		});
+		const buttons = modal.contentEl.createDiv({ cls: "obsync-modal-buttons" });
+		const cancelBtn = buttons.createEl("button", { text: "Cancel" });
+		cancelBtn.addEventListener("click", () => finish(null));
+		const okBtn = buttons.createEl("button", { text: options.confirmLabel });
+		okBtn.addClass("mod-cta");
+		okBtn.addEventListener("click", submit);
+		// Runs after Obsidian attaches the modal, so the caret lands in the field.
+		window.setTimeout(() => input.focus(), 0);
+		return modal;
+	}, null);
 }

@@ -1,9 +1,7 @@
 import type { DataAdapter } from "obsidian";
-
-import { FORCE_DIFF_MAX_BYTES, HUNK_TEXT_MAX_BYTES } from "../constants";
-import type { EncryptionKey } from "../crypto";
-import type { ObjectStorage } from "../storage/types";
-import type { Conflict, EChangeType, FileChange, Manifest } from "../types";
+import { type EncryptionKey, sha256Hex } from "@/crypto";
+import type { ObjectStorage } from "@/storage/types";
+import { FORCE_DIFF_MAX_BYTES, HUNK_TEXT_MAX_BYTES } from "@/sync/constants";
 import {
 	bytesToText,
 	hasBinaryBytes,
@@ -11,15 +9,19 @@ import {
 	loadBaselineText,
 	loadLocalBytes,
 	loadRemoteBytes,
+	textToBytes,
 } from "./content";
 import { type ComputedHunks, computeHunks } from "./hunks";
+import type { Conflict, EChangeType, FileChange, Manifest } from "./types";
 
-export enum EDiffDirection {
-	Local = "local",
-	Remote = "remote",
-	Conflict = "conflict",
-	History = "history",
-}
+export const EDiffDirection = {
+	Local: "local",
+	Remote: "remote",
+	Conflict: "conflict",
+	History: "history",
+} as const;
+export type EDiffDirection =
+	(typeof EDiffDirection)[keyof typeof EDiffDirection];
 
 export interface FileDiffModel {
 	path: string;
@@ -32,9 +34,20 @@ export interface FileDiffModel {
 	leftLabel: string;
 	rightLabel: string;
 	isBinary: boolean;
-	/** True when binary purely because a side exceeds the diff size cap and an
-	 * on-demand ("show anyway") diff would succeed. */
+	/**
+	 * sha256 of each side. Hunk ops verify them before applying so a concurrently
+	 * edited file cannot be misaddressed.
+	 */
+	leftHash: string;
+	rightHash: string;
+	/** True when binary purely due to diff size cap; a force-text diff would succeed. */
 	forceTextAvailable: boolean;
+	/**
+	 * Whether each side exists at all. An absent side reads as empty text, which
+	 * is indistinguishable from an empty file without this.
+	 */
+	leftPresent: boolean;
+	rightPresent: boolean;
 	leftSize: number;
 	rightSize: number;
 }
@@ -53,14 +66,13 @@ interface DiffSide {
 	binary: boolean;
 	/** Binary only due to the size cap (no NUL, within force ceiling). */
 	capped: boolean;
+	/** False when the file is not there, as opposed to there and empty. */
+	present: boolean;
 }
 
 /**
- * One side of a diff, described before any content is read. `size` is `null`
- * when the side is absent and `undefined` when it cannot be known without
- * loading (e.g. a history version referenced only by hash). `load()` is only
- * invoked once the size/extension checks decide the content is actually
- * needed, so opening a diff for a large or binary file never pulls its bytes
+ * Diff side without reading content. `size` is `null` if absent, `undefined`
+ * if unknown without loading. Opens large or binary diffs without pulling bytes
  * into memory.
  */
 interface SideSource {
@@ -74,18 +86,18 @@ const ABSENT_SIDE: DiffSide = {
 	size: 0,
 	binary: false,
 	capped: false,
+	present: false,
 };
 
 function binarySide(size: number, capped: boolean): DiffSide {
-	return { text: "", size, binary: true, capped };
+	return { text: "", size, binary: true, capped, present: true };
 }
 
 /**
- * Decides how one side of a diff is presented without loading content unless
- * it is needed. Absent side → empty/non-binary. Known binary extension →
- * binary, not forceable, content never read. Oversized → binary unless
- * `forceText` and within {@link FORCE_DIFF_MAX_BYTES}. Only sides that pass
- * these gates are read and NUL-sniffed.
+ * Resolves diff side presentation without unnecessary loading. Absent is
+ * empty/non-binary. Known extensions are binary, not forceable, content never
+ * read. Oversized is binary unless forceText and within FORCE_DIFF_MAX_BYTES.
+ * Only sides passing these gates are NUL-sniffed.
  */
 async function resolveSide(
 	source: SideSource,
@@ -107,7 +119,6 @@ async function resolveSide(
 	return decodeLoadedSide(bytes, forceText);
 }
 
-/** Size fallback for a known-binary side whose size is not known up front. */
 async function sizeByLoad(source: SideSource): Promise<number> {
 	const bytes = await source.load();
 	return bytes?.length ?? 0;
@@ -116,11 +127,17 @@ async function sizeByLoad(source: SideSource): Promise<number> {
 function decodeLoadedSide(bytes: Uint8Array, forceText: boolean): DiffSide {
 	const size = bytes.length;
 	if (hasBinaryBytes(bytes)) return binarySide(size, false);
-	if (size <= HUNK_TEXT_MAX_BYTES) {
-		return { text: bytesToText(bytes), size, binary: false, capped: false };
-	}
-	if (forceText && size <= FORCE_DIFF_MAX_BYTES) {
-		return { text: bytesToText(bytes), size, binary: false, capped: false };
+	if (
+		size <= HUNK_TEXT_MAX_BYTES ||
+		(forceText && size <= FORCE_DIFF_MAX_BYTES)
+	) {
+		return {
+			text: bytesToText(bytes),
+			size,
+			binary: false,
+			capped: false,
+			present: true,
+		};
 	}
 	return binarySide(size, size <= FORCE_DIFF_MAX_BYTES);
 }
@@ -133,8 +150,7 @@ function localSource(adapter: DataAdapter, path: string): SideSource {
 	};
 }
 
-/** Local side with the size resolved via `stat` so oversized/binary local
- * files are classified without reading them. */
+/** Resolves local size via `stat` to classify oversized/binary files without reading. */
 async function statLocalSource(
 	adapter: DataAdapter,
 	path: string,
@@ -198,15 +214,18 @@ async function assemble(
 		...base,
 		leftText: left.text,
 		rightText: right.text,
-		// A binary diff has no text to compare; skip the hunk computation
-		// entirely instead of diffing two empty strings.
+		// Skips hunk computation for binary diffs.
 		hunks: isBinary
 			? computeHunks("", "")
 			: computeHunks(left.text, right.text),
 		isBinary,
 		forceTextAvailable,
+		leftHash: await sha256Hex(textToBytes(left.text)),
+		rightHash: await sha256Hex(textToBytes(right.text)),
 		leftSize: left.size,
 		rightSize: right.size,
+		leftPresent: left.present,
+		rightPresent: right.present,
 	};
 }
 
@@ -250,32 +269,68 @@ export async function buildRemoteChangeDiff(
 	);
 }
 
+/** A stored version, addressed by content hash. */
+export interface HistoryVersionRef {
+	hash: string;
+	label: string;
+	size?: number;
+}
+
+/** Either a stored version or the file as it stands in the vault right now. */
+export type HistoryDiffSide =
+	| { version: HistoryVersionRef }
+	| { current: true; label?: string };
+
+export interface HistoryDiffRequest {
+	path: string;
+	/** Removed lines come from here. */
+	left: HistoryDiffSide;
+	/** Added lines come from here. */
+	right: HistoryDiffSide;
+	forceText?: boolean;
+}
+
 export async function buildHistoryDiff(
 	deps: Pick<ProjectionDeps, "adapter" | "storage" | "key">,
-	path: string,
-	versionHash: string,
-	versionLabel: string,
-	forceText = false,
-	versionSize?: number,
+	request: HistoryDiffRequest,
 ): Promise<FileDiffModel> {
+	const { path, left, right } = request;
+	const [leftSource, rightSource] = await Promise.all([
+		historySource(deps, path, left),
+		historySource(deps, path, right),
+	]);
 	return assemble(
 		{
 			path,
 			direction: EDiffDirection.History,
 			changeType: "conflict",
-			leftLabel: versionLabel,
-			rightLabel: "Current",
+			leftLabel: sideLabel(left),
+			rightLabel: sideLabel(right),
 			baseText: null,
 		},
-		{
-			path,
-			size: versionSize,
-			load: () =>
-				loadRemoteBytes({ storage: deps.storage, key: deps.key }, versionHash),
-		},
-		await statLocalSource(deps.adapter, path),
-		forceText,
+		leftSource,
+		rightSource,
+		request.forceText ?? false,
 	);
+}
+
+function sideLabel(side: HistoryDiffSide): string {
+	if ("version" in side) return side.version.label;
+	return side.label ?? "Current";
+}
+
+async function historySource(
+	deps: Pick<ProjectionDeps, "adapter" | "storage" | "key">,
+	path: string,
+	side: HistoryDiffSide,
+): Promise<SideSource> {
+	if (!("version" in side)) return statLocalSource(deps.adapter, path);
+	const { hash, size } = side.version;
+	return {
+		path,
+		size,
+		load: () => loadRemoteBytes({ storage: deps.storage, key: deps.key }, hash),
+	};
 }
 
 export async function buildConflictDiff(

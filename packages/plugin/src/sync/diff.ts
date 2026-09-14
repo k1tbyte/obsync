@@ -5,29 +5,50 @@ import {
 	type FileChange,
 	type LocalSnapshot,
 	type Manifest,
-} from "../types";
+} from "./types";
 
 export interface DiffInput {
 	local: LocalSnapshot;
 	remote: Manifest | null;
 	baseline: Manifest | null;
+	/**
+	 * Which remote and baseline paths are in scope. Applied here rather than by
+	 * copying both manifests first, which at 20k files is two records rebuilt
+	 * per compare. The local snapshot is already scoped by the scan, and the
+	 * scan's predicate is the stricter of the two, so a local path is always in
+	 * scope here too.
+	 */
+	includes?: (path: string) => boolean;
 }
 
 export function diff(input: DiffInput): DiffResult {
 	const localFiles = input.local.files;
+	// Unreadable is not absent: unreadable files are skipped, not treated as
+	// deleted, avoiding accidental pushes.
+	const unreadable = new Set(input.local.skipped.map((entry) => entry.path));
+	const unreadableDirs = input.local.unreadableDirs;
 	const remoteFiles = input.remote?.files ?? {};
 	const baselineFiles = input.baseline?.files ?? {};
 
+	const includes = input.includes;
 	const paths = new Set<string>();
 	for (const p of Object.keys(localFiles)) paths.add(p);
-	for (const p of Object.keys(remoteFiles)) paths.add(p);
-	for (const p of Object.keys(baselineFiles)) paths.add(p);
+	for (const p of Object.keys(remoteFiles)) {
+		if (!includes || includes(p)) paths.add(p);
+	}
+	for (const p of Object.keys(baselineFiles)) {
+		if (!includes || includes(p)) paths.add(p);
+	}
 
 	const localChanges: FileChange[] = [];
 	const remoteChanges: FileChange[] = [];
 	const conflicts: Conflict[] = [];
+	const converged: string[] = [];
 
 	for (const path of paths) {
+		if (unreadable.has(path) || isUnderUnreadableDir(path, unreadableDirs)) {
+			continue;
+		}
 		const local = localFiles[path]?.hash ?? null;
 		const remote = remoteFiles[path]?.hash ?? null;
 		const baseline = baselineFiles[path]?.hash ?? null;
@@ -38,7 +59,10 @@ export function diff(input: DiffInput): DiffResult {
 		if (!localChanged && !remoteChanged) continue;
 
 		if (localChanged && remoteChanged) {
-			if (local === remote) continue;
+			if (local === remote) {
+				converged.push(path);
+				continue;
+			}
 			conflicts.push({
 				path,
 				localHash: local ?? "",
@@ -68,7 +92,7 @@ export function diff(input: DiffInput): DiffResult {
 	const remoteMoved =
 		(input.baseline?.snapshotId ?? null) !== (input.remote?.snapshotId ?? null);
 
-	return { localChanges, remoteChanges, conflicts, remoteMoved };
+	return { localChanges, remoteChanges, conflicts, converged, remoteMoved };
 }
 
 function classify(
@@ -81,4 +105,15 @@ function classify(
 	if (current === null)
 		return remote ? EChangeType.RemoteDelete : EChangeType.LocalDelete;
 	return remote ? EChangeType.RemoteModify : EChangeType.LocalModify;
+}
+
+/** Empty entry means vault root: nothing is known. */
+function isUnderUnreadableDir(
+	path: string,
+	dirs: ReadonlyArray<string>,
+): boolean {
+	for (const dir of dirs) {
+		if (dir === "" || path.startsWith(`${dir}/`)) return true;
+	}
+	return false;
 }

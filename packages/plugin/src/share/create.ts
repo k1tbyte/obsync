@@ -1,23 +1,18 @@
-import { SHARE_KEY_BYTES } from "../constants";
-import { randomBytes, randomId } from "../crypto";
+import { randomBytes, randomId } from "@/crypto";
 import {
 	EStorageBackend,
 	type S3StorageConfig,
 	type StorageAdapterConfig,
-} from "../storage/config";
-import { bytesToBase64Url } from "../utils/base64";
+} from "@/storage/config";
+import { bytesToBase64Url } from "@/utils/base64";
 import type { ShareInvite } from "./invite";
 import { normalizeShareRoot, type SharedFolderConfig } from "./types";
 
+const SHARE_KEY_BYTES = 32;
+
 /**
- * Builds the config for a brand-new share of a local folder: fresh share id,
- * fresh random content key, and a storage location derived from the given
- * S3 config with a share-specific sub-prefix (so the share's objects never
- * mix with the main vault's).
- *
- * Shares always live on S3-compatible storage, independent of the backend the
- * vault itself uses: the broker hands participants presigned URLs, and only
- * S3 can presign. See {@link assertShareableStorage}.
+ * Builds config for a new share: fresh id, random content key, and a
+ * share-specific storage location isolated from the main vault.
  */
 export function createSharedFolderConfig(input: {
 	localRoot: string;
@@ -41,7 +36,6 @@ export function createSharedFolderConfig(input: {
 	};
 }
 
-/** Builds the local config for a share joined from an invite. */
 export function joinedSharedFolderConfig(
 	invite: ShareInvite,
 	localRoot: string,
@@ -54,12 +48,11 @@ export function joinedSharedFolderConfig(
 		keyB64: invite.keyB64,
 		storage: invite.storage,
 		relayUrl: invite.relayUrl,
-		relayToken: invite.relayToken,
+		relayRoomToken: invite.relayRoomToken,
 		createdAt: Date.now(),
 	};
 }
 
-/** Points an S3 config at a share-specific location under `shares/<id>/`. */
 export function deriveShareStorageConfig(
 	base: StorageAdapterConfig,
 	shareId: string,
@@ -69,24 +62,36 @@ export function deriveShareStorageConfig(
 }
 
 /**
- * Shares need S3-compatible storage. The broker grants participants access by
- * presigning individual object URLs, which WebDAV and Google Drive have no
- * equivalent of — proxying their protocols through the broker would put it in
- * the data path and duplicate both adapters inside the Worker.
+ * Shares need S3-compatible storage. The broker presigns URLs; proxying
+ * other protocols would put the broker in the data path.
  */
 export function assertShareableStorage(
 	config: StorageAdapterConfig,
 ): S3StorageConfig {
 	if (config.kind !== EStorageBackend.S3) {
 		throw new Error(
-			"Shared folders need S3-compatible storage (S3, R2, MinIO). Configure one under Storage, then share again.",
+			"Shared folders need S3-compatible storage (S3, R2, MinIO). Set it under Settings → Obsync → Shared folders → Share storage; your vault can keep syncing to another backend.",
 		);
 	}
 	return config;
 }
 
-export function isShareableStorage(config: StorageAdapterConfig): boolean {
-	return config.kind === EStorageBackend.S3;
+/**
+ * Credentials follow the settings so rotating a key does not strand every live
+ * share. The location does not: re-deriving endpoint, bucket or prefix would
+ * silently point the share at an empty path and orphan the data already there.
+ */
+export function withCurrentCredentials(
+	share: SharedFolderConfig,
+	base: StorageAdapterConfig,
+): StorageAdapterConfig {
+	if (share.storage.kind !== EStorageBackend.S3) return share.storage;
+	if (base.kind !== EStorageBackend.S3) return share.storage;
+	return {
+		...share.storage,
+		accessKeyId: base.accessKeyId,
+		secretAccessKey: base.secretAccessKey,
+	};
 }
 
 function joinPrefix(prefix: string, suffix: string): string {
@@ -94,8 +99,7 @@ function joinPrefix(prefix: string, suffix: string): string {
 	return trimmed ? `${trimmed}/${suffix}` : suffix;
 }
 
-/** Share roots must be real vault folders — never the vault root or anything
- * under a dot-directory (config, trash, git, …). */
+/** Share roots must be real folders - never the vault root or dot-directories. */
 function assertValidShareRoot(root: string): string {
 	const normalized = normalizeShareRoot(root);
 	if (!normalized) throw new Error("Select a folder to share");
@@ -108,15 +112,28 @@ function assertValidShareRoot(root: string): string {
 /** Slug used as the broker-side participant id; re-inviting the same name
  * replaces that person's token. Empty when the name has no usable characters. */
 export function participantIdFromName(name: string): string {
-	return name
+	const slug = name
 		.trim()
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 64);
+	if (slug) return slug;
+	// A name written entirely in non-Latin script slugs to nothing; fall back to
+	// a stable id so those people can still be invited and revoked.
+	const trimmed = name.trim();
+	return trimmed ? `p-${hashName(trimmed)}` : "";
 }
 
-/** Turns a share name into a safe default folder name for joining. */
+function hashName(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < value.length; i++) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash.toString(16).padStart(8, "0");
+}
+
 export function shareNameToFolder(name: string): string {
 	return (
 		name

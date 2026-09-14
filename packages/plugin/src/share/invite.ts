@@ -1,13 +1,18 @@
-import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "../crypto";
-import { getDescriptor } from "../storage";
+import { decryptBytes, deriveKey, encryptBytes, randomBytes } from "@/crypto";
+import {
+	type CompactStorageConfig,
+	compactStorageConfig,
+	storageDefaults,
+} from "@/storage";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
 	type StorageAdapterConfig,
-} from "../storage/config";
-import { base64UrlToBytes, bytesToBase64Url } from "../utils/base64";
-import { deflateBytes, inflateBytes } from "../utils/compress";
-import type { SharedFolderConfig } from "./types";
+} from "@/storage/config";
+import { deriveRoomToken } from "@/sync/realtime";
+import { base64UrlToBytes, bytesToBase64Url } from "@/utils/base64";
+import { deflateBytes, inflateBytes } from "@/utils/compress";
+import { type SharedFolderConfig, shareChannelId } from "./types";
 
 export const SHARE_INVITE_ACTION = "obsync-share";
 const INVITE_VERSION = 1;
@@ -15,37 +20,37 @@ const INVITE_SALT_BYTES = 16;
 const INVITE_PARTS = 4;
 const INVITE_PARAM = "d";
 
-enum EInviteEncoding {
-	Plain = "p",
-	Deflate = "z",
-}
+const EInviteEncoding = {
+	Plain: "p",
+	Deflate: "z",
+} as const;
 
 const STORAGE_BACKENDS = new Set<string>(Object.values(EStorageBackend));
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** What travels inside an invite: everything a device needs to join. */
 export interface ShareInvite {
 	id: string;
 	name: string;
 	keyB64: string;
 	storage: StorageAdapterConfig;
 	relayUrl?: string;
-	relayToken?: string;
+	/** Scoped to this share's room: an invite never carries the deployment
+	 * secret, which would open every other share's room too. */
+	relayRoomToken?: string;
 }
 
 interface InvitePayload {
 	id: string;
 	n: string;
 	k: string;
-	s: Record<string, unknown> & { kind: EStorageBackend };
+	s: CompactStorageConfig;
 	r?: { u: string; t?: string };
 }
 
 /**
  * Encodes a share invite as an encrypted `obsidian://obsync-share?d=…` URL.
- *
- * The payload carries the share's content key plus a broker token — never
+ * The payload carries the share's content key plus a broker token - never
  * storage credentials. The token grants access to this share's prefix only and
  * can be revoked without touching the other participants.
  */
@@ -55,6 +60,11 @@ export async function createShareInviteUrl(
 	brokerStorage: ShareBrokerStorageConfig,
 ): Promise<string> {
 	if (!passphrase) throw new Error("Invite passphrase is empty");
+	// An invite carries a broker token and nothing else. Passing any other
+	// backend here would pack the owner's storage credentials into the link.
+	if (brokerStorage.kind !== EStorageBackend.ShareBroker) {
+		throw new Error("Invites may only carry share-broker storage");
+	}
 	const payload: InvitePayload = {
 		id: share.id,
 		n: share.name,
@@ -63,7 +73,10 @@ export async function createShareInviteUrl(
 	};
 	if (share.relayUrl) {
 		payload.r = { u: share.relayUrl };
-		if (share.relayToken) payload.r.t = share.relayToken;
+		const secret = share.relayToken;
+		if (secret) {
+			payload.r.t = await deriveRoomToken(secret, shareChannelId(share.id));
+		}
 	}
 	const salt = randomBytes(INVITE_SALT_BYTES);
 	const key = await deriveKey(passphrase, salt);
@@ -84,8 +97,6 @@ export async function createShareInviteUrl(
 	return `obsidian://${SHARE_INVITE_ACTION}?${INVITE_PARAM}=${token}`;
 }
 
-/** Decodes and validates an invite URL or bare token. Throws on bad input,
- * wrong passphrase, or a malformed payload. */
 export async function readShareInvite(
 	input: string,
 	passphrase: string,
@@ -135,7 +146,7 @@ export async function readShareInvite(
 		keyB64: payload.k,
 		storage: expandStorageConfig(payload.s),
 		relayUrl: payload.r?.u,
-		relayToken: payload.r?.t,
+		relayRoomToken: payload.r?.t,
 	};
 }
 
@@ -153,19 +164,6 @@ function extractInviteToken(input: string): string {
 }
 
 /** Drops default-valued fields so the token stays QR-sized. */
-function compactStorageConfig(
-	config: StorageAdapterConfig,
-): InvitePayload["s"] {
-	const defaults = storageDefaults(config.kind);
-	const compact: InvitePayload["s"] = { kind: config.kind };
-	for (const [key, value] of Object.entries(config)) {
-		if (key === "kind") continue;
-		if (defaults[key] === value) continue;
-		compact[key] = value;
-	}
-	return compact;
-}
-
 function expandStorageConfig(
 	compact: InvitePayload["s"],
 ): StorageAdapterConfig {
@@ -173,10 +171,6 @@ function expandStorageConfig(
 		...storageDefaults(compact.kind),
 		...compact,
 	} as unknown as StorageAdapterConfig;
-}
-
-function storageDefaults(kind: EStorageBackend): Record<string, unknown> {
-	return getDescriptor(kind).defaults() as unknown as Record<string, unknown>;
 }
 
 function isInvitePayload(value: unknown): value is InvitePayload {

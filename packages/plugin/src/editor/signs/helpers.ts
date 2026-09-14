@@ -1,7 +1,7 @@
 import type { Chunk } from "@codemirror/merge";
-import type { Text } from "@codemirror/state";
+import { Text } from "@codemirror/state";
 
-import { computeHunks } from "@/sync/hunks";
+import { computeHunks, type SyncHunk } from "@/sync/hunks";
 
 export interface PresentedChunk {
 	removedLines: string[];
@@ -9,6 +9,13 @@ export interface PresentedChunk {
 	addedFromLine: number | null;
 	addedToLine: number | null;
 	deletionLine: number;
+}
+
+/**
+ * Baseline must keep the empty last line a trailing newline implies to prevent phantom "added line" diffs at the end.
+ */
+export function toCmText(raw: string): Text {
+	return Text.of(raw.replace(/\r\n?/g, "\n").split("\n"));
 }
 
 export function shouldRedeliverBaseline(
@@ -66,11 +73,16 @@ export function presentChunk(
 	};
 }
 
-export function findSyncHunkIndexForLine(
+/**
+ * The sync hunk a gutter line belongs to. CodeMirror chunks are finer-grained
+ * than `computeHunks` hunks, so the popup must show (and the push must apply)
+ * this one, otherwise a nearby edit rides along unannounced.
+ */
+export function findSyncHunkForLine(
 	lineNumber: number,
 	baseline: Text,
 	current: Text,
-): number | null {
+): SyncHunk | null {
 	const result = computeHunks(
 		baseline.sliceString(0, baseline.length),
 		current.sliceString(0, current.length),
@@ -78,7 +90,7 @@ export function findSyncHunkIndexForLine(
 	for (const hunk of result.hunks) {
 		const from = hunk.newStart;
 		const to = hunk.newStart + Math.max(hunk.newLines, 1) - 1;
-		if (lineNumber >= from && lineNumber <= to) return hunk.index;
+		if (lineNumber >= from && lineNumber <= to) return hunk;
 	}
 	return null;
 }

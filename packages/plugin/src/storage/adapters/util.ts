@@ -1,26 +1,106 @@
-/** Backoff schedule shared by the retrying adapters. */
-export const RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
+const RETRY_DELAYS_MS: ReadonlyArray<number> = [500, 2_000, 5_000];
 
-export function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => window.setTimeout(resolve, ms));
+export const STORAGE_TIMEOUT_MS = 30_000;
+
+/** Remote call answered with non-2xx. */
+export class StorageHttpError extends Error {
+	constructor(
+		readonly status: number,
+		message: string,
+	) {
+		super(message);
+		this.name = "StorageHttpError";
+	}
 }
 
-/** Rejects if `promise` has not settled within `ms`. */
+export class StorageTimeoutError extends Error {
+	constructor(ms: number) {
+		super(`Storage operation timed out after ${ms}ms`);
+		this.name = "StorageTimeoutError";
+	}
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
-		const id = window.setTimeout(
-			() => reject(new Error(`Storage operation timed out after ${ms}ms`)),
-			ms,
-		);
+		const id = setTimeout(() => reject(new StorageTimeoutError(ms)), ms);
 		promise.then(
 			(value) => {
-				window.clearTimeout(id);
+				clearTimeout(id);
 				resolve(value);
 			},
 			(err: unknown) => {
-				window.clearTimeout(id);
+				clearTimeout(id);
 				reject(err instanceof Error ? err : new Error(String(err)));
 			},
 		);
 	});
+}
+
+/** Retryable statuses (e.g. 429, 5xx). 4xx errors are definitive answers, not retried. */
+export function isRetryableStatus(status: number): boolean {
+	return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/** Platform transport failures. */
+const NETWORK_FAILURE =
+	/network|failed to fetch|load failed|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETRESET|ERR_(?:NETWORK|CONNECTION|INTERNET|NAME_NOT_RESOLVED)/i;
+
+function isRetryableError(err: unknown): boolean {
+	if (err instanceof StorageTimeoutError) return true;
+	if (err instanceof StorageHttpError) return isRetryableStatus(err.status);
+	if (!err || typeof err !== "object") return false;
+	const e = err as { name?: string; message?: string };
+	// A cancelled request is a decision, not a hiccup: retrying it ignores the
+	// caller that asked to stop.
+	if (e.name === "AbortError") return false;
+	if (e.name === "TimeoutError") return true;
+	return typeof e.message === "string" && NETWORK_FAILURE.test(e.message);
+}
+
+export async function withRetry<T>(
+	fn: () => Promise<T>,
+	isRetryable: (err: unknown) => boolean = isRetryableError,
+): Promise<T> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			lastErr = err;
+			if (!isRetryable(err) || attempt === RETRY_DELAYS_MS.length) break;
+			await delay(RETRY_DELAYS_MS[attempt] as number);
+		}
+	}
+	throw lastErr;
+}
+
+/** Treat 3xx as failure to prevent saving redirect pages as object bytes. */
+export function assertOk(
+	res: { status: number; text?: string },
+	action: string,
+	key: string,
+): void {
+	if (res.status >= 200 && res.status < 300) return;
+	const detail = res.text ? `: ${res.text.slice(0, 200)}` : "";
+	throw new StorageHttpError(
+		res.status,
+		`Failed to ${action} "${key}" (HTTP ${res.status})${detail}`,
+	);
+}
+
+/** Header lookup that does not assume the platform's casing. */
+export function headerValue(
+	headers: Record<string, string> | undefined,
+	name: string,
+): string | null {
+	if (!headers) return null;
+	const wanted = name.toLowerCase();
+	for (const [key, value] of Object.entries(headers)) {
+		if (key.toLowerCase() === wanted) return value;
+	}
+	return null;
 }

@@ -1,26 +1,21 @@
 import type { DataAdapter } from "obsidian";
-
+import { PLUGIN_ID } from "@/constants";
 import {
 	DEVICE_KEY_BYTES,
 	DEVICE_KEY_FILE_NAME,
 	PASSPHRASE_CACHE_FILE_NAME,
-	PLUGIN_ID,
-} from "../constants";
-import { readBinary, writeBinary } from "../vault/io";
+} from "@/crypto/constants";
+import { deletePath, readBinary, writeBinary } from "@/vault/io";
 import {
 	decryptJson,
 	type EncryptionKey,
 	encryptJson,
+	importAesKey,
 	randomBytes,
 } from "./index";
 
 interface CachedPayload {
 	version: 1;
-	passphrase: string;
-	binding: string;
-}
-
-export interface PassphraseCacheRecord {
 	passphrase: string;
 	binding: string;
 }
@@ -62,10 +57,7 @@ export async function clearCachedPassphrase(
 	adapter: DataAdapter,
 	configDir: string,
 ): Promise<void> {
-	const path = cachePath(configDir);
-	if (await adapter.exists(path)) {
-		await adapter.remove(path);
-	}
+	await deletePath(adapter, cachePath(configDir));
 }
 
 async function loadDeviceKey(
@@ -90,23 +82,6 @@ async function loadDeviceKey(
 	const fresh = randomBytes(DEVICE_KEY_BYTES);
 	await writeBinary(adapter, path, fresh);
 	return importAesKey(fresh);
-}
-
-function importAesKey(bytes: Uint8Array): Promise<EncryptionKey> {
-	return window.crypto.subtle.importKey(
-		"raw",
-		toArrayBuffer(bytes),
-		{ name: "AES-GCM" },
-		false,
-		["encrypt", "decrypt"],
-	);
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer as ArrayBuffer;
-	}
-	return bytes.slice().buffer as ArrayBuffer;
 }
 
 function pluginFolder(configDir: string): string {

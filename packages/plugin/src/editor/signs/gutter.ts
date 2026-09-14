@@ -17,13 +17,14 @@ import {
 	setCompareTextEffect,
 } from "./state";
 
-enum ESignKind {
-	Add = "add",
-	Change = "change",
-	Delete = "delete",
-	TopDelete = "topdelete",
-	ChangeDelete = "changedelete",
-}
+const ESignKind = {
+	Add: "add",
+	Change: "change",
+	Delete: "delete",
+	TopDelete: "topdelete",
+	ChangeDelete: "changedelete",
+} as const;
+type ESignKind = (typeof ESignKind)[keyof typeof ESignKind];
 
 const KIND_CLASS: Record<ESignKind, string> = {
 	[ESignKind.Add]: "obsync-sign-add",
@@ -57,11 +58,6 @@ const SIGN_MARKERS: Record<ESignKind, SignMarker> = {
 	[ESignKind.ChangeDelete]: new SignMarker(ESignKind.ChangeDelete),
 };
 
-interface LineSign {
-	line: number;
-	kind: ESignKind;
-}
-
 const EMPTY_RANGE_SET = RangeSet.empty as RangeSet<GutterMarker>;
 
 export const signsField = StateField.define<RangeSet<GutterMarker>>({
@@ -79,7 +75,9 @@ export const signsField = StateField.define<RangeSet<GutterMarker>>({
 			prevChunks === nextChunks &&
 			prevBase === nextBase
 		) {
-			return prev;
+			// The chunk set has not been recomputed yet, but the document moved:
+			// unmapped ranges would point past the end and the gutter would throw.
+			return tr.docChanged ? prev.map(tr.changes) : prev;
 		}
 		return buildMarkers(tr.state);
 	},
@@ -106,31 +104,30 @@ function buildMarkers(state: EditorState): RangeSet<GutterMarker> {
 	const data = state.field(chunksField, false);
 	if (!baseline || !data || data.chunks.length === 0) return EMPTY_RANGE_SET;
 
-	const signs: LineSign[] = [];
-	for (const chunk of data.chunks) {
-		appendSignsForChunk(signs, chunk, baseline, state.doc);
-	}
-	if (signs.length === 0) return EMPTY_RANGE_SET;
-
-	signs.sort((a, b) => a.line - b.line);
-	const lastLine = state.doc.lines;
-	const seen = new Set<number>();
 	const builder = new RangeSetBuilder<GutterMarker>();
-	for (const sign of signs) {
-		if (sign.line < 1 || sign.line > lastLine) continue;
-		if (seen.has(sign.line)) continue;
-		seen.add(sign.line);
-		const from = state.doc.line(sign.line).from;
-		builder.add(from, from, SIGN_MARKERS[sign.kind]);
+	const lastLine = state.doc.lines;
+	let lastLineAdded = -1;
+
+	const addSign = (line: number, kind: ESignKind) => {
+		if (line < 1 || line > lastLine) return;
+		if (line <= lastLineAdded) return;
+		lastLineAdded = line;
+		const from = state.doc.line(line).from;
+		builder.add(from, from, SIGN_MARKERS[kind]);
+	};
+
+	for (const chunk of data.chunks) {
+		appendSignsForChunk(chunk, baseline, state.doc, addSign);
 	}
-	return builder.finish();
+
+	return lastLineAdded > -1 ? builder.finish() : EMPTY_RANGE_SET;
 }
 
 function appendSignsForChunk(
-	out: LineSign[],
 	chunk: Chunk,
 	baseline: import("@codemirror/state").Text,
 	current: import("@codemirror/state").Text,
+	addSign: (line: number, kind: ESignKind) => void,
 ): void {
 	const presentation = presentChunk(chunk, baseline, current);
 	const removedCount = presentation.removedLines.length;
@@ -140,7 +137,7 @@ function appendSignsForChunk(
 	if (addedCount === 0) {
 		const kind = chunk.fromB === 0 ? ESignKind.TopDelete : ESignKind.Delete;
 		const line = presentation.deletionLine;
-		out.push({ line, kind });
+		addSign(line, kind);
 		return;
 	}
 
@@ -148,7 +145,7 @@ function appendSignsForChunk(
 	const bEndLine = presentation.addedToLine ?? bFromLine;
 	if (removedCount === 0) {
 		for (let line = bFromLine; line <= bEndLine; line++) {
-			out.push({ line, kind: ESignKind.Add });
+			addSign(line, ESignKind.Add);
 		}
 		return;
 	}
@@ -161,12 +158,12 @@ function appendSignsForChunk(
 		const isLast = line === changeEnd;
 		const kind =
 			isLast && hasExtraDeletes ? ESignKind.ChangeDelete : ESignKind.Change;
-		out.push({ line, kind });
+		addSign(line, kind);
 	}
 
 	if (addedCount > removedCount) {
 		for (let line = changeEnd + 1; line <= bEndLine; line++) {
-			out.push({ line, kind: ESignKind.Add });
+			addSign(line, ESignKind.Add);
 		}
 	}
 }

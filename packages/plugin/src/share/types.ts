@@ -1,10 +1,9 @@
-import { EStorageBackend, type StorageAdapterConfig } from "../storage/config";
+import { EStorageBackend, type StorageAdapterConfig } from "@/storage/config";
 
 /**
- * A shared folder: one vault folder kept in sync with other people through a
- * dedicated encrypted remote location. Each share has its own random content
- * key (independent of the vault passphrase) and its own storage prefix, so
- * invitees can decrypt only the share — never the main vault.
+ * A shared folder kept in sync through a dedicated remote location.
+ * Each share has its own content key and storage prefix, so
+ * invitees can decrypt only the share - never the main vault.
  */
 export interface SharedFolderConfig {
 	/** Stable share identity; identical for every participant. */
@@ -19,7 +18,10 @@ export interface SharedFolderConfig {
 	storage: StorageAdapterConfig;
 	/** Optional PartyKit relay for instant propagation between participants. */
 	relayUrl?: string;
+	/** Relay deployment secret. Owner only: it can derive any room's token. */
 	relayToken?: string;
+	/** Room token handed to a participant, scoped to this share's room alone. */
+	relayRoomToken?: string;
 	/** Paused shares keep their config but never sync. */
 	paused?: boolean;
 	createdAt: number;
@@ -35,22 +37,21 @@ export function isOwnedShare(share: SharedFolderConfig): boolean {
 	return share.storage.kind !== EStorageBackend.ShareBroker;
 }
 
-export enum EShareSyncState {
-	Idle = "idle",
-	Syncing = "syncing",
-	Error = "error",
-	Paused = "paused",
-}
+export const EShareSyncState = {
+	Idle: "idle",
+	Syncing: "syncing",
+	Error: "error",
+	Paused: "paused",
+} as const;
+export type EShareSyncState =
+	(typeof EShareSyncState)[keyof typeof EShareSyncState];
 
 export interface ShareStatus {
 	state: EShareSyncState;
 	lastSyncAt: number | null;
 	error: string | null;
-	/** File counts from the last completed cycle; null before the first sync. */
 	lastActivity: ShareSyncActivity | null;
-	/** Relay connection state; false when the share has no relay configured. */
 	relayConnected: boolean;
-	/** Other participants currently connected to the share's relay room. */
 	peers: ReadonlyArray<{ id: string; name: string }>;
 }
 
@@ -69,7 +70,6 @@ export const IDLE_SHARE_STATUS: ShareStatus = {
 	peers: [],
 };
 
-/** Slot key inside LocalState.storages for a share's baseline/vaultId. */
 export function shareSlotKey(shareId: string): string {
 	return `share:${shareId}`;
 }
@@ -78,9 +78,13 @@ export function normalizeShareRoot(root: string): string {
 	return root.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
-/** True when `path` (vault-relative) is the share root or inside it. */
 export function isPathInShare(path: string, root: string): boolean {
 	const normalized = normalizeShareRoot(root);
 	if (!normalized) return false;
 	return path === normalized || path.startsWith(`${normalized}/`);
+}
+
+/** The relay room a share syncs through; invite derives room token from it. */
+export function shareChannelId(shareId: string): string {
+	return `obsync-share-${shareId}`;
 }

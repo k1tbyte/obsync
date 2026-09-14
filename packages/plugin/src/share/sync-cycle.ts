@@ -1,17 +1,25 @@
-import { SHARE_LOG_PATH_LIMIT } from "../constants";
-import { isTextMergeCandidate } from "../sync/auto-merge";
-import { advanceSessionAfterPush, buildSessionState } from "../sync/baseline";
-import { tryAutoMergeConflict } from "../sync/conflict-merge";
-import { loadRemoteBytes } from "../sync/content";
+import { isTextMergeCandidate } from "@/sync/auto-merge";
+import {
+	advanceSessionAfterPush,
+	buildSessionState,
+	majorityFolders,
+	mergeWrittenIntoCache,
+} from "@/sync/baseline";
+import { freeConflictCopyPath } from "@/sync/conflict-copy";
+import { tryAutoMergeConflict } from "@/sync/conflict-merge";
+import { loadRemoteBytes, textToBytes } from "@/sync/content";
 import {
 	type CompareResult,
 	compare,
 	type EngineDependencies,
 	pullPaths,
 	pushPaths,
-} from "../sync/engine";
-import type { HashCacheEntry, Manifest, SessionState } from "../types";
-import { writeBinary } from "../vault/io";
+} from "@/sync/engine";
+import type { HashCacheEntry, Manifest, SessionState } from "@/sync/types";
+import { writeBinary } from "@/vault/io";
+
+/** Shares log more often (every cycle), so they attach fewer paths. */
+const SHARE_LOG_PATH_LIMIT = 25;
 
 export interface ShareCycleHooks {
 	/** Persist the share's session state (baseline + hash cache). */
@@ -32,13 +40,10 @@ export interface ShareCycleOutcome {
 }
 
 /**
- * One full bidirectional sync of a share: compare, auto-resolve conflicts
- * (three-way merge or conflict copies — never losing either side's data),
- * pull remote changes, push local ones. Paths are share-root-relative;
- * `deps.adapter` must be the share's {@link ScopedVaultAdapter}.
- *
- * Throws {@link ConcurrentPushError} if another participant published while
- * we were syncing — callers re-run the cycle.
+ * Bidirectional sync: compare, auto-resolve conflicts (three-way merge or
+ * conflict copies - never losing data), pull, push. Paths are share-root-relative;
+ * deps.adapter must be the share's ScopedVaultAdapter.
+ * Throws ConcurrentPushError if someone published while syncing - callers re-run.
  */
 export async function runShareSyncCycle(
 	shareName: string,
@@ -70,7 +75,9 @@ export async function runShareSyncCycle(
 		if (resolution.baseline) {
 			session = { ...session, baseline: resolution.baseline };
 			await hooks.persist(session);
-			result = await compare(current());
+			// Resolution wrote files, so the folder has to be re-scanned - but the
+			// remote head has not moved, so it is not fetched again.
+			result = await compare(current(), result.remote);
 		}
 		if (result.diff.conflicts.length > 0) {
 			throw new Error(
@@ -81,11 +88,14 @@ export async function runShareSyncCycle(
 
 	const pullList = result.diff.remoteChanges.map((c) => c.path);
 	if (pullList.length > 0) {
-		const baseline = await pullPaths(current(), result, pullList);
+		const pulled = await pullPaths(current(), result, pullList);
 		session = buildSessionState(
 			session,
-			baseline,
-			withoutPaths(result.updatedCache, pullList),
+			pulled.baseline,
+			mergeWrittenIntoCache(
+				pulled.written,
+				withoutPaths(result.updatedCache, pullList),
+			),
 		);
 		await hooks.persist(session);
 		await hooks.log(
@@ -113,13 +123,8 @@ export async function runShareSyncCycle(
 }
 
 /**
- * Auto-resolves conflicts without ever losing data:
- * - delete vs edit → the edit wins (the deletion is dropped),
- * - both edited, clean three-way text merge → merged content,
- * - anything else → local wins, and the remote version is preserved next to
- *   the file as a "(conflict from …)" copy that syncs like any other file.
- * Returns the rewritten baseline (null when nothing was resolved) so the next
- * compare sees ordinary local/remote changes instead of conflicts.
+ * Auto-resolves conflicts without losing data: delete-vs-edit resolves to edit; clean three-way merge; else local wins + remote conflict copy.
+ * Returns rewritten baseline so next compare sees ordinary changes.
  */
 async function resolveConflicts(
 	deps: EngineDependencies,
@@ -146,23 +151,28 @@ async function resolveConflicts(
 		}
 		if (!remoteEntry) continue;
 
-		const merged =
+		const mergeable =
 			Boolean(conflict.baselineHash) &&
 			(await isTextMergeCandidate(
 				deps,
 				conflict.path,
 				remote,
 				deps.state.baseline,
-			)) &&
-			(await tryAutoMergeConflict(deps, conflict));
-		if (!merged) {
-			const copyPath = await writeConflictCopy(
-				deps,
-				conflict.path,
-				remoteHash,
-				remote?.deviceName,
+			));
+		const merged = mergeable
+			? await tryAutoMergeConflict(deps, conflict)
+			: null;
+		if (merged !== null) {
+			await writeBinary(deps.adapter, conflict.path, textToBytes(merged));
+		} else {
+			copies.push(
+				await writeConflictCopy(
+					deps,
+					conflict.path,
+					remoteHash,
+					remote?.deviceName,
+				),
 			);
-			if (copyPath) copies.push(copyPath);
 		}
 		// Acknowledge the remote version so local becomes an ordinary
 		// local-modify (local wins; merged or original content is pushed).
@@ -171,40 +181,42 @@ async function resolveConflicts(
 	}
 
 	if (resolved === 0) return { baseline: null, copies };
-	return { baseline: { ...template, files }, copies };
+	// The template may be the remote, and not all of its folders are on disk.
+	const folders = majorityFolders(
+		deps.state.baseline?.folders,
+		remote?.folders,
+		result.snapshot.emptyFolders,
+	);
+	return { baseline: { ...template, files, folders }, copies };
 }
 
+/**
+ * Preserves the remote side of an unmergeable conflict next to the file. Throws
+ * rather than giving up: the caller acknowledges the remote version right
+ * after, so a silent failure here would drop it for good.
+ */
 async function writeConflictCopy(
 	deps: EngineDependencies,
 	path: string,
 	remoteHash: string,
 	remoteDeviceName: string | undefined,
-): Promise<string | null> {
+): Promise<string> {
 	const bytes = await loadRemoteBytes(
 		{ storage: deps.storage, key: deps.key },
 		remoteHash,
 	);
-	if (!bytes) return null;
-	const copyPath = conflictCopyPath(path, remoteDeviceName);
+	if (!bytes) {
+		throw new Error(
+			`Cannot keep the remote version of "${path}": its object is missing`,
+		);
+	}
+	const copyPath = await freeConflictCopyPath(
+		deps.adapter,
+		path,
+		remoteDeviceName,
+	);
 	await writeBinary(deps.adapter, copyPath, bytes);
 	return copyPath;
-}
-
-/** "notes/todo.md" → "notes/todo (conflict from Phone 2026-07-05).md" */
-export function conflictCopyPath(
-	path: string,
-	deviceName: string | undefined,
-	now = new Date(),
-): string {
-	const slash = path.lastIndexOf("/");
-	const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
-	const file = slash >= 0 ? path.slice(slash + 1) : path;
-	const dot = file.lastIndexOf(".");
-	const stem = dot > 0 ? file.slice(0, dot) : file;
-	const ext = dot > 0 ? file.slice(dot) : "";
-	const day = now.toISOString().slice(0, 10);
-	const who = (deviceName ?? "remote").replace(/[\\/:*?"<>|]/g, "-").trim();
-	return `${dir}${stem} (conflict from ${who} ${day})${ext}`;
 }
 
 function withoutPaths(

@@ -1,19 +1,20 @@
-import { MarkdownView } from "obsidian";
+import { MarkdownView, type Plugin } from "obsidian";
 import { SOURCE_CONTROL_VIEW_TYPE } from "@/constants";
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	deepCleanOrphanedObjects,
+	JoinShareModal,
 	notifyError,
 	notifyInfo,
 	openDiffView,
+	openSourceControlDeleted,
 	openSourceControlHistory,
 	openSourceControlView,
 	resetRemoteStorage,
 	verifyRemoteIntegrity,
 } from "@/ui";
-import { JoinShareModal } from "@/ui/modals/share-modals";
 
-export function registerCommands(plugin: ObsyncPlugin): void {
+export function registerCommands(plugin: Plugin & PluginHost): void {
 	plugin.addCommand({
 		id: "compare",
 		name: "Compare with remote",
@@ -55,8 +56,8 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 		id: "forget-passphrase",
 		name: "Forget cached passphrase",
 		callback: async () => {
-			await plugin.forgetPassphrase();
-			notifyInfo("passphrase forgotten.");
+			await plugin.passphrase.forget();
+			notifyInfo("Passphrase forgotten.");
 		},
 	});
 
@@ -68,7 +69,18 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			const file = plugin.app.workspace.getActiveFile();
 			if (!file) return false;
 			if (checking) return true;
-			void openSourceControlHistory(plugin);
+			void openSourceControlHistory(plugin, file.path);
+			return true;
+		},
+	});
+
+	plugin.addCommand({
+		id: "restore-deleted-files",
+		name: "Restore deleted files",
+		checkCallback: (checking) => {
+			if (!plugin.settings.fileHistoryEnabled) return false;
+			if (checking) return true;
+			void openSourceControlDeleted(plugin);
 			return true;
 		},
 	});
@@ -102,7 +114,23 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			if (checking) return true;
 			void plugin.shares
 				?.syncAll()
-				.then(() => notifyInfo("shared folders synced."));
+				.then(() => {
+					// syncAll swallows per-share failures into their statuses.
+					const failed = plugin.settings.sharedFolders.filter(
+						(share) => plugin.shares.getStatus(share.id).error,
+					).length;
+					if (failed > 0) {
+						notifyError(
+							"Could not sync shared folders",
+							new Error(`${failed} folder(s) failed. See settings.`),
+						);
+						return;
+					}
+					notifyInfo("Shared folders synced.");
+				})
+				.catch((err: unknown) =>
+					notifyError("Could not sync shared folders", err),
+				);
 			return true;
 		},
 	});
@@ -114,7 +142,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 			const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 			const path = view?.file?.path;
 			if (!path) return false;
-			const status = plugin.controller.getStatusForPath(path);
+			const status = plugin.controller.fileDiffs.getStatusForPath(path);
 			if (!status) return false;
 			if (checking) return true;
 			void openDiffView(plugin, path);
@@ -123,7 +151,7 @@ export function registerCommands(plugin: ObsyncPlugin): void {
 	});
 }
 
-async function runCompare(plugin: ObsyncPlugin): Promise<void> {
+async function runCompare(plugin: Plugin & PluginHost): Promise<void> {
 	try {
 		await plugin.controller.refresh();
 		await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
@@ -132,43 +160,70 @@ async function runCompare(plugin: ObsyncPlugin): Promise<void> {
 	}
 }
 
-async function runPushAll(plugin: ObsyncPlugin): Promise<void> {
+async function runPushAll(plugin: Plugin & PluginHost): Promise<void> {
 	try {
-		const snapshot = plugin.controller.getSnapshot();
-		const diff = snapshot.result?.diff;
-		if (!diff || diff.localChanges.length === 0) {
-			await plugin.controller.refresh();
-		}
-		const refreshed = plugin.controller.getSnapshot().result?.diff;
-		const paths = refreshed?.localChanges.map((c) => c.path) ?? [];
+		// Always re-compare first: acting on a stale diff can push a file another
+		// device has since changed, and can miss conflicts entirely.
+		await plugin.controller.refresh();
+		const diff = plugin.controller.getSnapshot().result?.diff;
+		if (await announceConflicts(plugin, diff?.conflicts.length ?? 0)) return;
+		const paths = diff?.localChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			notifyInfo("nothing to push");
+			notifyInfo("Nothing to push.");
 			return;
 		}
 		await plugin.controller.pushPaths(paths);
-		notifyInfo(`pushed ${paths.length} file(s)`);
+		// runOperation records the failure on the snapshot instead of throwing,
+		// so reporting success without looking would be a lie.
+		const error = plugin.controller.getSnapshot().error;
+		if (error) {
+			notifyError("Push all failed", new Error(error));
+			return;
+		}
+		notifyInfo(`Pushed ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Push all failed", err);
 	}
 }
 
-async function runPullAll(plugin: ObsyncPlugin): Promise<void> {
+async function runPullAll(plugin: Plugin & PluginHost): Promise<void> {
 	try {
 		await plugin.controller.refresh();
 		const diff = plugin.controller.getSnapshot().result?.diff;
+		if (await announceConflicts(plugin, diff?.conflicts.length ?? 0)) return;
 		const paths = diff?.remoteChanges.map((c) => c.path) ?? [];
 		if (paths.length === 0) {
-			notifyInfo("nothing to pull");
+			notifyInfo("Nothing to pull.");
 			return;
 		}
 		await plugin.controller.pullPaths(paths);
-		notifyInfo(`pulled ${paths.length} file(s)`);
+		// runOperation records the failure on the snapshot instead of throwing,
+		// so reporting success without looking would be a lie.
+		const error = plugin.controller.getSnapshot().error;
+		if (error) {
+			notifyError("Pull all failed", new Error(error));
+			return;
+		}
+		notifyInfo(`Pulled ${paths.length} file(s).`);
 	} catch (err) {
 		notifyError("Pull all failed", err);
 	}
 }
 
-async function resetRemoteStorageCommand(plugin: ObsyncPlugin): Promise<void> {
+/** Push and pull must never choose a side silently; conflicts go to the user. */
+async function announceConflicts(
+	plugin: Plugin & PluginHost,
+	count: number,
+): Promise<boolean> {
+	if (count === 0) return false;
+	notifyInfo(`Resolve ${count} conflict(s) first.`);
+	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
+	return true;
+}
+
+async function resetRemoteStorageCommand(
+	plugin: Plugin & PluginHost,
+): Promise<void> {
 	if (!(await resetRemoteStorage(plugin))) return;
 	await openSourceControlView(plugin.app, SOURCE_CONTROL_VIEW_TYPE);
 }

@@ -2,24 +2,21 @@ export type SnapshotListener<T> = (snapshot: T) => void;
 
 export interface StatusBroadcasterOptions<T> {
 	getSnapshot: () => T;
-	emit?: (snapshot: T) => void;
 }
-
-const SCHEDULE_FALLBACK_MS = 0;
 
 export class StatusBroadcaster<T> {
 	private readonly listeners = new Set<SnapshotListener<T>>();
 	private readonly getSnapshot: () => T;
-	private readonly emit: ((snapshot: T) => void) | null;
 	private frame: number | null = null;
 	private disposed = false;
 
 	constructor(options: StatusBroadcasterOptions<T>) {
 		this.getSnapshot = options.getSnapshot;
-		this.emit = options.emit ?? null;
 	}
 
 	subscribe(listener: SnapshotListener<T>): () => void {
+		// Keeping listener after dispose would pin closures unnecessarily.
+		if (this.disposed) return () => undefined;
 		this.listeners.add(listener);
 		listener(this.getSnapshot());
 		return () => {
@@ -35,12 +32,7 @@ export class StatusBroadcaster<T> {
 	broadcastSoon(): void {
 		if (this.disposed) return;
 		if (this.frame !== null) return;
-		const schedule =
-			typeof window !== "undefined" &&
-			typeof window.requestAnimationFrame === "function"
-				? (cb: () => void) => window.requestAnimationFrame(cb)
-				: (cb: () => void) => window.setTimeout(cb, SCHEDULE_FALLBACK_MS);
-		this.frame = schedule(() => {
+		this.frame = window.requestAnimationFrame(() => {
 			this.frame = null;
 			this.emitNow();
 		});
@@ -54,14 +46,7 @@ export class StatusBroadcaster<T> {
 
 	private cancelPending(): void {
 		if (this.frame === null) return;
-		if (
-			typeof window !== "undefined" &&
-			typeof window.cancelAnimationFrame === "function"
-		) {
-			window.cancelAnimationFrame(this.frame);
-		} else {
-			window.clearTimeout(this.frame);
-		}
+		window.cancelAnimationFrame(this.frame);
 		this.frame = null;
 	}
 
@@ -75,6 +60,5 @@ export class StatusBroadcaster<T> {
 				console.error("[obsync] listener failed", err);
 			}
 		}
-		this.emit?.(snapshot);
 	}
 }

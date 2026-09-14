@@ -1,12 +1,12 @@
-import { MarkdownView, setIcon } from "obsidian";
+import { MarkdownView, type Plugin, setIcon } from "obsidian";
 
-import type ObsyncPlugin from "../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	describeShareTooltip,
 	findShareForPath,
 	shareIndicatorState,
-} from "../share";
-import { createSymlinkDetector, type SymlinkDetector } from "../vault/symlinks";
+} from "@/share";
+import { createSymlinkDetector, type SymlinkDetector } from "@/vault/symlinks";
 import type { IndicatorHandle } from "./indicator-handle";
 import { revealInFileExplorer } from "./obsidian-helpers";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./share-indicator";
 
 export function registerFileContextIndicators(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 ): IndicatorHandle {
 	const root = plugin.addStatusBarItem();
 	root.addClass("obsync-file-context", "obsync-hidden");
@@ -48,8 +48,7 @@ export function registerFileContextIndicators(
 			detector = createDetector(plugin);
 		}
 
-		// Clicking the file explorer (e.g. a collapse chevron) makes it the
-		// active leaf, so keep the last markdown view instead of losing context.
+		// Keep the last markdown view when clicking the file explorer.
 		const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 		if (activeView) contextView = activeView;
 		if (contextView && !contextView.containerEl.isConnected) {
@@ -63,15 +62,18 @@ export function registerFileContextIndicators(
 		}
 		const share = findShareForPath(plugin.settings.sharedFolders, file.path);
 		const linkRoot = detector.findLink(file.path);
-		if (!share && !linkRoot) {
+		const ignoredLocally = plugin.ignoreState.isIgnoredLocally(file.path);
+		const ignoredGlobally = plugin.ignoreState.isIgnoredGlobally(file.path);
+		const ignored = ignoredLocally || ignoredGlobally;
+		if (!share && !linkRoot && !ignored) {
 			root.addClass("obsync-hidden");
 			return;
 		}
 		root.removeClass("obsync-hidden");
-		revealPath = linkRoot ?? share?.localRoot ?? null;
+		revealPath = linkRoot ?? share?.localRoot ?? (ignored ? file.path : null);
 
 		if (share) {
-			const status = plugin.shares?.getStatus(share.id);
+			const status = plugin.shares.getStatus(share.id);
 			if (status) {
 				const state = shareIndicatorState(share, status);
 				const tooltip = describeShareTooltip(share, status);
@@ -111,6 +113,29 @@ export function registerFileContextIndicators(
 				actions.push(action);
 			}
 		}
+
+		if (ignored) {
+			const scope = ignoredLocally
+				? ignoredGlobally
+					? "on this machine and globally"
+					: "on this machine"
+				: "globally";
+			const tooltip = `Ignored ${scope}\nExcluded from sync`;
+			const chip = root.createSpan({
+				cls: "obsync-context-chip obsync-ignored-context",
+			});
+			setIcon(chip, "eye-off");
+			chip.createSpan({ text: "Ignored" });
+			setIndicatorTooltip(chip, tooltip);
+			if (view) {
+				const action = view.addAction("eye-off", tooltip, () => {
+					void revealInFileExplorer(plugin.app, file.path);
+				});
+				action.addClass("obsync-context-action", "obsync-ignored-context");
+				setIndicatorTooltip(action, tooltip);
+				actions.push(action);
+			}
+		}
 	};
 
 	const schedule = (): void => {
@@ -130,13 +155,13 @@ export function registerFileContextIndicators(
 
 	plugin.registerEvent(plugin.app.workspace.on("file-open", schedule));
 	plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", schedule));
-	// Collapsing folders, splits and mode switches rebuild the view header and
-	// drop custom actions, so the chip and header action must be re-added.
+	// Re-add chip and action after layout changes drop them.
 	plugin.registerEvent(plugin.app.workspace.on("layout-change", schedule));
 	plugin.registerEvent(plugin.app.vault.on("create", resetDetector));
 	plugin.registerEvent(plugin.app.vault.on("delete", resetDetector));
 	plugin.registerEvent(plugin.app.vault.on("rename", resetDetector));
 	if (plugin.shares) plugin.register(plugin.shares.subscribe(schedule));
+	plugin.register(plugin.ignoreState.subscribe(schedule));
 	plugin.register(() => {
 		disposed = true;
 		if (renderFrame !== null) window.cancelAnimationFrame(renderFrame);
@@ -161,7 +186,7 @@ export function registerFileContextIndicators(
 	};
 }
 
-function createDetector(plugin: ObsyncPlugin): SymlinkDetector {
+function createDetector(plugin: Plugin & PluginHost): SymlinkDetector {
 	return createSymlinkDetector(
 		plugin.app.vault.adapter,
 		plugin.settings.ignoreSymlinks,

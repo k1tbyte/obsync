@@ -1,19 +1,19 @@
 import { Setting } from "obsidian";
 
-import type ObsyncPlugin from "../../main";
+import type { PluginHost } from "@/plugin/host";
 import {
 	deepCleanOrphanedObjects,
 	resetLocalState,
 	resetRemoteStorage,
 	verifyRemoteIntegrity,
-} from "../../ui/maintenance-actions";
+} from "@/ui";
 
 interface MaintenanceAction {
 	name: string;
 	desc: string;
 	buttonText: string;
 	warning?: boolean;
-	run: (plugin: ObsyncPlugin) => Promise<unknown>;
+	run: (plugin: PluginHost) => Promise<unknown>;
 }
 
 const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
@@ -32,14 +32,14 @@ const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
 	},
 	{
 		name: "Deep-clean orphaned objects",
-		desc: "List storage and delete blobs/snapshots unreachable from the manifest or history.",
+		desc: "List storage and delete file contents and pins unreachable from the manifest or history.",
 		buttonText: "Deep-clean",
 		warning: true,
 		run: deepCleanOrphanedObjects,
 	},
 	{
 		name: "Reset remote storage",
-		desc: "Delete the remote Obsync manifest and objects on the configured backend.",
+		desc: "Delete the remote Obsync manifest, file contents, version history and pins on the configured backend.",
 		buttonText: "Reset remote",
 		warning: true,
 		run: resetRemoteStorage,
@@ -48,7 +48,7 @@ const MAINTENANCE_ACTIONS: ReadonlyArray<MaintenanceAction> = [
 
 export function renderMaintenanceSection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 ): void {
 	new Setting(parent).setName("Maintenance").setHeading();
 
@@ -57,9 +57,16 @@ export function renderMaintenanceSection(
 			.setName(action.name)
 			.setDesc(action.desc)
 			.addButton((button) => {
-				button
-					.setButtonText(action.buttonText)
-					.onClick(() => void action.run(plugin));
+				let running = false;
+				button.setButtonText(action.buttonText).onClick(() => {
+					if (running) return;
+					running = true;
+					button.setDisabled(true);
+					void action.run(plugin).finally(() => {
+						running = false;
+						button.setDisabled(false);
+					});
+				});
 				if (action.warning) button.setWarning();
 			});
 	}

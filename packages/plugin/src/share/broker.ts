@@ -1,10 +1,10 @@
 import { requestUrl } from "obsidian";
 
-import { DEFAULT_CONCURRENCY } from "../constants";
+import { DEFAULT_CONCURRENCY } from "@/constants";
 import {
 	EStorageBackend,
 	type ShareBrokerStorageConfig,
-} from "../storage/config";
+} from "@/storage/config";
 
 /**
  * Admin client for the owner's self-hosted broker.
@@ -26,7 +26,6 @@ export function isBrokerConfigured(admin: BrokerAdmin): boolean {
 	return Boolean(admin.url.trim() && admin.adminSecret.trim());
 }
 
-/** Mints a token for one participant and wraps it as joinable storage. */
 export async function issueShareToken(
 	admin: BrokerAdmin,
 	shareId: string,
@@ -70,8 +69,7 @@ export async function listShareParticipants(
 	return body.participants ?? [];
 }
 
-/** Revokes every outstanding invite for a share. Used when the owner stops
- * sharing, so no token outlives the share it was issued for. */
+/** Used when the owner stops sharing, so no token outlives the share. */
 export async function revokeAllShareTokens(
 	admin: BrokerAdmin,
 	shareId: string,
@@ -109,12 +107,21 @@ async function adminRequest<T>(
 		throw: false,
 	});
 	if (res.status !== 200) {
-		const detail = res.json as { message?: string } | undefined;
-		throw new Error(
-			`Share broker error: ${detail?.message ?? `HTTP ${res.status}`}`,
-		);
+		throw new Error(`Share broker error: ${brokerMessage(res)}`);
 	}
 	return res.json as T;
+}
+
+/** An edge error page is HTML, and Obsidian parses `.json` lazily: reading it
+ * would throw a SyntaxError over the status the caller actually needs. */
+function brokerMessage(res: { status: number; json?: unknown }): string {
+	try {
+		const detail = res.json as { message?: string } | undefined;
+		if (detail?.message) return detail.message;
+	} catch {
+		// Not JSON; the status is the whole story.
+	}
+	return `HTTP ${res.status}`;
 }
 
 function normalizeUrl(url: string): string {

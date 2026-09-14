@@ -1,7 +1,4 @@
-// Minimal "obsidian" runtime stub for vitest. The real package ships no usable
-// entry outside Obsidian, so engine/import chains that transitively touch it
-// (settings/model → storage/registry → ui/notices) need value exports to load.
-// Only runtime shape is provided; types collapse to `any`.
+// Minimal obsidian runtime stub for vitest. The real package ships no usable entry outside Obsidian.
 
 export const Platform = {
 	isDesktop: true,
@@ -16,7 +13,8 @@ export const Platform = {
 };
 
 export function debounce<T extends (...args: unknown[]) => unknown>(fn: T): T {
-	return fn;
+	// Obsidian returns a debouncer; callers cancel it on unload.
+	return Object.assign(fn, { cancel: () => undefined, run: () => undefined });
 }
 
 export function requestUrl(): Promise<unknown> {
@@ -31,6 +29,8 @@ export function requestUrl(): Promise<unknown> {
 export function normalizePath(path: string): string {
 	return path;
 }
+
+export function setIcon(_el: unknown, _icon: string): void {}
 
 class Stub {}
 

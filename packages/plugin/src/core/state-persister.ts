@@ -1,25 +1,48 @@
 import type { DataAdapter } from "obsidian";
+import { loadState, resetState, saveState, serializeState } from "@/sync/state";
+import type { LocalState } from "@/sync/types";
 
-import { PERSIST_STATE_DEBOUNCE_MS } from "../constants";
-import { resetState, saveState } from "../sync/state";
-import type { LocalState } from "../types";
+const PERSIST_STATE_DEBOUNCE_MS = 500;
 
 export class StatePersister {
-	private current: LocalState | null = null;
 	private pendingHashCacheState: LocalState | null = null;
 	private flushTimer: number | null = null;
+	/**
+	 * A digest of the last successful write, seeded from the file as loaded. A
+	 * settled refresh persists a state identical to the one on disk, which at 20k
+	 * files is a 3.3 MB rewrite for no new bytes. The digest rather than the
+	 * payload: the payload is that same 3.3 MB, pinned for as long as the plugin
+	 * is loaded.
+	 */
+	private lastWritten: string | null = null;
+	/** Serialises every write: a debounced flush and a direct persist otherwise
+	 * interleave and the older state can land last. */
+	private writes: Promise<void> = Promise.resolve();
 
 	constructor(
 		private readonly adapter: DataAdapter,
 		private readonly configDir: string,
+		private current: LocalState,
 	) {}
 
-	get state(): LocalState | null {
-		return this.current;
+	/**
+	 * Writes the loaded state back unless the file already holds it: loading can
+	 * mint a device id, and that has to reach disk before anything syncs.
+	 */
+	static async load(
+		adapter: DataAdapter,
+		configDir: string,
+	): Promise<StatePersister> {
+		const { state, stored } = await loadState(adapter, configDir);
+		const persister = new StatePersister(adapter, configDir, state);
+		if (stored !== null) persister.lastWritten = fingerprint(stored);
+		// An unwritable disk must not stop the plugin loading; the next persist retries.
+		await persister.write(state).catch(() => undefined);
+		return persister;
 	}
 
-	setInitial(state: LocalState): void {
-		this.current = state;
+	get state(): LocalState {
+		return this.current;
 	}
 
 	async persist(state: LocalState): Promise<void> {
@@ -30,32 +53,69 @@ export class StatePersister {
 			return;
 		}
 		this.cancelTimer();
-		await saveState(this.adapter, this.configDir, state);
+		await this.write(state);
+	}
+
+	private write(state: LocalState): Promise<void> {
+		return this.enqueue(async () => {
+			const serialized = serializeState(state);
+			const digest = fingerprint(serialized);
+			if (digest === this.lastWritten) return;
+			// writeAtomic can fail between renaming the old file aside and moving
+			// the new one in. Keeping the memo would then skip a retry of the very
+			// state that is no longer on disk.
+			this.lastWritten = null;
+			await saveState(this.adapter, this.configDir, serialized);
+			this.lastWritten = digest;
+		});
+	}
+
+	/** Every write to the state file goes through here, in order. */
+	private enqueue<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.writes.then(task);
+		// The chain must survive a failed write, or every later one is skipped.
+		this.writes = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	/**
 	 * Writes any debounced state immediately. Call from lifecycle points that
 	 * still run while the app is alive (visibilitychange→hidden, beforeunload)
 	 * so the hash cache survives a quit/close instead of being lost to the
-	 * pending debounce — losing it forces a full vault re-hash next launch.
+	 * pending debounce - losing it forces a full vault re-hash next launch.
 	 */
 	async flush(): Promise<void> {
 		const pending = this.takePending();
-		if (pending) await saveState(this.adapter, this.configDir, pending);
+		if (pending) await this.write(pending);
+		else await this.writes;
 	}
 
 	async reset(): Promise<LocalState> {
 		this.cancelTimer();
-		const next = await resetState(this.adapter, this.configDir, this.current);
+		// resetState writes the same file the chain does, so it has to take its
+		// turn rather than race a persist that is already in flight.
+		this.lastWritten = null;
+		const next = await this.enqueue(() =>
+			resetState(this.adapter, this.configDir, this.current),
+		);
 		this.current = next;
+		this.lastWritten = fingerprint(serializeState(next));
 		return next;
 	}
 
+	/**
+	 * Last-ditch write. `onunload` is synchronous so it may not complete, and
+	 * the promise is deliberately detached - but never unhandled: a rejection
+	 * here would surface long after the plugin is gone.
+	 */
 	dispose(): void {
-		// Last-ditch: onunload is synchronous so this write may not complete.
-		// flush() on earlier lifecycle hooks is the real safety net.
 		const pending = this.takePending();
-		if (pending) void saveState(this.adapter, this.configDir, pending);
+		if (pending) {
+			this.write(pending).catch(() => undefined);
+		}
 	}
 
 	private takePending(): LocalState | null {
@@ -76,7 +136,7 @@ export class StatePersister {
 			const pending = this.pendingHashCacheState;
 			this.pendingHashCacheState = null;
 			if (!pending) return;
-			void saveState(this.adapter, this.configDir, pending);
+			this.write(pending).catch(() => undefined);
 		}, PERSIST_STATE_DEBOUNCE_MS);
 	}
 
@@ -126,4 +186,19 @@ function storagesEqual(
 
 function hasHashCacheEntries(state: LocalState): boolean {
 	return Object.keys(state.hashCache ?? {}).length > 0;
+}
+
+/**
+ * Two independent FNV-1a passes plus the length. One 32-bit pass collides often
+ * enough over a multi-megabyte payload to skip a write that was needed.
+ */
+function fingerprint(text: string): string {
+	let a = 0x811c9dc5;
+	let b = 0xcbf29ce4;
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		a = Math.imul(a ^ code, 0x01000193);
+		b = Math.imul(b ^ code, 0x85ebca6b);
+	}
+	return `${text.length}:${(a >>> 0).toString(36)}:${(b >>> 0).toString(36)}`;
 }

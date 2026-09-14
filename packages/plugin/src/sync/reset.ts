@@ -1,10 +1,12 @@
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import type { StorageAdapter } from "@/storage/types";
 import {
-	DEFAULT_CONCURRENCY,
+	REMOTE_HISTORY_LOG_KEY,
 	REMOTE_MANIFEST_KEY,
 	REMOTE_OBJECTS_PREFIX,
-} from "../constants";
-import type { StorageAdapter } from "../storage/types";
-import { runWithConcurrency } from "../utils/concurrency";
+	REMOTE_PINS_PREFIX,
+} from "@/sync/constants";
+import { runWithConcurrency } from "@/utils/concurrency";
 
 export interface RemoteResetResult {
 	deletedKeys: string[];
@@ -15,24 +17,23 @@ export async function resetRemoteStorage(
 	concurrency = DEFAULT_CONCURRENCY,
 	onProgress?: (done: number, total: number) => void,
 ): Promise<RemoteResetResult> {
-	if (!storage.capabilities.canList) {
-		throw new Error(
-			"This storage backend does not support listing; reset is unavailable until manifest-based fallback ships.",
-		);
-	}
-	const objectKeys = await storage.list(REMOTE_OBJECTS_PREFIX);
-	const keys = uniqueKeys([
-		REMOTE_MANIFEST_KEY,
-		...objectKeys.filter((key) => key.startsWith(REMOTE_OBJECTS_PREFIX)),
+	// History must go with its objects; leaving pins behind breaks the log.
+	const [objectKeys, pinKeys] = await Promise.all([
+		storage.list(REMOTE_OBJECTS_PREFIX),
+		storage.list(REMOTE_PINS_PREFIX),
 	]);
+	const keys = Array.from(
+		new Set([
+			REMOTE_MANIFEST_KEY,
+			REMOTE_HISTORY_LOG_KEY,
+			...objectKeys,
+			...pinKeys,
+		]),
+	);
 	let done = 0;
 	await runWithConcurrency(keys, concurrency, async (key) => {
 		await storage.delete(key);
 		onProgress?.(++done, keys.length);
 	});
 	return { deletedKeys: keys };
-}
-
-function uniqueKeys(keys: readonly string[]): string[] {
-	return Array.from(new Set(keys));
 }

@@ -7,7 +7,12 @@ import {
 import { DiffCache, type DiffCacheInput } from "@/sync/diff-cache";
 import type { CompareResult, EngineDependencies } from "@/sync/engine";
 import type { FileDiffModel } from "@/sync/projection";
-import type { Conflict, EChangeType, FileChange } from "@/types";
+import type {
+	Conflict,
+	DiffResult,
+	EChangeType,
+	FileChange,
+} from "@/sync/types";
 
 export interface PathStatus {
 	change?: FileChange;
@@ -26,28 +31,36 @@ interface FileDiffServiceDeps {
 
 export class FileDiffService {
 	private readonly diffCache = new DiffCache();
+	/** Keyed by diff identity: a new compare result replaces it wholesale. */
+	private index: { diff: DiffResult; paths: PathIndex } | null = null;
 
 	constructor(private readonly deps: FileDiffServiceDeps) {}
 
 	getStatusForPath(path: string): PathStatus | null {
-		const diff = this.deps.getResult()?.diff;
-		if (!diff) return null;
-		const change =
-			diff.localChanges.find((entry) => entry.path === path) ??
-			diff.remoteChanges.find((entry) => entry.path === path);
-		const conflict = diff.conflicts.find((entry) => entry.path === path);
+		const index = this.pathIndex();
+		if (!index) return null;
+		const change = index.change.get(path);
+		const conflict = index.conflict.get(path);
 		if (!change && !conflict) return null;
 		return { change, conflict };
 	}
 
-	getChangedPathStatuses(): Map<string, EChangeType | "conflict"> {
-		const out = new Map<string, EChangeType | "conflict">();
+	getChangedPathStatuses(): ReadonlyMap<string, EChangeType | "conflict"> {
+		return this.pathIndex()?.status ?? EMPTY_STATUSES;
+	}
+
+	/**
+	 * One pass over the diff instead of a scan per lookup. At 20k changes the
+	 * file explorer alone asked for the status map ~40 times a refresh, and the
+	 * editor probed single paths once per open file.
+	 */
+	private pathIndex(): PathIndex | null {
 		const diff = this.deps.getResult()?.diff;
-		if (!diff) return out;
-		for (const change of diff.localChanges) out.set(change.path, change.type);
-		for (const change of diff.remoteChanges) out.set(change.path, change.type);
-		for (const conflict of diff.conflicts) out.set(conflict.path, "conflict");
-		return out;
+		if (!diff) return null;
+		if (this.index?.diff === diff) return this.index.paths;
+		const paths = buildPathIndex(diff);
+		this.index = { diff, paths };
+		return paths;
 	}
 
 	async getConflictThreeWay(
@@ -55,12 +68,11 @@ export class FileDiffService {
 	): Promise<{ base: string; local: string; remote: string } | null> {
 		const result = this.deps.getResult();
 		if (!result) return null;
-		const conflict = result.diff.conflicts.find((entry) => entry.path === path);
+		const conflict = this.pathIndex()?.conflict.get(path);
 		if (!conflict?.baselineHash) return null;
 		const session = await this.deps.openSession();
 		if (!session) return null;
-		// Size/extension pre-flight so a binary or oversized conflict never
-		// downloads all three sides just to return null.
+		// Pre-flight size/extension so binary or oversized conflicts return null before downloading.
 		const mergeable = await isTextMergeCandidate(
 			session,
 			path,
@@ -83,9 +95,8 @@ export class FileDiffService {
 	}
 
 	/**
-	 * Loads the baseline text for a path even when there is no current change
-	 * status (so the live editor signs can diff against it). Returns null when
-	 * the path is not in the baseline manifest or its content is binary.
+	 * Loads baseline text for a path, even without current change status (for live editor diffs).
+	 * Returns null if missing from baseline or if binary.
 	 */
 	async loadBaselineForPath(path: string): Promise<BaselineSnapshot | null> {
 		const session = await this.deps.openSession();
@@ -108,6 +119,7 @@ export class FileDiffService {
 
 	clear(): void {
 		this.diffCache.clear();
+		this.index = null;
 	}
 
 	private async fileDiff(
@@ -129,4 +141,34 @@ export class FileDiffService {
 		};
 		return this.diffCache.get(input);
 	}
+}
+
+interface PathIndex {
+	change: Map<string, FileChange>;
+	conflict: Map<string, Conflict>;
+	status: Map<string, EChangeType | "conflict">;
+}
+
+const EMPTY_STATUSES: ReadonlyMap<string, EChangeType | "conflict"> = new Map();
+
+function buildPathIndex(diff: DiffResult): PathIndex {
+	const change = new Map<string, FileChange>();
+	const conflict = new Map<string, Conflict>();
+	const status = new Map<string, EChangeType | "conflict">();
+	// `change` keeps the local side and `status` keeps the remote one: the two
+	// lookups disagreed before this index and both callers depend on their own
+	// answer.
+	for (const entry of diff.localChanges) {
+		if (!change.has(entry.path)) change.set(entry.path, entry);
+		status.set(entry.path, entry.type);
+	}
+	for (const entry of diff.remoteChanges) {
+		if (!change.has(entry.path)) change.set(entry.path, entry);
+		status.set(entry.path, entry.type);
+	}
+	for (const entry of diff.conflicts) {
+		if (!conflict.has(entry.path)) conflict.set(entry.path, entry);
+		status.set(entry.path, "conflict");
+	}
+	return { change, conflict, status };
 }

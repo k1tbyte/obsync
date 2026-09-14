@@ -8,7 +8,7 @@ import {
 } from "@/core";
 import type { ObsyncSettings } from "@/settings/model";
 import { SyncController } from "@/sync/controller";
-import { loadState, stateFilePath } from "@/sync/state";
+import { askPassphrase, notifyInfo } from "@/ui";
 
 export interface PluginRuntime {
 	controller: SyncController;
@@ -21,26 +21,24 @@ interface BootstrapPluginRuntimeOptions {
 	app: App;
 	settings: ObsyncSettings;
 	onPushComplete?: () => void;
+	persistSettings?: () => Promise<void>;
 }
 
 export async function bootstrapPluginRuntime(
 	options: BootstrapPluginRuntimeOptions,
 ): Promise<PluginRuntime> {
-	const { app, settings, onPushComplete } = options;
-	const logs = new LogService(app.vault.adapter, app.vault.configDir);
+	const { app, settings, onPushComplete, persistSettings } = options;
+	const { adapter, configDir } = app.vault;
+	const logs = new LogService(adapter, configDir);
 	await logs.load();
 
-	const statePersister = new StatePersister(
-		app.vault.adapter,
-		app.vault.configDir,
-	);
+	const statePersister = await StatePersister.load(adapter, configDir);
 	const passphraseManager = new PassphraseManager(
-		app,
-		app.vault.adapter,
-		app.vault.configDir,
+		() => askPassphrase(app),
+		adapter,
+		configDir,
 		settings,
 	);
-	await ensureDeviceNamePersisted(app, statePersister);
 
 	const openSession = createSessionOpener({
 		app,
@@ -48,11 +46,11 @@ export async function bootstrapPluginRuntime(
 		passphrase: passphraseManager,
 		state: statePersister,
 		logs,
+		notify: notifyInfo,
+		persistSettings,
 	});
 
 	const controller = new SyncController({
-		app,
-		settings,
 		openSession,
 		persistState: (state) => statePersister.persist(state),
 		getState: () => statePersister.state,
@@ -70,15 +68,10 @@ export async function bootstrapPluginRuntime(
 	};
 }
 
-async function ensureDeviceNamePersisted(
-	app: App,
-	statePersister: StatePersister,
-): Promise<void> {
-	const adapter = app.vault.adapter;
-	const configDir = app.vault.configDir;
-	const state = await loadState(adapter, configDir);
-	statePersister.setInitial(state);
-	if (!(await adapter.exists(stateFilePath(configDir)))) {
-		await statePersister.persist(state);
-	}
+/** For an onload that has to abandon what it built, see `ObsyncPlugin.onload`. */
+export function disposePluginRuntime(runtime: PluginRuntime): void {
+	runtime.statePersister.dispose();
+	runtime.controller.dispose();
+	runtime.passphraseManager.dispose();
+	runtime.logs.dispose();
 }

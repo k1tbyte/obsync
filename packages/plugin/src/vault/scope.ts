@@ -1,21 +1,49 @@
+import { IGNORE_FILE_NAME, PLUGIN_ID } from "@/constants";
+import type { SettingsSyncCategories } from "@/settings/model";
 import {
-	CONFIG_CORE_FILES,
-	CONFIG_FILE_DENYLIST,
-	CONFIG_HOTKEYS_FILE,
-	CONFIG_PLUGINS_DIR,
-	CONFIG_SNIPPETS_DIR,
-	CONFIG_SUBDIR_DENYLIST,
-	CONFIG_THEMES_DIR,
-	DEVICE_LOCAL_PLUGIN_IDS,
-	IGNORE_FILE_NAME,
-	PLUGIN_ID,
-	VAULT_SUBDIR_DENYLIST,
-} from "../constants";
-import type { SettingsSyncCategories } from "../settings/model";
-import { hasDotSegment, normalizePath } from "../shared/path";
-import { EFileKind } from "../types";
+	hasDotSegment,
+	normalizePath,
+	stripTrailingSlash,
+} from "@/shared/path";
+import { EFileKind } from "@/sync/types";
 import type { IgnoreMatcher } from "./ignore";
 import type { SymlinkDetector } from "./symlinks";
+
+/** community-plugins.json is deliberately absent: it has its own toggle, and
+ * listing it here would let "core settings" sync it behind that toggle. */
+const CONFIG_CORE_FILES: ReadonlyArray<string> = [
+	"app.json",
+	"appearance.json",
+	"core-plugins.json",
+	"graph.json",
+	"bookmarks.json",
+	"templates.json",
+];
+
+const CONFIG_HOTKEYS_FILE = "hotkeys.json";
+
+const CONFIG_SNIPPETS_DIR = "snippets/";
+
+const CONFIG_THEMES_DIR = "themes/";
+
+const CONFIG_PLUGINS_DIR = "plugins/";
+
+const CONFIG_FILE_DENYLIST: ReadonlyArray<string> = [
+	"workspace.json",
+	"workspace-mobile.json",
+	"workspaces.json",
+	"types.json",
+	"sync.json",
+];
+
+const CONFIG_SUBDIR_DENYLIST: ReadonlyArray<string> = [".cache/"];
+
+const VAULT_SUBDIR_DENYLIST: ReadonlyArray<string> = [".trash/", ".git/"];
+
+const DEVICE_LOCAL_PLUGIN_IDS: ReadonlyArray<string> = [
+	"obsidian-git",
+	"file-recovery",
+];
 
 export interface ScopePolicy {
 	includes(path: string): boolean;
@@ -89,8 +117,10 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 			}
 
 			if (dir === configDir) return hasConfigDescendants();
+			// Config directory is the only dot segment allowed, never one nested inside it.
+			if (hasDotSegment(stripConfigPrefix(dir, configPrefix))) return false;
 			if (dirPath.startsWith(configPrefix)) return canDescendConfigDir(dirPath);
-			return !hasDotSegment(dir);
+			return true;
 		},
 		classify(rawPath) {
 			const path = normalizePath(rawPath);
@@ -114,14 +144,14 @@ export function createScopePolicy(options: ScopeOptions): ScopePolicy {
 		if (!path) return false;
 		if (isInVaultDenylist(path)) return false;
 		if (path.startsWith(ownPluginPrefix)) return false;
-		// Device-local, like the ignore patterns below: excluded from the diff too,
-		// so a link never reads as a deletion of what other devices store here.
+		// Device-local like ignore patterns: excluded from diff so links are not read as deletions.
 		if (symlinks?.isLink(path)) return false;
 
+		// Check before config branch: nested .git or .cache must not ride along with plugin config.
+		if (hasDotSegment(stripConfigPrefix(path, configPrefix))) return false;
 		if (path.startsWith(configPrefix)) {
 			return isConfigAllowed(path);
 		}
-		if (hasDotSegment(path)) return false;
 		return true;
 	}
 
@@ -179,8 +209,9 @@ function isInVaultDenylist(path: string): boolean {
 	return VAULT_SUBDIR_DENYLIST.some((d) => path.startsWith(d));
 }
 
-function stripTrailingSlash(value: string): string {
-	return value.endsWith("/") ? value.slice(0, -1) : value;
+/** Config directory starts with a dot; everything below needs dot segment checking. */
+function stripConfigPrefix(path: string, configPrefix: string): string {
+	return path.startsWith(configPrefix) ? path.slice(configPrefix.length) : path;
 }
 
 function isIgnoredDir(

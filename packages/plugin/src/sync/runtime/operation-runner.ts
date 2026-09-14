@@ -1,5 +1,7 @@
 import { ESyncLogOperation } from "@/logs/store";
 import { errorMessage } from "@/shared/errors";
+import { advanceBaselineForPaths } from "@/sync/baseline";
+import { isCancellation } from "@/sync/cancel";
 import type { SyncControllerHost } from "@/sync/controller";
 import {
 	type CompareResult,
@@ -13,7 +15,7 @@ import {
 	projectSession,
 	recomputeAfterWrite,
 } from "@/sync/session-state";
-import type { SessionState } from "@/types";
+import type { SessionState } from "@/sync/types";
 import type { SyncControllerRuntimeState } from "./controller-state";
 
 interface OperationRunnerDeps {
@@ -24,6 +26,12 @@ interface OperationRunnerDeps {
 
 export class OperationRunner {
 	constructor(private readonly deps: OperationRunnerDeps) {}
+
+	private applyResult(result: CompareResult): void {
+		this.deps.runtimeState.setResult(result);
+		this.deps.clearFileDiffs();
+		this.deps.runtimeState.setStaleReason(null);
+	}
 
 	async refresh(): Promise<void> {
 		await this.deps.runtimeState.enqueue(async () => {
@@ -46,12 +54,20 @@ export class OperationRunner {
 				},
 			};
 			const result = await compare(depsWithProgress);
-			this.deps.runtimeState.setResult(result);
-			this.deps.clearFileDiffs();
-			this.deps.runtimeState.setStaleReason(null);
+			this.applyResult(result);
 			const identity = session.storage.identity();
 			const nextSessionState: SessionState = {
 				...session.state,
+				// Both sides reached same content; adopt baseline to prevent phantom conflicts.
+				baseline:
+					result.remote && result.diff.converged.length > 0
+						? advanceBaselineForPaths(
+								session.state.baseline,
+								result.remote,
+								new Set(result.diff.converged),
+								result.snapshot.emptyFolders,
+							)
+						: session.state.baseline,
 				hashCache: result.updatedCache,
 			};
 			await this.deps.host.persistState(
@@ -85,9 +101,7 @@ export class OperationRunner {
 				if (!session) return false;
 				const ctx = this.buildContext(session);
 				const { compareResult } = await flow(session, ctx);
-				this.deps.runtimeState.setResult(compareResult);
-				this.deps.clearFileDiffs();
-				this.deps.runtimeState.setStaleReason(null);
+				this.applyResult(compareResult);
 				return true;
 			} catch (err) {
 				const message = errorMessage(err);
@@ -107,38 +121,61 @@ export class OperationRunner {
 			result: CompareResult,
 			ctx: OperationContext,
 		) => Promise<OperationOutcome>,
+		/** Only for operations that read `deps.signal`; see `sync/cancel.ts`. */
+		cancellable = false,
 	): Promise<void> {
 		return this.deps.runtimeState.enqueue(async () => {
 			this.deps.runtimeState.clearError();
+			let scope: { signal: AbortSignal; end: () => void } | null = null;
 			try {
 				const session = await this.deps.host.openSession();
 				if (!session) return;
 				let result = this.deps.runtimeState.getResult();
 				if (!result) {
+					// Opened after the scan, which has no signal of its own: offering a
+					// Cancel that cannot stop the scan is worse than offering none.
 					result = await compare(session);
 					this.deps.runtimeState.setResult(result);
 				}
+				if (cancellable) scope = this.deps.runtimeState.beginCancellable();
 				const ctx = this.buildContext(session);
-				const outcome = await fn(session, result, ctx);
-				const freshState =
-					projectSession(
-						this.deps.host.getState(),
-						session.storage.identity(),
-					) ?? session.state;
+				const outcome = await fn(
+					scope ? { ...session, signal: scope.signal } : session,
+					result,
+					ctx,
+				);
+				const freshState = projectSession(
+					this.deps.host.getState(),
+					session.storage.identity(),
+				);
 				const recomputed = recomputeAfterWrite(
 					result,
 					freshState,
-					outcome.newRemote,
-					outcome.touchedPaths,
+					outcome,
 					session.scope,
 				);
-				this.deps.runtimeState.setResult(recomputed);
-				this.deps.clearFileDiffs();
-				this.deps.runtimeState.setStaleReason(null);
+				this.applyResult(recomputed);
+				if (outcome.cancelled) {
+					this.deps.runtimeState.setStaleReason(
+						outcome.touchedPaths.size === 0
+							? "Stopped before anything changed."
+							: `Stopped after ${outcome.touchedPaths.size} file(s). Compare again to see where things stand.`,
+					);
+					return;
+				}
 				if (operation === ESyncLogOperation.Push) {
 					this.deps.host.onPushComplete?.();
 				}
 			} catch (err) {
+				if (isCancellation(err)) {
+					// Not a failure: nothing was published, and saying so beats a red error.
+					this.deps.runtimeState.setError(null);
+					this.deps.runtimeState.setStaleReason(
+						"Stopped before publishing. Nothing on the remote changed.",
+					);
+					await this.deps.host.logWarn(operation, "Cancelled by the user.");
+					return;
+				}
 				if (err instanceof ConcurrentPushError) {
 					this.deps.runtimeState.setError(null);
 					this.deps.runtimeState.setStaleReason(
@@ -147,15 +184,7 @@ export class OperationRunner {
 					this.deps.runtimeState.clearResult();
 					this.deps.clearFileDiffs();
 					this.deps.runtimeState.broadcast();
-					try {
-						await this.refreshNow();
-					} catch (refreshErr) {
-						this.deps.runtimeState.setError(
-							refreshErr instanceof Error
-								? refreshErr.message
-								: String(refreshErr),
-						);
-					}
+					await this.refreshNow();
 					await this.deps.host.logWarn(operation, err.message);
 					return;
 				}
@@ -163,7 +192,10 @@ export class OperationRunner {
 				this.deps.runtimeState.setError(message);
 				await this.deps.host.logError(operation, message);
 			} finally {
-				this.deps.runtimeState.setProgressText(null);
+				scope?.end();
+				// Broadcast, not just set: a queued operation keeps pendingOps above
+				// zero, so nothing else would repaint away a stale "Cancelling…".
+				this.deps.runtimeState.publishProgress(null);
 			}
 		});
 	}

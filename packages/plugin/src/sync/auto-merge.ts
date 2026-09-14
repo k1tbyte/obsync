@@ -1,43 +1,71 @@
-import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "../constants";
-import { ESyncLogOperation } from "../logs/store";
-import type { Manifest, SessionState } from "../types";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { ESyncLogOperation } from "@/logs/store";
+import { sortedByPath } from "@/shared/records";
+import { mergeWrittenIntoCache } from "@/sync/baseline";
+import { HUNK_TEXT_MAX_BYTES, LOG_PATH_LIMIT } from "@/sync/constants";
+import { runWithConcurrency } from "@/utils/concurrency";
 import { tryAutoMergeConflict } from "./conflict-merge";
-import { hasKnownBinaryExtension } from "./content";
+import {
+	hasKnownBinaryExtension,
+	textToBytes,
+	writeLocalFile,
+} from "./content";
 import type { CompareResult, EngineDependencies } from "./engine";
 import type { OperationContext, OperationOutcome } from "./operations";
+import type { Manifest, ManifestEntry, SessionState } from "./types";
 
 export async function autoMergeOp(
 	deps: EngineDependencies,
 	result: CompareResult,
 	ctx: OperationContext,
 ): Promise<OperationOutcome> {
-	const mergedPaths: string[] = [];
+	const localEntries = new Map<string, ManifestEntry | null>();
+	// Indexed by conflict position so the log and the baseline pass stay in diff
+	// order no matter which download finishes first.
+	const merged: Array<string | null> = new Array(
+		result.diff.conflicts.length,
+	).fill(null);
 
-	for (const conflict of result.diff.conflicts) {
-		// No common ancestor: nothing to merge against, and no reason to stat.
-		if (!conflict.baselineHash) continue;
-		// Rule out binary/oversized files from path + manifest sizes alone —
-		// never download megabytes just to discover the file can't be merged.
-		const mergeable = await isTextMergeCandidate(
-			deps,
-			conflict.path,
-			result.remote,
-			deps.state.baseline,
-		);
-		if (!mergeable) continue;
-		if (await tryAutoMergeConflict(deps, conflict)) {
-			mergedPaths.push(conflict.path);
-		}
-	}
+	await runWithConcurrency(
+		result.diff.conflicts,
+		deps.concurrency ?? DEFAULT_CONCURRENCY,
+		async (conflict, index) => {
+			// No common ancestor: nothing to merge against, and no reason to stat.
+			if (!conflict.baselineHash) return;
+			// Rules out binary/oversized files via path and manifest sizes - never
+			// downloads megabytes just to discover the file can't be merged.
+			const mergeable = await isTextMergeCandidate(
+				deps,
+				conflict.path,
+				result.remote,
+				deps.state.baseline,
+			);
+			if (!mergeable) return;
+			const text = await tryAutoMergeConflict(deps, conflict);
+			if (text === null) return;
+			const entry = await writeLocalFile(
+				deps,
+				conflict.path,
+				textToBytes(text),
+			);
+			localEntries.set(conflict.path, entry);
+			merged[index] = conflict.path;
+		},
+	);
+	const mergedPaths = merged.filter((path): path is string => path !== null);
 
 	if (mergedPaths.length === 0) {
 		return { newRemote: result.remote, touchedPaths: new Set() };
 	}
 
-	// Advance the baseline entry for each merged path to the remote version.
-	// This means the merged local content is treated as a new local change
-	// (diverging from the acknowledged remote baseline) rather than a conflict.
-	const freshState: SessionState = ctx.getFreshState() ?? deps.state;
+	const nextHashCache = mergeWrittenIntoCache(
+		localEntries,
+		result.updatedCache,
+	);
+
+	// Advances baseline for merged paths so the merged content is treated as a
+	// new local edit, not a conflict.
+	const freshState: SessionState = ctx.getFreshState();
 	const baseline = freshState.baseline;
 	if (baseline) {
 		const files = { ...baseline.files };
@@ -45,7 +73,11 @@ export async function autoMergeOp(
 			const remoteEntry = result.remote?.files[path];
 			if (remoteEntry) files[path] = remoteEntry;
 		}
-		await ctx.persistState({ ...freshState, baseline: { ...baseline, files } });
+		await ctx.persistState({
+			...freshState,
+			baseline: { ...baseline, files },
+			hashCache: sortedByPath(nextHashCache),
+		});
 	}
 
 	await ctx.logInfo(
@@ -53,13 +85,17 @@ export async function autoMergeOp(
 		`Auto-merged ${mergedPaths.length} conflict(s).`,
 		mergedPaths.slice(0, LOG_PATH_LIMIT),
 	);
-	return { newRemote: result.remote, touchedPaths: new Set(mergedPaths) };
+	return {
+		newRemote: result.remote,
+		touchedPaths: new Set(mergedPaths),
+		// Merged text is new: localEntries ensures the snapshot does not adopt the remote hash and drop the push.
+		localEntries,
+	};
 }
 
 /**
- * Cheap pre-flight for a three-way text merge: the path must not be a known
- * binary type and every side must be within the text diff cap. Sizes come
- * from `stat` and the manifests, so nothing is read or downloaded.
+ * Pre-flight for three-way text merge: rejects known binary types and oversized
+ * files using stat and manifest sizes without reading or downloading.
  */
 export async function isTextMergeCandidate(
 	deps: Pick<EngineDependencies, "adapter">,

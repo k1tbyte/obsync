@@ -1,6 +1,6 @@
 import { Setting } from "obsidian";
 
-import type ObsyncPlugin from "@/main";
+import type { PluginHost } from "@/plugin/host";
 import { EFieldKind } from "@/storage/field-spec";
 
 import type { ObsyncSettings } from "./model";
@@ -8,53 +8,54 @@ import type { ObsyncSettings } from "./model";
 const SUB_SETTING_CLASS = "obsync-sub-setting";
 
 export interface FieldContext {
-	plugin: ObsyncPlugin;
-	/** Re-renders the settings tab, for fields that reveal or hide others. */
+	plugin: PluginHost;
 	rerender: () => void;
 }
 
 interface FieldBase {
 	name: string;
 	desc?: string;
-	/** Only render the field when this holds. */
 	when?: (settings: ObsyncSettings) => boolean;
-	/** Indent under the field above. */
 	sub?: boolean;
-	/** Re-scan the vault after the change; for scope-affecting settings. */
+	/** For scope-affecting settings. */
 	refreshScope?: boolean;
-	/** Re-render the whole tab after the change. */
 	rerender?: boolean;
-	/** Runs once the new value is saved, for fields with a side effect. */
-	after?: (plugin: ObsyncPlugin) => void;
+	after?: (plugin: PluginHost) => void;
 }
 
 export interface ToggleField extends FieldBase {
-	kind: EFieldKind.Toggle;
+	kind: typeof EFieldKind.Toggle;
 	get: (settings: ObsyncSettings) => boolean;
-	set: (value: boolean, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
+	set: (value: boolean, plugin: PluginHost) => Partial<ObsyncSettings>;
 }
 
 export interface TextField extends FieldBase {
-	kind: EFieldKind.Text | EFieldKind.Password;
+	kind: typeof EFieldKind.Text | typeof EFieldKind.Password;
 	placeholder?: string;
 	get: (settings: ObsyncSettings) => string;
-	set: (value: string, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
+	set: (value: string, plugin: PluginHost) => Partial<ObsyncSettings>;
 }
 
 export interface NumberField extends FieldBase {
-	kind: EFieldKind.Number;
+	kind: typeof EFieldKind.Number;
 	get: (settings: ObsyncSettings) => string;
-	/** Clamps/validates the raw input; the result is what gets stored. */
+	/** Validates input before storage. */
 	parse: (raw: string) => number;
-	set: (value: number, plugin: ObsyncPlugin) => Partial<ObsyncSettings>;
+	set: (value: number, plugin: PluginHost) => Partial<ObsyncSettings>;
 }
 
-export type SettingsField = ToggleField | TextField | NumberField;
+export interface SliderField extends FieldBase {
+	kind: typeof EFieldKind.Slider;
+	min: number;
+	max: number;
+	step?: number;
+	get: (settings: ObsyncSettings) => number;
+	set: (value: number, plugin: PluginHost) => Partial<ObsyncSettings>;
+}
 
-/**
- * Renders a declarative list of settings fields. Every field saves through the
- * same path, so scope refreshes and re-renders behave identically everywhere.
- */
+export type SettingsField = ToggleField | TextField | NumberField | SliderField;
+
+/** Uniform save path ensures scope refreshes and re-renders behave identically. */
 export function renderFields(
 	parent: HTMLElement,
 	ctx: FieldContext,
@@ -93,6 +94,17 @@ function renderField(
 			text
 				.setValue(field.get(ctx.plugin.settings))
 				.onChange((raw) => apply(field.set(field.parse(raw), ctx.plugin))),
+		);
+		return;
+	}
+
+	if (field.kind === EFieldKind.Slider) {
+		setting.addSlider((slider) =>
+			slider
+				.setLimits(field.min, field.max, field.step ?? 1)
+				.setValue(field.get(ctx.plugin.settings))
+				.setDynamicTooltip()
+				.onChange((value) => apply(field.set(value, ctx.plugin))),
 		);
 		return;
 	}

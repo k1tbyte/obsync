@@ -1,12 +1,12 @@
-import { LOG_PATH_LIMIT } from "../../constants";
-import { ESyncLogOperation } from "../../logs/store";
-import { resetSessionState } from "../baseline";
+import { ESyncLogOperation } from "@/logs/store";
+import { resetSessionState } from "@/sync/baseline";
+import { LOG_PATH_LIMIT } from "@/sync/constants";
 import {
 	type CompareResult,
 	compare,
 	type EngineDependencies,
-} from "../engine";
-import { resetRemoteStorage as resetStorageObjects } from "../reset";
+} from "@/sync/engine";
+import { resetRemoteStorage as resetStorageObjects } from "@/sync/reset";
 import type { OperationContext } from "./types";
 
 export interface FlowResult {
@@ -44,12 +44,10 @@ export async function runAdoptNewVaultFlow(
 ): Promise<FlowResult> {
 	ctx.setProgress("Adopting new vault…");
 	const cleared = resetSessionState(deps.state);
-	await ctx.persistState(cleared);
 	ctx.setProgress("Refreshing…");
+	// Compare first; network failure must not leave device without its current sync state.
 	const refreshed = await compare({ ...deps, state: cleared });
-	// Adopt whatever vaultId the remote currently carries so a subsequent
-	// compare no longer trips assertVaultCompatibility. If the remote is empty,
-	// vaultId stays null and the first push will mint one.
+	// Adopt remote vaultId to prevent assertVaultCompatibility trips. If empty, stays null.
 	await ctx.persistState({
 		...cleared,
 		vaultId: refreshed.remote?.vaultId ?? null,

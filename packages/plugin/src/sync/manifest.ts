@@ -1,45 +1,104 @@
 import {
-	MANIFEST_VERSION,
-	REMOTE_MANIFEST_KEY,
-	REMOTE_OBJECTS_PREFIX,
-} from "../constants";
-import {
 	decryptJson,
 	type EncryptionKey,
 	encryptJson,
 	randomId,
-} from "../crypto";
-import type { ObjectStorage } from "../storage/types";
-import type { LocalSnapshot, Manifest } from "../types";
+} from "@/crypto";
+import type { ConditionalRead, ObjectStorage } from "@/storage/types";
+import {
+	MANIFEST_VERSION,
+	REMOTE_MANIFEST_KEY,
+	REMOTE_OBJECTS_PREFIX,
+} from "@/sync/constants";
 import { defaultDeviceName } from "./device";
+import type { LocalSnapshot, Manifest } from "./types";
 
+/**
+ * What the remote manifest object looked like the last time this backend served
+ * it: the validator it came with, and which manifest that validator names.
+ *
+ * Per storage adapter, because the adapter is the identity of the remote. Two
+ * strings rather than the manifest itself - at 20k files that would be another
+ * copy of a structure the state file already holds.
+ */
+const validators = new WeakMap<
+	ObjectStorage,
+	{ etag: string; snapshotId: string }
+>();
+
+/**
+ * @param known A manifest the caller already holds. When the backend confirms
+ * the remote is still the one the validator names, this is returned without
+ * downloading it: a settled refresh otherwise transfers 1 MB, inflates 3.4 MB
+ * and parses 20k entries to learn nothing moved.
+ */
 export async function fetchRemoteManifest(
 	storage: ObjectStorage,
 	key: EncryptionKey,
+	known?: Manifest | null,
 ): Promise<Manifest | null> {
-	const blob = await storage.get(REMOTE_MANIFEST_KEY);
-	if (!blob) return null;
-	const manifest = await decryptJson<Manifest>(key, blob);
+	const validator = validators.get(storage);
+	// Conditional only when a "not modified" can actually be answered. Asking
+	// otherwise buys a round trip that has to be followed by the real read.
+	const revalidate =
+		validator !== undefined &&
+		known != null &&
+		known.snapshotId === validator.snapshotId;
+	const read = await readManifest(storage, revalidate ? validator.etag : null);
+	if (read.status === "unchanged") {
+		// Only ever an answer about the validator we sent. A backend that says it
+		// to an unconditional read is describing nothing we hold, and reading that
+		// as an empty remote would look like a vault that has never been pushed.
+		if (!revalidate || !known) {
+			throw new Error(
+				"Storage answered 'not modified' to a read that carried no validator.",
+			);
+		}
+		return known;
+	}
+	if (read.status === "absent") {
+		validators.delete(storage);
+		return null;
+	}
+	const manifest = await decryptJson<Manifest>(key, read.body);
 	if (manifest.version > MANIFEST_VERSION) {
 		throw new Error(
 			`Remote manifest version ${manifest.version} requires a newer Obsync version.`,
 		);
 	}
+	if (read.etag) {
+		validators.set(storage, {
+			etag: read.etag,
+			snapshotId: manifest.snapshotId,
+		});
+	} else {
+		validators.delete(storage);
+	}
 	return manifest;
+}
+
+function readManifest(
+	storage: ObjectStorage,
+	etag: string | null,
+): Promise<ConditionalRead> {
+	if (storage.getIfChanged) {
+		return storage.getIfChanged(REMOTE_MANIFEST_KEY, etag);
+	}
+	return storage
+		.get(REMOTE_MANIFEST_KEY)
+		.then((body) =>
+			body ? { status: "found", body, etag: null } : { status: "absent" },
+		);
 }
 
 /**
  * Returns the authoritative remote for diffing.
  *
- * S3-compatible backends (R2/B2/Wasabi/MinIO) don't always serve read-after-write
- * consistently. After we publish manifest M2 (parent=M1), a fresh GET may still
- * return M1 for a while. Naively trusting that GET would mark every just-pushed
- * file as a "remote change" pointing back to the pre-push hash — and pulling it
- * would silently roll back the user's work.
- *
- * If the fetched manifest's snapshotId equals `baseline.parentSnapshotId`, we
- * know we have already published past it. The local baseline IS what we last
- * wrote to S3, so use it as the authoritative remote.
+ * S3-compatible backends don't always serve read-after-write consistently.
+ * Naively trusting a stale GET would mark just-pushed files as remote changes
+ * pointing to the pre-push hash - and pulling would roll back the user's work.
+ * If fetched manifest equals baseline.parentSnapshotId, the local baseline is
+ * what we last wrote to S3, so use it as the authoritative remote.
  */
 export function reconcileRemoteAgainstBaseline(
 	remote: Manifest | null,
@@ -56,15 +115,6 @@ export function reconcileRemoteAgainstBaseline(
 	return remote;
 }
 
-export async function publishManifest(
-	storage: ObjectStorage,
-	key: EncryptionKey,
-	manifest: Manifest,
-): Promise<void> {
-	const blob = await encryptJson(key, manifest);
-	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
-}
-
 export class ConcurrentPushError extends Error {
 	readonly conflictingRemote: Manifest | null;
 	constructor(message: string, conflictingRemote: Manifest | null) {
@@ -75,20 +125,23 @@ export class ConcurrentPushError extends Error {
 }
 
 /**
- * Publishes a manifest, but first verifies that the remote head is still at
- * `expectedParentSnapshotId`. If another writer pushed between our compare and
- * publish, we abort without overwriting. The post-publish verify guards against
- * a race where two writers both pass the precheck and race the PUT.
- *
- * `expectedParentSnapshotId` is `null` on first push (no prior remote).
+ * Publishes a manifest if remote head matches expectedParentSnapshotId.
+ * Post-publish verify guards against races where two writers pass precheck.
  */
 export async function publishManifestWithGuard(
 	storage: ObjectStorage,
 	key: EncryptionKey,
 	manifest: Manifest,
 	expectedParentSnapshotId: string | null,
+	baseline: Manifest | null = null,
 ): Promise<void> {
-	const precheck = await fetchRemoteManifest(storage, key);
+	// Sealed first: gzipping a 20k-file manifest is ~50 ms of main thread, and
+	// spending it after the precheck would widen the window a competing writer
+	// has to slip through.
+	const blob = await encryptJson(key, manifest);
+	// Stale-read reconciliation prevents a lagging backend from appearing as a competing writer.
+	const fetched = await fetchRemoteManifest(storage, key, baseline);
+	const precheck = reconcileRemoteAgainstBaseline(fetched, baseline);
 	const precheckId = precheck?.snapshotId ?? null;
 	if (precheckId !== expectedParentSnapshotId) {
 		throw new ConcurrentPushError(
@@ -96,14 +149,33 @@ export async function publishManifestWithGuard(
 			precheck,
 		);
 	}
-	await publishManifest(storage, key, manifest);
+	await storage.put(REMOTE_MANIFEST_KEY, blob, "application/octet-stream");
 	const verify = await fetchRemoteManifest(storage, key);
-	if (!verify || verify.snapshotId !== manifest.snapshotId) {
-		throw new ConcurrentPushError(
-			"Another device overwrote the manifest immediately after our push.",
-			verify,
-		);
+	if (verify?.snapshotId === manifest.snapshotId) return;
+	if (verify && ownSnapshotIds(manifest, baseline).has(verify.snapshotId)) {
+		return;
 	}
+	throw new ConcurrentPushError(
+		"Another device overwrote the manifest immediately after our push.",
+		verify,
+	);
+}
+
+/**
+ * Snapshot ids this device published on the way to `published`. Reading one
+ * back indicates a stale read, not a lost push.
+ */
+function ownSnapshotIds(
+	published: Manifest,
+	baseline: Manifest | null,
+): Set<string> {
+	const ids = new Set<string>();
+	if (published.parentSnapshotId) ids.add(published.parentSnapshotId);
+	if (baseline) {
+		ids.add(baseline.snapshotId);
+		if (baseline.parentSnapshotId) ids.add(baseline.parentSnapshotId);
+	}
+	return ids;
 }
 
 export function buildManifest(
@@ -111,7 +183,7 @@ export function buildManifest(
 	deviceName: string | undefined,
 	vaultId: string,
 	parent: Manifest | null,
-	snapshot: LocalSnapshot,
+	snapshot: Pick<LocalSnapshot, "files" | "emptyFolders">,
 ): Manifest {
 	return {
 		version: MANIFEST_VERSION,

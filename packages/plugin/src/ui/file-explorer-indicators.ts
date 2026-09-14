@@ -1,8 +1,12 @@
-import type { View, Workspace } from "obsidian";
-
-import type ObsyncPlugin from "../main";
-import type { SyncController } from "../sync/controller";
-import { createSymlinkDetector } from "../vault/symlinks";
+import type { Plugin } from "obsidian";
+import type { PluginHost } from "@/plugin/host";
+import type { SyncController } from "@/sync/controller";
+import { createSymlinkDetector } from "@/vault/symlinks";
+import {
+	type FileExplorerRows,
+	readFileExplorer,
+	readFileExplorerContainer,
+} from "./file-explorer-api";
 import {
 	type AppliedDecoration,
 	clearDecoration,
@@ -13,14 +17,10 @@ import {
 } from "./file-explorer-decorations";
 import type { IndicatorHandle } from "./indicator-handle";
 
-interface FileExplorerView extends View {
-	fileItems?: Record<string, { titleEl?: HTMLElement; selfEl?: HTMLElement }>;
-}
-
 const LINK_SCAN_BATCH = 64;
 
 export function registerFileExplorerIndicators(
-	plugin: ObsyncPlugin,
+	plugin: Plugin & PluginHost,
 	controller: SyncController,
 ): IndicatorHandle {
 	let applied = new Map<string, AppliedDecoration>();
@@ -43,8 +43,8 @@ export function registerFileExplorerIndicators(
 
 	const apply = (): void => {
 		if (!enabled || disposed) return;
-		const view = findFileExplorer(plugin.app.workspace);
-		if (!view?.fileItems) return;
+		const explorer = readFileExplorer(plugin.app.workspace);
+		if (!explorer) return;
 		if (detectorEnabled !== plugin.settings.ignoreSymlinks) {
 			detectorEnabled = plugin.settings.ignoreSymlinks;
 			detector = createSymlinkDetector(
@@ -57,14 +57,12 @@ export function registerFileExplorerIndicators(
 		}
 
 		const next = computeDecorations(plugin, controller, directLinks);
-		const items = view.fileItems;
 		const paths = new Set([...applied.keys(), ...next.keys()]);
 		const updated = new Map<string, AppliedDecoration>();
 		for (const path of paths) {
 			const previous = applied.get(path);
 			const decoration = next.get(path);
-			const item = items[path];
-			const target = item?.selfEl ?? item?.titleEl;
+			const target = explorer.row(path);
 			if (!decoration || !target) {
 				if (previous) clearDecoration(previous.target);
 				continue;
@@ -91,13 +89,13 @@ export function registerFileExplorerIndicators(
 			apply();
 			if (scanAfterApply) {
 				scanAfterApply = false;
-				const view = findFileExplorer(plugin.app.workspace);
-				if (view?.fileItems) startLinkScan(view);
+				const rows = readFileExplorer(plugin.app.workspace);
+				if (rows) startLinkScan(rows);
 			}
 		});
 	};
 
-	const startLinkScan = (view: FileExplorerView): void => {
+	const startLinkScan = (explorer: FileExplorerRows): void => {
 		if (!enabled || disposed) return;
 		if (scanFrame !== null) {
 			scanAgain = true;
@@ -107,7 +105,7 @@ export function registerFileExplorerIndicators(
 			directLinks = new Map();
 			return;
 		}
-		const paths = Object.keys(view.fileItems ?? {});
+		const paths = explorer.paths();
 		const visible = new Set(paths);
 		const found = new Map(
 			[...directLinks].filter(([path]) => visible.has(path)),
@@ -143,8 +141,8 @@ export function registerFileExplorerIndicators(
 			}
 			if (scanAgain) {
 				scanAgain = false;
-				const current = findFileExplorer(plugin.app.workspace);
-				if (current?.fileItems) startLinkScan(current);
+				const current = readFileExplorer(plugin.app.workspace);
+				if (current) startLinkScan(current);
 			}
 		};
 		scanFrame = window.requestAnimationFrame(scanBatch);
@@ -165,8 +163,7 @@ export function registerFileExplorerIndicators(
 
 	const observeExplorer = (): void => {
 		if (!enabled || disposed) return;
-		const view = findFileExplorer(plugin.app.workspace);
-		const container = view?.containerEl ?? null;
+		const container = readFileExplorerContainer(plugin.app.workspace);
 		if (container === observedContainer) return;
 		observer?.disconnect();
 		observedContainer = container;
@@ -194,6 +191,7 @@ export function registerFileExplorerIndicators(
 	const unsub = controller.subscribe(() => schedule());
 	plugin.register(unsub);
 	if (plugin.shares) plugin.register(plugin.shares.subscribe(() => schedule()));
+	plugin.register(plugin.ignoreState.subscribe(() => schedule()));
 	plugin.registerEvent(plugin.app.vault.on("create", resetLinks));
 	plugin.registerEvent(plugin.app.vault.on("delete", resetLinks));
 	plugin.registerEvent(plugin.app.vault.on("rename", resetLinks));
@@ -230,13 +228,6 @@ export function registerFileExplorerIndicators(
 			resetLinks();
 		},
 	};
-}
-
-function findFileExplorer(workspace: Workspace): FileExplorerView | null {
-	const leaves = workspace.getLeavesOfType("file-explorer");
-	const first = leaves[0];
-	if (!first) return null;
-	return first.view;
 }
 
 function hasExternalMutation(records: MutationRecord[]): boolean {

@@ -1,24 +1,36 @@
-import {
-	DeleteObjectCommand,
-	GetObjectCommand,
-	HeadObjectCommand,
-	ListObjectsV2Command,
-	PutObjectCommand,
-	S3Client,
-} from "@aws-sdk/client-s3";
+import { requestUrl } from "obsidian";
 
-import { DEFAULT_CONCURRENCY } from "../../constants";
-import { normalizeKeyPrefix } from "../../shared/path";
-import { EStorageBackend, type S3StorageConfig } from "../config";
+import { DEFAULT_CONCURRENCY } from "@/constants";
+import { normalizeKeyPrefix } from "@/shared/path";
+import { EStorageBackend, type S3StorageConfig } from "@/storage/config";
 import {
 	CONCURRENCY_FIELD,
 	EFieldKind,
 	type SettingsFieldSpec,
-} from "../field-spec";
-import type { StorageAdapter } from "../types";
-import { delay, RETRY_DELAYS_MS, withTimeout } from "./util";
+} from "@/storage/field-spec";
+import type { ConditionalRead, StorageAdapter } from "@/storage/types";
+import { toArrayBuffer } from "@/utils/bytes";
+import {
+	createS3Signer,
+	type S3RequestInput,
+	type S3Signer,
+} from "./s3-signer";
+import { parseErrorCode, parseListObjects } from "./s3-xml";
+import {
+	assertOk,
+	headerValue,
+	isRetryableStatus,
+	STORAGE_TIMEOUT_MS,
+	StorageHttpError,
+	withRetry,
+	withTimeout,
+} from "./util";
 
-const S3_TIMEOUT_MS = 30_000;
+const HTTP_NOT_FOUND = 404;
+const HTTP_NOT_MODIFIED = 304;
+const HTTP_PRECONDITION_FAILED = 412;
+/** Stored with every object, as the SDK adapter did. */
+const OBJECT_CACHE_CONTROL = "no-cache, no-store, must-revalidate";
 
 export const S3_FIELDS: ReadonlyArray<SettingsFieldSpec> = [
 	{
@@ -82,115 +94,184 @@ export function describeS3Target(config: S3StorageConfig): string {
 
 export function createS3Adapter(config: S3StorageConfig): StorageAdapter {
 	assertConfig(config);
-	const client = new S3Client({
-		region: config.region || "auto",
-		endpoint: config.endpoint || undefined,
-		forcePathStyle: config.forcePathStyle,
-		credentials: {
-			accessKeyId: config.accessKeyId,
-			secretAccessKey: config.secretAccessKey,
-		},
-	});
+	const sign = createS3Signer(config);
 	const prefix = normalizeKeyPrefix(config.prefix);
 	const fullKey = (key: string): string => `${prefix}${key}`;
+	const send = createSender(sign);
+
+	const readObject = async (
+		key: string,
+		etag: string | null,
+	): Promise<ConditionalRead> => {
+		const res = await send({
+			method: "GET",
+			key: fullKey(key),
+			// The manifest moves under us, and a revalidated read is what the
+			// stale-read reconciliation in sync/manifest.ts assumes.
+			headers: {
+				"Cache-Control": "no-cache",
+				...(etag ? { "If-None-Match": etag } : {}),
+			},
+		});
+		if (res.status === HTTP_NOT_MODIFIED) {
+			// Only ever an answer about the validator we sent. Unsolicited it
+			// describes nothing, and the caller of a plain read would take it for
+			// an object that is not there.
+			if (!etag) {
+				throw new Error(
+					`S3 answered 304 to an unconditional read of "${key}".`,
+				);
+			}
+			return { status: "unchanged" };
+		}
+		if (isAbsent(res)) return { status: "absent" };
+		assertOk(res, "read", key);
+		return {
+			status: "found",
+			body: new Uint8Array(res.arrayBuffer),
+			etag: headerValue(res.headers, "etag"),
+		};
+	};
 
 	return {
-		capabilities: { canList: true },
 		identity() {
 			return s3Identity(config);
 		},
 		async exists(key) {
-			return withRetry(async () => {
-				try {
-					await s3Timeout(
-						client.send(
-							new HeadObjectCommand({
-								Bucket: config.bucket,
-								Key: fullKey(key),
-							}),
-						),
-					);
-					return true;
-				} catch (err) {
-					if (isNotFound(err)) return false;
-					throw err;
-				}
-			});
+			const res = await send({ method: "HEAD", key: fullKey(key) });
+			if (isAbsent(res)) return false;
+			assertOk(res, "check", key);
+			return true;
 		},
 		async get(key) {
-			return withRetry(async () => {
-				try {
-					const out = await s3Timeout(
-						client.send(
-							new GetObjectCommand({
-								Bucket: config.bucket,
-								Key: fullKey(key),
-								ResponseCacheControl: `no-cache, no-store, must-revalidate, buster=${Date.now()}`,
-							}),
-						),
-					);
-					const body = out.Body;
-					if (!body) return null;
-					return await readBodyToBytes(body);
-				} catch (err) {
-					if (isNotFound(err)) return null;
-					throw err;
-				}
-			});
+			const read = await readObject(key, null);
+			return read.status === "found" ? read.body : null;
 		},
+		getIfChanged: readObject,
 		async put(key, body, contentType) {
-			await withRetry(() =>
-				s3Timeout(
-					client.send(
-						new PutObjectCommand({
-							Bucket: config.bucket,
-							Key: fullKey(key),
-							Body: body,
-							ContentType: contentType ?? "application/octet-stream",
-							CacheControl: "no-cache, no-store, must-revalidate",
-						}),
-					),
-				),
-			);
+			const res = await sendPut(send, fullKey(key), body, contentType);
+			assertOk(res, "write", key);
+		},
+		async putIfAbsent(key, body, contentType) {
+			const res = await sendPut(send, fullKey(key), body, contentType, {
+				"If-None-Match": "*",
+			});
+			if (res.status === HTTP_PRECONDITION_FAILED) return false;
+			assertOk(res, "write", key);
+			return true;
 		},
 		async delete(key) {
-			await withRetry(() =>
-				s3Timeout(
-					client.send(
-						new DeleteObjectCommand({
-							Bucket: config.bucket,
-							Key: fullKey(key),
-						}),
-					),
-				),
-			);
+			const res = await send({ method: "DELETE", key: fullKey(key) });
+			// S3 answers 204 for a key that was never there; a backend that
+			// answers 404 means the same thing.
+			if (isAbsent(res)) return;
+			assertOk(res, "delete", key);
 		},
 		async list(keyPrefix) {
 			const keys: string[] = [];
+			const seenTokens = new Set<string>();
 			let token: string | undefined;
 			do {
-				const out = await s3Timeout(
-					client.send(
-						new ListObjectsV2Command({
-							Bucket: config.bucket,
-							Prefix: fullKey(keyPrefix),
-							ContinuationToken: token,
-						}),
-					),
-				);
-				for (const item of out.Contents ?? []) {
-					if (item.Key) keys.push(relativeKey(item.Key, prefix));
+				const query: Record<string, string> = {
+					"list-type": "2",
+					prefix: fullKey(keyPrefix),
+				};
+				if (token) query["continuation-token"] = token;
+				// A listing addresses the bucket itself, so it carries no key.
+				const res = await send({ method: "GET", key: "", query });
+				assertOk(res, "list", keyPrefix);
+				const page = parseListObjects(res.text);
+				for (const key of page.keys) {
+					const relative = relativeKey(key, prefix);
+					// A folder marker under the prefix relativises to "", which is not
+					// an object any caller can ask for.
+					if (relative) keys.push(relative);
 				}
-				token = out.NextContinuationToken;
+				token = page.nextToken;
+				// A backend that hands back a token it already gave would keep the
+				// listing going forever. Stopping would answer with a partial list,
+				// which is what decides whether an object gets deleted.
+				if (token && seenTokens.has(token)) {
+					throw new Error(
+						`S3 repeated a continuation token while listing "${keyPrefix}", so the object list cannot be completed.`,
+					);
+				}
+				if (token) seenTokens.add(token);
 			} while (token);
 			return keys;
 		},
 	};
 }
 
-/** Every S3 call gets the same deadline. */
-function s3Timeout<T>(promise: Promise<T>): Promise<T> {
-	return withTimeout(promise, S3_TIMEOUT_MS);
+type S3Response = Awaited<ReturnType<typeof requestUrl>>;
+type Send = (input: S3RequestInput, body?: Uint8Array) => Promise<S3Response>;
+
+/**
+ * Signs and sends under the shared timeout and retry policy. Signing happens
+ * inside the retry, not once around it: a signature carries the minute it was
+ * made and a request replayed after a backoff would be refused for skew.
+ */
+function createSender(sign: S3Signer): Send {
+	return (input, body) =>
+		withRetry(async () => {
+			const signed = await sign({ ...input, body });
+			const res = await withTimeout(
+				requestUrl({
+					url: signed.url,
+					method: input.method,
+					headers: signed.headers,
+					...(body ? { body: toArrayBuffer(body) } : {}),
+					throw: false,
+				}),
+				STORAGE_TIMEOUT_MS,
+			);
+			if (isRetryableStatus(res.status)) {
+				throw new StorageHttpError(
+					res.status,
+					`S3 request failed (HTTP ${res.status})`,
+				);
+			}
+			return res;
+		});
+}
+
+function sendPut(
+	send: Send,
+	key: string,
+	body: Uint8Array,
+	contentType: string | undefined,
+	extraHeaders: Record<string, string> = {},
+): Promise<S3Response> {
+	return send(
+		{
+			method: "PUT",
+			key,
+			headers: {
+				"Content-Type": contentType ?? "application/octet-stream",
+				"Cache-Control": OBJECT_CACHE_CONTROL,
+				...extraHeaders,
+			},
+		},
+		body,
+	);
+}
+
+/**
+ * A 404 usually means the object is not there. NoSuchBucket is also a 404, but
+ * it means the configuration is wrong, not that the vault is empty - reporting
+ * it as absence would re-upload everything into nowhere, and an empty manifest
+ * read as the remote head would republish over the real one.
+ *
+ * A body that is not an S3 error document is something between the plugin and
+ * the bucket answering: a proxy or a captive portal, not the bucket saying the
+ * object is gone. Only a HEAD is allowed to be silent, because a HEAD carries
+ * no body to say which - and neither did the SDK.
+ */
+function isAbsent(res: S3Response): boolean {
+	if (res.status !== HTTP_NOT_FOUND) return false;
+	const code = parseErrorCode(res.text);
+	if (code === "NoSuchBucket") return false;
+	return code !== null || res.text.trim() === "";
 }
 
 function assertConfig(config: S3StorageConfig): void {
@@ -203,84 +284,4 @@ function assertConfig(config: S3StorageConfig): void {
 function relativeKey(key: string, prefix: string): string {
 	if (!prefix) return key;
 	return key.startsWith(prefix) ? key.slice(prefix.length) : key;
-}
-
-function isNotFound(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-	return (
-		e.name === "NoSuchKey" ||
-		e.name === "NotFound" ||
-		e.$metadata?.httpStatusCode === 404
-	);
-}
-
-async function readBodyToBytes(body: unknown): Promise<Uint8Array> {
-	if (body instanceof Uint8Array) return body;
-	if (body instanceof ArrayBuffer) return new Uint8Array(body);
-	if (
-		typeof (body as { transformToByteArray?: () => Promise<Uint8Array> })
-			.transformToByteArray === "function"
-	) {
-		return (
-			body as { transformToByteArray: () => Promise<Uint8Array> }
-		).transformToByteArray();
-	}
-	if (body instanceof Blob) {
-		return new Uint8Array(await body.arrayBuffer());
-	}
-	const stream = body as ReadableStream<Uint8Array> | undefined;
-	if (stream && typeof stream.getReader === "function") {
-		return readStream(stream);
-	}
-	throw new Error("Unsupported S3 response body type");
-}
-
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-	let lastErr: unknown;
-	for (let i = 0; i <= RETRY_DELAYS_MS.length; i++) {
-		try {
-			return await fn();
-		} catch (err) {
-			lastErr = err;
-			if (!isRetryable(err) || i === RETRY_DELAYS_MS.length) break;
-			await delay(RETRY_DELAYS_MS[i] as number);
-		}
-	}
-	throw lastErr;
-}
-
-function isRetryable(err: unknown): boolean {
-	if (!err || typeof err !== "object") return false;
-	const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-	if (
-		e.name === "TimeoutError" ||
-		e.name === "NetworkingError" ||
-		e.name === "RequestTimeout"
-	)
-		return true;
-	const status = e.$metadata?.httpStatusCode;
-	return status !== undefined && status >= 500;
-}
-
-async function readStream(
-	stream: ReadableStream<Uint8Array>,
-): Promise<Uint8Array> {
-	const reader = stream.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	while (true) {
-		const { value, done } = await reader.read();
-		if (done) break;
-		if (!value) continue;
-		chunks.push(value);
-		total += value.length;
-	}
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		out.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return out;
 }

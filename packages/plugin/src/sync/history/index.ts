@@ -1,5 +1,40 @@
-export { clampMaxSnapshots, gcExcessBuffer, shouldRunGc } from "./gc";
+export {
+	collectChangeHashes,
+	contiguousLength,
+	diffManifests,
+	undoChanges,
+	undoChangesForPath,
+} from "./changes";
+export {
+	clampMaxSnapshots,
+	collectHashes,
+	gcExcessBuffer,
+	shouldRunGc,
+} from "./gc";
 export { publishManifestWithHistory } from "./publish";
-export { getFileHistory, loadVersionBytes } from "./query";
-export { setSnapshotPinned } from "./store";
-export type { FileVersion, HistoryConfig } from "./types";
+export {
+	getFileHistory,
+	listDeletedFiles,
+	listSnapshots,
+	loadVersionBytes,
+} from "./query";
+export { replayTo } from "./replay";
+export { planVaultRestore, type VaultRestorePlan } from "./restore-vault";
+export {
+	pinKey,
+	readHistoryLog,
+	readPinManifest,
+	resolveSnapshotManifest,
+	setSnapshotPinned,
+} from "./store";
+export type {
+	DeletedFile,
+	DeletedFilesResult,
+	FileVersion,
+	HistoryConfig,
+	HistoryLog,
+	SnapshotChanges,
+	SnapshotEntry,
+	SnapshotListResult,
+	SnapshotSummary,
+} from "./types";

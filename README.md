@@ -19,11 +19,36 @@ Obsync writes only inside the configured bucket and prefix:
 
 ```text
 <prefix>/manifest.json.enc
+<prefix>/history.json.enc
 <prefix>/salt.bin
 <prefix>/objects/<sha256>.enc
+<prefix>/pins/<snapshotId>.json.enc
 ```
 
+`history.json.enc` is a single encrypted change log: one entry per push, each recording
+only what that push added, modified or deleted relative to its parent. Reading a file's
+history therefore costs one download regardless of how many snapshots are kept. Pinning a
+snapshot additionally stores a full manifest under `pins/`, so a pin survives after the
+snapshots between it and the current state have been pruned.
+
 The manifest and object contents are encrypted with a key derived from your passphrase. The passphrase is not uploaded.
+
+### History, deleted files and the timeline
+
+The source control view has four tabs. **Changes** is the usual push/pull list,
+with a path filter above it. **History** lists the open file's past versions -
+click one to diff it against the working copy, or use its `⋯` menu to restore it,
+compare it with the version before, or pin it under a name you choose. Restoring
+always shows the exact diff first. **Timeline** lists every push to the vault with
+what it changed, and can put the whole vault back to any of them.
+
+### Restoring a deleted file
+
+The source control view has a **Deleted** tab (also **Obsync: Restore deleted files**)
+listing every file that is gone from the vault but still held by history, with when it
+went, which device removed it, and how many more pushes the record survives. Restore puts
+it back where it was, recreating any folders it needs; **Restore to…** writes it somewhere
+else. Deletions age out with their snapshot, so pin a snapshot to keep one for good.
 
 ## Setup
 
@@ -73,7 +98,7 @@ Changing `syncignore.md` or the ignore settings marks the current compare result
 
 ## Remote reset
 
-Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc` and everything under `objects/` for the configured bucket prefix. It keeps `salt.bin`, so the same passphrase-derived key remains valid.
+Use **Obsync: Reset remote storage** or **Settings → Obsync → Reset remote** only when you want to rebuild the remote sync state from this vault. The reset flow requires typing `RESET` before it runs. It deletes `manifest.json.enc`, everything under `objects/`, the change log `history.json.enc`, every pinned snapshot under `pins/`, and anything left under the abandoned `snapshots/` prefix for the configured bucket prefix. It keeps `salt.bin` and `keys.json`, so the same passphrase-derived key remains valid.
 
 After reset, local vault files are preserved, the local baseline is cleared, and the next source control view shows local files as additions ready to push.
 
@@ -112,7 +137,7 @@ Object bytes go straight between participants and S3; the broker only signs, so 
 
 ## Device transfer
 
-Use **Settings → Obsync → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, device-local ignore patterns, file size limit, concurrency, and auto-pull settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
+Use **Settings → Obsync → Connection → Export** to create an encrypted setup link and QR code for another device. The transfer payload is intentionally compact: it includes the main sync settings such as endpoint, bucket, prefix, credentials, sync scope, device-local ignore patterns, file size limit, concurrency, autosync, and queued-push settings. It does not include the cached passphrase, passphrase cache settings, or local-only display preferences.
 
 The transfer link is encrypted with a key derived from the current Obsync passphrase and a random transfer salt. Before encryption, the payload is minified to short keys and compressed when that actually makes the token smaller. The final URL uses the `obsidian://obsync?d=...` format. The receiving device must use the same passphrase and explicitly confirm import before the transferred settings are applied.
 
@@ -139,3 +164,19 @@ Source code lives in `src/`. The bundled release artifact is `main.js` at the pl
 ## Privacy and security
 
 Obsync has no telemetry. Sync logs are local to the current device and are excluded from sync. Vault files and filenames are sent only to the S3-compatible storage that you configure. Plugin settings are transferred between devices only when you explicitly export an encrypted setup link or QR code.
+
+### What each optional service can see
+
+Obsync works with nothing but your storage bucket. The two optional services below are the only other places anything goes, and both are yours to self-host.
+
+**The relay** (optional, for instant propagation) never sees vault content, filenames or keys. It does see, for each room it carries: the room id, which is derived from the storage identity (`s3|<bucket>/<prefix>`) or the share id; the device names and ids you set; and the timing of every sync. A share's participants are given a room token scoped to that one room, so holding it does not open any other room on the same relay.
+
+**The share broker** (optional, only for shared folders) signs one URL per object and never sees object bytes or the share key. It does see the object keys inside `<prefix>shares/<share-id>/`, which are content hashes rather than filenames, and it holds the participant tokens you issue.
+
+### Google Drive and the default auth server
+
+Google's OAuth flow needs a client secret, which cannot ship inside a plugin. Obsync therefore performs the token exchange on a small worker. **The `Auth server URL` field defaults to `https://obsync-auth.kitbyte.workers.dev`, a worker run by this plugin's author.** With that default, your Google refresh token is sent to it on every token refresh, and it can mint access tokens for the Drive folder you granted.
+
+Deploy your own copy of `packages/auth-worker` and point the field at it if you would rather not rely on someone else's. It is the same worker as the share broker, and the same deploy covers both.
+
+Google Drive is supported on a best-effort basis: it has no conditional writes, so two devices writing the same new object at the same moment can leave two files with one name. Do not use it for shared folders; use an S3-compatible bucket for those.

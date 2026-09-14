@@ -1,16 +1,9 @@
 /**
- * Realtime sync signalling client.
- *
- * Connects to a PartyKit server via WebSocket.
+ * Realtime sync signalling client via PartyKit WebSocket.
  * - On push: sends "sync" to notify other devices.
- * - On receiving "sync": triggers an auto-pull via the scheduler callback.
- *
- * The channel ID is derived from the storage identity so each vault+storage
- * combo gets its own isolated PartyKit room.
- *
- * PartyKit URL format:
- *   WebSocket: wss://<project>.<user>.partykit.dev/party/<roomId>
- *   HTTP:      https://<project>.<user>.partykit.dev/party/<roomId>
+ * - On receiving "sync": triggers auto-pull via scheduler.
+ * Room token is derived from deployment token and room id, ensuring room
+ * tokens never carry storage credentials or deployment secrets.
  */
 
 import { requestUrl } from "obsidian";
@@ -18,6 +11,9 @@ import { requestUrl } from "obsidian";
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 const PING_INTERVAL_MS = 30_000;
+/** Treats link with no traffic for this long as dead and reopens it. */
+const SILENCE_TIMEOUT_MS = 90_000;
+const UNAUTHORIZED_CLOSE_CODE = 4001;
 
 export interface RealtimePresenceDevice {
 	id: string;
@@ -38,7 +34,10 @@ type RealtimeServerMessage = RealtimePresenceMessage | RealtimeSyncMessage;
 export interface RealtimeClientOptions {
 	serverUrl: string;
 	channelId: string;
+	/** Relay deployment secret. The room token is derived from it. */
 	token?: string;
+	/** Room token derived elsewhere for a participant handed one instead of the deployment secret. */
+	roomToken?: string;
 	deviceId?: string;
 	deviceName?: string;
 	onRemoteSync: () => void;
@@ -52,6 +51,8 @@ export class RealtimeClient {
 	private reconnectTimer: number | null = null;
 	private pingTimer: number | null = null;
 	private disposed = false;
+	private roomToken: Promise<string> | null = null;
+	private lastMessageAt = 0;
 	private readonly options: RealtimeClientOptions;
 
 	constructor(options: RealtimeClientOptions) {
@@ -59,10 +60,22 @@ export class RealtimeClient {
 	}
 
 	connect(): void {
+		void this.openSocket();
+	}
+
+	private async openSocket(): Promise<void> {
 		if (this.disposed) return;
 		this.cleanup();
 
-		const wsUrl = buildRoomUrl(this.options.serverUrl, this.options);
+		let wsUrl: string;
+		try {
+			wsUrl = await this.roomUrl(this.options.serverUrl);
+		} catch {
+			// A malformed server URL cannot be fixed by retrying.
+			this.options.onConnectionChange?.(false);
+			return;
+		}
+		if (this.disposed) return;
 
 		let socket: WebSocket;
 		try {
@@ -76,12 +89,14 @@ export class RealtimeClient {
 		socket.addEventListener("open", () => {
 			if (this.ws !== socket) return;
 			this.reconnectAttempts = 0;
+			this.lastMessageAt = Date.now();
 			this.startPing();
 			this.options.onConnectionChange?.(true);
 		});
 
 		socket.addEventListener("message", (event) => {
 			if (this.ws !== socket) return;
+			this.lastMessageAt = Date.now();
 			const data = typeof event.data === "string" ? event.data : "";
 			try {
 				const msg = JSON.parse(data) as RealtimeServerMessage;
@@ -99,11 +114,13 @@ export class RealtimeClient {
 			}
 		});
 
-		socket.addEventListener("close", () => {
+		socket.addEventListener("close", (event) => {
 			if (this.ws !== socket) return;
 			this.stopPing();
 			this.options.onPresenceChange?.([]);
 			this.options.onConnectionChange?.(false);
+			// A rejected token is terminal; avoids hammering relay with bad credentials.
+			if (event.code === UNAUTHORIZED_CLOSE_CODE) return;
 			if (!this.disposed) this.scheduleReconnect();
 		});
 
@@ -112,8 +129,8 @@ export class RealtimeClient {
 		});
 	}
 
-	/** Notify other devices that we just pushed changes. */
 	notifySync(): void {
+		if (this.disposed) return;
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
 			try {
 				this.ws.send("sync");
@@ -136,17 +153,44 @@ export class RealtimeClient {
 	}
 
 	private async notifyViaHttp(): Promise<void> {
+		if (this.disposed) return;
 		const baseUrl = this.options.serverUrl.replace(/^ws(s)?:/, "http$1:");
-		const url = buildRoomUrl(baseUrl, this.options);
 		try {
+			const url = await this.roomUrl(baseUrl);
 			await requestUrl({ url, method: "POST", throw: false });
 		} catch {
 			// Best-effort, don't block sync on signalling failure
 		}
 	}
 
+	/** Room URL carrying the room-scoped token, derived once per client. */
+	private async roomUrl(serverUrl: string): Promise<string> {
+		if (this.options.roomToken) {
+			return buildRoomUrl(serverUrl, {
+				...this.options,
+				token: this.options.roomToken,
+			});
+		}
+		const secret = this.options.token;
+		if (!secret) {
+			return buildRoomUrl(serverUrl, { ...this.options, token: undefined });
+		}
+		if (!this.roomToken) {
+			this.roomToken = deriveRoomToken(secret, this.options.channelId);
+		}
+		return buildRoomUrl(serverUrl, {
+			...this.options,
+			token: await this.roomToken,
+		});
+	}
+
 	private cleanup(): void {
 		this.stopPing();
+		// A pending reconnect belongs to the socket being replaced.
+		if (this.reconnectTimer !== null) {
+			window.clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
 		const socket = this.ws;
 		this.ws = null;
 		if (socket) {
@@ -177,9 +221,13 @@ export class RealtimeClient {
 	private startPing(): void {
 		this.stopPing();
 		this.pingTimer = window.setInterval(() => {
-			if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-				this.ws.send("ping");
+			if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+			// Drops silently dead TCP links to trigger reconnect path.
+			if (Date.now() - this.lastMessageAt > SILENCE_TIMEOUT_MS) {
+				this.ws.close();
+				return;
 			}
+			this.ws.send("ping");
 		}, PING_INTERVAL_MS);
 	}
 
@@ -202,12 +250,35 @@ export function normalizePresenceDevices(
 		const name = (entry as { name?: unknown }).name;
 		if (typeof id !== "string" || id.trim().length === 0) continue;
 		if (typeof name !== "string" || name.trim().length === 0) continue;
-		devices.set(id, { id, name: name.trim() });
+		const trimmedId = id.trim();
+		devices.set(trimmedId, { id: trimmedId, name: name.trim() });
 	}
 	return [...devices.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
 	);
+}
+
+/**
+ * HMAC-SHA256(deployment token, room id) as lowercase hex. Must match relay's
+ * deriveRoomToken.
+ */
+export async function deriveRoomToken(
+	secret: string,
+	roomId: string,
+): Promise<string> {
+	const encoder = new TextEncoder();
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(roomId));
+	return [...new Uint8Array(mac)]
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
 }
 
 function buildRoomUrl(
@@ -225,6 +296,8 @@ function buildRoomUrl(
 	}
 	if (options.deviceId) {
 		url.searchParams.set("deviceId", options.deviceId);
+		// Lets the HTTP fallback skip this device's own socket.
+		url.searchParams.set("from", options.deviceId);
 	}
 	if (options.deviceName) {
 		url.searchParams.set("deviceName", options.deviceName);

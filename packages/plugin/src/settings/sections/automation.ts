@@ -1,60 +1,83 @@
 import { Setting } from "obsidian";
 
 import {
-	AUTO_PULL_MAX_MINUTES,
-	AUTO_PULL_MIN_MINUTES,
+	AUTO_PUSH_SETTLE_MAX_SECONDS,
+	AUTO_PUSH_SETTLE_MIN_SECONDS,
+	AUTO_SYNC_MAX_MINUTES,
+	AUTO_SYNC_MIN_MINUTES,
 	FILE_HISTORY_MAX_SNAPSHOTS,
 	FILE_HISTORY_MIN_SNAPSHOTS,
-} from "../../constants";
-import type ObsyncPlugin from "../../main";
-import { EFieldKind } from "../../storage/field-spec";
-import { clampMaxSnapshots } from "../../sync/history";
-import { type FieldContext, renderFields, type SettingsField } from "../fields";
+} from "@/constants";
+import type { PluginHost } from "@/plugin/host";
+import {
+	type FieldContext,
+	renderFields,
+	type SettingsField,
+} from "@/settings/fields";
+import { EFieldKind } from "@/storage/field-spec";
+import { clampMaxSnapshots } from "@/sync/history";
 
 const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	{
 		kind: EFieldKind.Toggle,
-		name: "Auto-pull on startup",
-		desc: "Compare with remote shortly after Obsidian launches and pull non-conflicting changes.",
-		get: (s) => s.autoPullOnStartup,
-		set: (v) => ({ autoPullOnStartup: v }),
-	},
-	{
-		kind: EFieldKind.Number,
-		name: "Auto-pull interval (minutes)",
-		desc: `Set to ${AUTO_PULL_MIN_MINUTES} to disable. Max ${AUTO_PULL_MAX_MINUTES}.`,
-		get: (s) => String(s.autoPullIntervalMinutes),
-		parse: clampAutoPullMinutes,
-		set: (v) => ({ autoPullIntervalMinutes: v }),
-	},
-	{
-		kind: EFieldKind.Toggle,
-		name: "Auto-refresh on file change",
-		desc: "Recompare with the remote shortly after a file changes, keeping the Changes list current. Disable to refresh only when you click compare. (Auto-push on save also requires this.)",
-		get: (s) => s.autoRefreshOnFileChange,
-		set: (v) => ({ autoRefreshOnFileChange: v }),
-	},
-	{
-		kind: EFieldKind.Toggle,
-		name: "Auto-push on save",
-		desc: "Push a file to remote shortly after saving it. Skipped if there are conflicts or if the file has incoming remote changes.",
-		get: (s) => s.autoPushOnSave,
-		set: (v) => ({ autoPushOnSave: v }),
+		name: "Autosync",
+		desc: "Sync automatically: once after startup and on a schedule. Pulls remote changes; conflicts that cannot be merged safely stop the cycle.",
+		get: (s) => s.autoSyncEnabled,
+		set: (v) => ({ autoSyncEnabled: v }),
 		rerender: true,
 	},
 	{
-		kind: EFieldKind.Toggle,
-		name: "Push only the saved file",
-		desc: "When a file is saved, push just that file instead of every pending local change.",
-		when: (s) => s.autoPushOnSave,
+		kind: EFieldKind.Number,
+		name: "Interval (minutes)",
+		desc: `How often to sync. 0 means only once after startup. Max ${AUTO_SYNC_MAX_MINUTES}.`,
+		when: (s) => s.autoSyncEnabled,
 		sub: true,
-		get: (s) => s.autoPushOnSaveCurrentFileOnly,
-		set: (v) => ({ autoPushOnSaveCurrentFileOnly: v }),
+		get: (s) => String(s.autoSyncIntervalMinutes),
+		parse: clampAutoSyncMinutes,
+		set: (v) => ({ autoSyncIntervalMinutes: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push after successful pull",
+		desc: "After a pull with no conflicts, also push local changes. Disable to only pull and review incoming changes.",
+		when: (s) => s.autoSyncEnabled,
+		sub: true,
+		get: (s) => s.autoPushAfterSync,
+		set: (v) => ({ autoPushAfterSync: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push after changes settle",
+		desc: "Queue changed files and push once the vault has been quiet for the delay below. Rapid saves are combined into one compare and push. Never pulls: conflicts and incoming changes are left untouched.",
+		get: (s) => s.autoPushAfterChange,
+		set: (v) => ({ autoPushAfterChange: v }),
+		rerender: true,
+	},
+	{
+		kind: EFieldKind.Slider,
+		name: "Quiet period (seconds)",
+		desc: `How long the vault must stay quiet after a change before the queued push runs (${AUTO_PUSH_SETTLE_MIN_SECONDS}–${AUTO_PUSH_SETTLE_MAX_SECONDS}). Shorter pushes sooner, longer batches more saves.`,
+		when: (s) => s.autoPushAfterChange,
+		sub: true,
+		min: AUTO_PUSH_SETTLE_MIN_SECONDS,
+		max: AUTO_PUSH_SETTLE_MAX_SECONDS,
+		step: 1,
+		get: (s) => s.autoPushSettleSeconds,
+		set: (v) => ({ autoPushSettleSeconds: v }),
+	},
+	{
+		kind: EFieldKind.Toggle,
+		name: "Push only queued files",
+		desc: "Push only files changed during the quiet period. Disable to also push other pending local changes.",
+		when: (s) => s.autoPushAfterChange,
+		sub: true,
+		get: (s) => s.autoPushChangedFilesOnly,
+		set: (v) => ({ autoPushChangedFilesOnly: v }),
 	},
 	{
 		kind: EFieldKind.Toggle,
 		name: "File version history",
-		desc: "Keep past versions of files so you can view or restore them. Adds a small encrypted snapshot per push; old versions are pruned automatically.",
+		desc: "Keep past versions of files so you can view or restore them. Each push appends what it changed to one small encrypted log; old versions are pruned automatically.",
 		get: (s) => s.fileHistoryEnabled,
 		set: (v) => ({ fileHistoryEnabled: v }),
 		rerender: true,
@@ -106,10 +129,10 @@ const AUTOMATION_FIELDS: ReadonlyArray<SettingsField> = [
 	},
 ];
 
-/** Returns an unsubscribe for the live relay-status rows. */
+/** Returns unsubscribe for relay-status rows. */
 export function renderAutomationSection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	onDisplay: () => void,
 ): () => void {
 	new Setting(parent).setName("Automation").setHeading();
@@ -122,12 +145,12 @@ export function renderAutomationSection(
 
 function renderRelayStatus(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 ): () => void {
 	const statusSetting = new Setting(parent).setName("Relay status");
 	const devicesSetting = new Setting(parent).setName("Connected devices");
-	let connected = plugin.isRealtimeConnected();
-	let devices = [...plugin.getRealtimeDevices()];
+	let connected = plugin.realtime.isConnected();
+	let devices = [...plugin.realtime.getDevices()];
 
 	const render = (): void => {
 		statusSetting.setDesc(describeRelayStatus(plugin, connected));
@@ -141,11 +164,11 @@ function renderRelayStatus(
 	};
 	render();
 
-	const unsubscribeStatus = plugin.subscribeRealtimeStatus((value) => {
+	const unsubscribeStatus = plugin.realtime.subscribe((value) => {
 		connected = value;
 		render();
 	});
-	const unsubscribeDevices = plugin.subscribeRealtimeDevices((value) => {
+	const unsubscribeDevices = plugin.realtime.subscribeDevices((value) => {
 		devices = [...value];
 		render();
 	});
@@ -155,20 +178,20 @@ function renderRelayStatus(
 	};
 }
 
-/** The relay reconnects with the newly saved URL, token, and enabled flag. */
-function restartRelay(plugin: ObsyncPlugin): void {
-	plugin.initRealtime();
+/** Reconnects relay with new settings. */
+function restartRelay(plugin: PluginHost): void {
+	plugin.realtime.restart();
 }
 
-function clampAutoPullMinutes(raw: string): number {
+function clampAutoSyncMinutes(raw: string): number {
 	const parsed = Number.parseInt(raw, 10);
 	return Math.max(
-		AUTO_PULL_MIN_MINUTES,
-		Math.min(AUTO_PULL_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
+		AUTO_SYNC_MIN_MINUTES,
+		Math.min(AUTO_SYNC_MAX_MINUTES, Number.isFinite(parsed) ? parsed : 0),
 	);
 }
 
-function describeRelayStatus(plugin: ObsyncPlugin, connected: boolean): string {
+function describeRelayStatus(plugin: PluginHost, connected: boolean): string {
 	if (!plugin.settings.realtimeSync) return "Relay is disabled.";
 	return connected ? "● Connected" : "○ Not connected";
 }

@@ -13,6 +13,14 @@
 	color: var(--text-on-accent);
 }
 
+.obsync-settings-nav {
+	flex-wrap: wrap;
+}
+
+.obsync-settings-nav .obsync-settings-tab-button {
+	flex: 0 1 auto;
+}
+
 .obsync-log-list {
 	display: flex;
 	flex-direction: column;
@@ -57,12 +65,88 @@
 }
 
 /* Source control view */
-.obsync-source-control {
+.workspace-leaf-content[data-type="obsync-source-control"]
+.view-content.obsync-source-control {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-4-2);
 	padding: var(--size-4-3);
+	padding-bottom: 0;
 	height: 100%;
+	overflow: hidden;
+	container-type: inline-size;
+}
+
+.obsync-source-tabs {
+	position: sticky;
+	top: 0;
+	z-index: 5;
+	display: flex;
+	flex: 0 0 auto;
+	gap: 2px;
+	margin-bottom: var(--size-4-2);
+	padding: 3px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-primary);
+}
+
+.obsync-source-tabs .obsync-settings-tab-button {
+	display: flex;
+	flex: 1 1 0;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-2-2);
+	min-width: 0;
+	height: 30px;
+	padding: 0 var(--size-4-2);
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-source-tabs .obsync-settings-tab-button:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.obsync-source-tabs .obsync-settings-tab-button.is-active {
+	flex-grow: 1.65;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.obsync-source-tab-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.obsync-source-tab-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+.obsync-source-tab-label {
+	display: none;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsync-source-tabs
+	.obsync-settings-tab-button.is-active
+	.obsync-source-tab-label {
+	display: inline;
+}
+
+.obsync-source-tab-panel {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	min-height: 0;
 	overflow: auto;
 }
 
@@ -82,7 +166,8 @@
 	color: var(--text-on-accent);
 }
 
-.obsync-toolbar button.is-warning {
+.obsync-toolbar button.is-warning,
+.obsync-history-row-actions button.is-warning {
 	background-color: var(--background-modifier-error);
 	color: var(--text-on-accent);
 }
@@ -90,6 +175,44 @@
 .obsync-toolbar button:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
+}
+
+.obsync-main-toolbar {
+	flex-wrap: nowrap;
+	gap: var(--size-2-2);
+}
+
+.obsync-main-toolbar .obsync-bulk-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-2-2);
+	min-width: 0;
+	padding-inline: var(--size-4-2);
+}
+
+.obsync-toolbar-icon {
+	display: inline-flex;
+	flex: 0 0 32px;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 30px;
+	padding: 0;
+}
+
+.obsync-toolbar-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+.obsync-toolbar-count {
+	padding: 1px var(--size-2-2);
+	border-radius: var(--radius-s);
+	background: rgba(0, 0, 0, 0.15);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	line-height: 1.2;
 }
 
 .obsync-status-line {
@@ -101,59 +224,178 @@
 	color: var(--color-red);
 }
 
-.obsync-section {
+.obsync-status-conflicts {
+	color: var(--color-red);
+	font-weight: var(--font-semibold);
+}
+
+/* Clickable pill after the compared timestamp; a text button here reads as
+ * part of the sentence and crams against it. */
+.obsync-ignored-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	margin-inline-start: var(--size-4-2);
+	padding: 0 var(--size-4-2);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-s);
-	padding: var(--size-4-2);
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	line-height: 1.4;
+	vertical-align: middle;
+	box-shadow: none;
+}
+
+.obsync-ignored-badge:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.obsync-ignored-badge svg {
+	width: 0.85rem;
+	height: 0.85rem;
+}
+
+.obsync-section {
+	min-width: 0;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
 }
 
 .obsync-section-header {
 	display: flex;
-	justify-content: space-between;
 	align-items: center;
-	gap: var(--size-4-2);
+	gap: var(--size-2-2);
+	min-height: 28px;
+	padding: 2px var(--size-4-1);
+	border-radius: var(--radius-s);
 	cursor: pointer;
 	user-select: none;
 }
 
+.obsync-section-header:hover {
+	background: var(--background-modifier-hover);
+}
+
+.obsync-section-header:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.obsync-section-disclosure {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.obsync-section-disclosure svg {
+	width: 14px;
+	height: 14px;
+}
+
 .obsync-section-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-weight: 600;
 }
 
 .obsync-section-count {
+	margin-left: auto;
+	min-width: 1.35rem;
+	padding: 1px var(--size-2-2);
+	border-radius: 999px;
+	background: var(--background-modifier-hover);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	text-align: center;
 }
 
 .obsync-section-body {
-	margin-top: var(--size-4-2);
+	position: relative;
+	margin: 1px 0 var(--size-4-2);
+	padding: 0 var(--size-4-1);
 }
 
 .obsync-section.is-collapsed .obsync-section-body {
 	display: none;
 }
 
-.obsync-tree-children.is-collapsed {
-	display: none;
-}
-
 .obsync-file-list {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 0;
+}
+
+.obsync-section-actions {
+	gap: var(--size-2-2);
+	padding: 2px 0 var(--size-4-1);
+}
+
+.obsync-section-actions button {
+	min-height: 24px;
+	padding: 1px var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-section-actions .obsync-section-icon-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 27px;
+	min-width: 27px;
+	padding: 0;
+}
+
+.obsync-section-icon-action svg {
+	width: 14px;
+	height: 14px;
 }
 
 .obsync-file-row {
+	position: relative;
 	display: flex;
 	align-items: center;
-	gap: var(--size-4-2);
-	padding: 2px var(--size-4-2);
+	gap: var(--size-2-2);
+	min-height: 27px;
+	padding: 2px var(--size-4-1);
 	border-radius: var(--radius-s);
 	cursor: pointer;
 }
 
 .obsync-file-row:hover {
-	background-color: var(--background-modifier-hover);
+	background-color: color-mix(
+		in srgb,
+		var(--background-modifier-hover) 65%,
+		transparent
+	);
+}
+
+.obsync-file-row:focus-visible {
+	outline: 1px solid var(--interactive-accent);
+	outline-offset: -1px;
+}
+
+.obsync-file-row.is-active {
+	background: var(--background-modifier-hover);
+}
+
+.obsync-file-row.is-active:hover {
+	background: var(--background-modifier-hover);
+}
+
+.obsync-file-row.is-opening {
+	background: var(--background-primary-alt);
+}
+
+.obsync-file-row.is-opening::after {
+	content: "";
+	flex: 0 0 auto;
 }
 
 .obsync-file-row.is-conflict {
@@ -161,10 +403,59 @@
 }
 
 .obsync-file-status {
-	width: 1.25rem;
-	text-align: center;
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-self: stretch;
+	align-items: center;
+	justify-content: flex-end;
+	min-width: 0.6rem;
+	margin-left: auto;
 	font-weight: 700;
 	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	line-height: 1;
+}
+
+.obsync-file-size {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-self: stretch;
+	align-items: center;
+	justify-content: center;
+	font-size: calc(var(--font-ui-smaller) - 2px);
+	font-variant-numeric: tabular-nums;
+	line-height: 0.9;
+	white-space: nowrap;
+}
+
+.obsync-file-size.has-delta {
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 1px;
+}
+
+.obsync-file-size-current {
+	color: var(--text-faint);
+}
+
+.obsync-file-size-delta {
+	font-weight: var(--font-semibold);
+}
+
+.obsync-file-size-delta.is-positive {
+	color: var(--color-green);
+}
+
+.obsync-file-size-delta.is-negative {
+	color: var(--color-red);
+}
+
+.obsync-file-size-delta.is-neutral {
+	color: var(--text-muted);
+}
+
+.obsync-file-row.is-opening .obsync-file-status {
+	display: none;
 }
 
 .obsync-status-add {
@@ -190,32 +481,137 @@
 	white-space: nowrap;
 }
 
-.obsync-file-meta {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+.obsync-file-checkbox {
+	flex: 0 0 auto;
+	width: 14px;
+	height: 14px;
+	margin: 0 var(--size-2-2) 0 0;
+	opacity: 0.55;
 }
 
-.obsync-tree-node {
-	padding-left: var(--size-4-2);
+.obsync-file-row:hover .obsync-file-checkbox,
+.obsync-file-row:focus-within .obsync-file-checkbox,
+.obsync-file-checkbox:checked {
+	opacity: 1;
+}
+
+.obsync-file-copy {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: baseline;
+	gap: var(--size-2-2);
+	min-width: 0;
+	overflow: hidden;
+}
+
+.obsync-file-row .obsync-file-name {
+	flex: 0 1 auto;
+	min-width: 3ch;
+	font-size: var(--font-ui-small);
+}
+
+.obsync-file-parent {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .obsync-tree-folder {
+	position: relative;
 	display: flex;
 	align-items: center;
-	gap: var(--size-4-1);
+	gap: var(--size-2-2);
+	min-height: 27px;
 	cursor: pointer;
 	color: var(--text-muted);
-	padding: 1px var(--size-4-2);
+	padding: 2px var(--size-4-1);
+	border-radius: var(--radius-s);
 }
 
-.obsync-tree-children {
-	margin-left: var(--size-4-3);
-	border-left: 1px solid var(--background-modifier-border);
-	padding-left: var(--size-4-1);
+.obsync-tree-folder:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
 }
 
-.obsync-tree-folder.is-collapsed + .obsync-tree-children {
-	display: none;
+.obsync-tree-folder:focus-visible {
+	outline: 1px solid var(--interactive-accent);
+	outline-offset: -1px;
+}
+
+.obsync-tree-folder-toggle,
+.obsync-tree-folder-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.obsync-tree-folder-toggle svg,
+.obsync-tree-folder-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+.obsync-tree-folder-icon {
+	color: var(--text-accent);
+}
+
+.obsync-tree-folder-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsync-file-row::before,
+.obsync-tree-folder::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: calc(var(--size-4-1) + 7px);
+	width: calc(var(--obsync-depth, 0) * var(--size-4-4));
+	background-image: repeating-linear-gradient(
+		to right,
+		var(--background-modifier-border) 0 1px,
+		transparent 1px var(--size-4-4)
+	);
+	pointer-events: none;
+	opacity: 0.65;
+}
+
+/* Nesting is an indent on the row itself: the tree is flattened into one list
+   so a collapsed folder costs one row rather than its whole subtree. */
+.obsync-file-row,
+.obsync-tree-folder {
+	padding-left: calc(
+		var(--size-4-1) +
+		var(--obsync-depth, 0) *
+		var(--size-4-4)
+	);
+}
+
+/* A windowed list places its rows itself, on a fixed pitch. */
+.obsync-file-list.is-virtual {
+	display: block;
+	position: relative;
+}
+
+.obsync-file-list.is-virtual > .obsync-file-row,
+.obsync-file-list.is-virtual > .obsync-tree-folder {
+	position: absolute;
+	left: 0;
+	right: 0;
+	/* A wrapped row would be taller than the pitch and overlap its neighbour. */
+	flex-wrap: nowrap;
+	/* One pitch for both kinds: a windowed list places a folder and a file on
+	   the same grid, and a folder is otherwise a pixel shorter. */
+	padding-top: 2px;
+	padding-bottom: 2px;
+	box-sizing: border-box;
+	height: var(--obsync-row-height, auto);
 }
 
 /* Diff view */
@@ -223,6 +619,12 @@
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	container: obsync-diff / inline-size;
+}
+
+.view-content.obsync-diff-view {
+	padding: 0;
+	overflow: hidden;
 }
 
 .obsync-diff-header {
@@ -243,7 +645,10 @@
 }
 
 .obsync-diff-body {
+	display: flex;
+	flex-direction: column;
 	flex: 1 1 auto;
+	min-height: 0;
 	overflow: auto;
 	position: relative;
 }
@@ -260,158 +665,6 @@
 	text-align: center;
 }
 
-.obsync-hunk-marker {
-	cursor: pointer;
-	font-family: var(--font-monospace);
-	color: var(--text-muted);
-	padding: 0 4px;
-}
-
-.obsync-hunk-marker.is-selected {
-	color: var(--interactive-accent);
-}
-
-.obsync-hunk-list {
-	display: flex;
-	flex-direction: column;
-	gap: var(--size-4-2);
-	padding: var(--size-4-2);
-}
-
-.obsync-hunk-card {
-	display: flex;
-	gap: var(--size-4-1);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-s);
-	overflow: hidden;
-	transition:
-		border-color 0.12s ease,
-		box-shadow 0.12s ease;
-	background-color: var(--background-primary);
-}
-
-.obsync-hunk-card:hover {
-	border-color: var(--interactive-accent);
-}
-
-.obsync-hunk-card.is-current {
-	border-color: var(--interactive-accent);
-	box-shadow: 0 0 0 2px var(--interactive-accent-hover);
-}
-
-.obsync-hunk-card.is-added {
-	border-left: 3px solid var(--color-green);
-}
-
-.obsync-hunk-card.is-removed {
-	border-left: 3px solid var(--color-red);
-}
-
-.obsync-hunk-card.is-modified {
-	border-left: 3px solid var(--color-orange);
-}
-
-.obsync-hunk-gutter {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: var(--size-4-1);
-	padding: var(--size-4-2) var(--size-4-1);
-	min-width: 36px;
-	background-color: var(--background-secondary);
-	opacity: 0.55;
-	transition: opacity 0.12s ease;
-}
-
-.obsync-hunk-card:hover .obsync-hunk-gutter,
-.obsync-hunk-card.is-current .obsync-hunk-gutter {
-	opacity: 1;
-}
-
-.obsync-chunk-arrow {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 28px;
-	height: 28px;
-	border-radius: var(--radius-s);
-	background-color: var(--interactive-normal);
-	cursor: pointer;
-	font-weight: 700;
-	font-size: 1rem;
-	line-height: 1;
-	padding: 0;
-}
-
-.obsync-chunk-arrow:hover {
-	background-color: var(--interactive-hover);
-}
-
-.obsync-chunk-arrow.is-push,
-.obsync-chunk-arrow.is-pull {
-	background-color: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-
-.obsync-chunk-arrow.is-push:hover,
-.obsync-chunk-arrow.is-pull:hover {
-	background-color: var(--interactive-accent-hover);
-}
-
-.obsync-chunk-arrow.is-revert {
-	background-color: var(--background-modifier-error);
-	color: var(--text-on-accent);
-}
-
-.obsync-hunk-main {
-	flex: 1 1 auto;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
-
-.obsync-hunk-meta {
-	display: flex;
-	gap: var(--size-4-2);
-	align-items: center;
-	padding: var(--size-4-1) var(--size-4-2);
-	background-color: var(--background-secondary);
-	border-bottom: 1px solid var(--background-modifier-border);
-	font-family: var(--font-monospace);
-	font-size: var(--font-ui-smaller);
-}
-
-.obsync-hunk-range {
-	color: var(--text-muted);
-	margin-right: auto;
-}
-
-.obsync-hunk-stats-add {
-	color: var(--color-green);
-	font-weight: 700;
-}
-
-.obsync-hunk-stats-del {
-	color: var(--color-red);
-	font-weight: 700;
-}
-
-.obsync-hunk-main pre {
-	margin: 0;
-	padding: var(--size-4-2);
-	font-family: var(--font-monospace);
-	font-size: var(--font-ui-smaller);
-	white-space: pre;
-	overflow-x: auto;
-	background-color: var(--background-primary);
-}
-
-.obsync-diff-summary {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	margin-right: auto;
-}
-
 .obsync-icon-btn {
 	background-color: var(--interactive-normal);
 	min-width: 32px;
@@ -422,7 +675,13 @@
 	background-color: var(--interactive-hover);
 }
 
+/* Obsidian styles buttons as inline-flex, which would beat the hidden attribute. */
+.obsync-icon-btn[hidden] {
+	display: none;
+}
+
 .obsync-diff-hint {
+	flex: 0 0 auto;
 	padding: var(--size-4-3);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
@@ -430,20 +689,659 @@
 	border-top: 1px solid var(--background-modifier-border);
 }
 
-.obsync-merge-labels {
+/* Change views: the merge and compare panels share one tone palette. */
+.obsync-merge-panel,
+.obsync-compare-panel,
+.obsync-hunk-preview {
+	--obsync-tone-conflict: var(--color-red-rgb, 233, 49, 71);
+	--obsync-tone-local: var(--color-blue-rgb, 55, 136, 216);
+	--obsync-tone-remote: var(--color-green-rgb, 44, 153, 115);
+	--obsync-tone-shared: var(--color-purple-rgb, 157, 105, 220);
+	--obsync-tone-base: var(--mono-rgb-100, 0, 0, 0);
+	--obsync-tone-added: var(--color-green-rgb, 44, 153, 115);
+	--obsync-tone-removed: var(--color-red-rgb, 233, 49, 71);
+	--obsync-tone: var(--obsync-tone-base);
+}
+
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-local {
+	--obsync-tone: var(--obsync-tone-local);
+}
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-remote {
+	--obsync-tone: var(--obsync-tone-remote);
+}
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-shared {
+	--obsync-tone: var(--obsync-tone-shared);
+}
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-conflict {
+	--obsync-tone: var(--obsync-tone-conflict);
+}
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-added {
+	--obsync-tone: var(--obsync-tone-added);
+}
+:where(.obsync-merge-panel, .obsync-compare-panel, .obsync-hunk-preview)
+	.is-removed {
+	--obsync-tone: var(--obsync-tone-removed);
+}
+
+.obsync-merge-panel,
+.obsync-compare-panel {
 	display: flex;
-	justify-content: space-between;
+	flex-direction: column;
+	flex: 1 1 auto;
+	height: 100%;
+	min-height: 0;
+}
+
+/* Panel toolbars */
+.obsync-merge-toolbar,
+.obsync-compare-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
 	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsync-merge-counter,
+.obsync-compare-summary {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+.obsync-merge-counter.is-resolved {
+	color: var(--text-success);
+}
+
+.obsync-compare-spacer {
+	flex: 1 1 auto;
+}
+
+.obsync-pending {
+	display: inline-flex;
+	gap: var(--size-4-1);
+}
+
+.obsync-pending:empty {
+	display: none;
+}
+
+.obsync-pending-kind {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	padding: 2px var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: rgba(var(--obsync-kind), 0.15);
+	color: rgb(var(--obsync-kind));
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.obsync-pending-kind svg {
+	width: 0.9rem;
+	height: 0.9rem;
+}
+
+.obsync-pending-kind.is-push {
+	--obsync-kind: var(--color-green-rgb, 44, 153, 115);
+}
+
+.obsync-pending-kind.is-revert {
+	--obsync-kind: var(--color-orange-rgb, 236, 117, 0);
+}
+
+.obsync-pending-kind.is-pull {
+	--obsync-kind: var(--color-blue-rgb, 55, 136, 216);
+}
+
+.obsync-pending-kind.is-restore {
+	--obsync-kind: var(--color-purple-rgb, 157, 105, 220);
+}
+
+.obsync-merge-legend {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--size-4-3);
+	padding: var(--size-4-1) var(--size-4-3);
+	font-size: var(--font-ui-smallest);
+	color: var(--text-muted);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsync-merge-help {
+	position: relative;
+}
+
+.obsync-merge-help-text {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 10;
+	width: min(340px, 70vw);
+	padding: var(--size-4-2) var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.obsync-merge-help:not(:hover):not(:focus-within) .obsync-merge-help-text {
+	display: none;
+}
+
+.obsync-merge-key::before,
+.obsync-merge-pane-head.is-local::before,
+.obsync-merge-pane-head.is-remote::before {
+	content: "";
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	margin-right: 6px;
+	border-radius: 2px;
+	background: rgb(var(--obsync-tone));
+}
+
+/* Pane grids: heads sit exactly over their panes and divider strips. */
+.obsync-merge-pane-heads,
+.obsync-merge-body {
+	display: grid;
+	grid-template-columns:
+		minmax(0, 1fr) 52px minmax(0, 1fr) 52px
+		minmax(0, 1fr);
+}
+
+.obsync-compare-heads,
+.obsync-compare-body {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr);
+}
+
+.obsync-merge-pane-heads,
+.obsync-compare-heads {
+	flex: 0 0 auto;
+}
+
+.obsync-merge-pane-head,
+.obsync-compare-head {
 	padding: var(--size-4-1) var(--size-4-3);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	border-bottom: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.obsync-merge-host {
+.obsync-merge-divider-head,
+.obsync-compare-divider-head {
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.obsync-merge-body,
+.obsync-compare-body {
 	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
 }
 
+.obsync-merge-editor-host,
+.obsync-compare-host {
+	position: relative;
+	min-width: 0;
+	min-height: 0;
+}
+
+.obsync-merge-editor-host .cm-editor,
+.obsync-compare-host .cm-editor {
+	height: 100%;
+}
+
+.obsync-merge-editor-host .cm-scroller,
+.obsync-compare-host .cm-scroller {
+	overflow: auto;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	line-height: 1.55;
+}
+
+.obsync-merge-editor-host .cm-gutters,
+.obsync-compare-host .cm-gutters {
+	background: transparent;
+	border-right: none;
+	color: var(--text-faint);
+}
+
+.obsync-merge-editor-host .cm-content,
+.obsync-compare-host .cm-content {
+	padding-bottom: 0;
+}
+
+.obsync-merge-editor-host.is-local .cm-content,
+.obsync-merge-editor-host.is-remote .cm-content,
+.obsync-compare-host .cm-content {
+	caret-color: transparent;
+}
+
+/* The strip between two panes: connectors on a canvas, buttons floating above. */
+.obsync-merge-divider,
+.obsync-compare-divider {
+	position: relative;
+	overflow: hidden;
+	background: var(--background-secondary);
+}
+
+.obsync-divider-canvas,
+.obsync-divider-actions {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+.obsync-divider-canvas {
+	width: 100%;
+	height: 100%;
+}
+
+.obsync-divider-action {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	display: flex;
+	justify-content: center;
+	gap: 2px;
+	padding: 1px 2px;
+	pointer-events: auto;
+}
+
+/* One icon button beside a change, in a divider or a source block header. */
+.obsync-rail-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-muted);
+	box-shadow: none;
+	cursor: pointer;
+}
+
+.obsync-rail-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+.obsync-divider-action .obsync-rail-btn {
+	color: rgb(var(--obsync-tone));
+}
+
+.obsync-divider-action.is-quiet .obsync-rail-btn {
+	opacity: 0.65;
+}
+
+.obsync-rail-btn:hover,
+.obsync-divider-action:hover .obsync-rail-btn {
+	background: var(--interactive-hover);
+	color: var(--text-normal);
+	opacity: 1;
+}
+
+.obsync-rail-btn.is-active,
+.obsync-rail-btn.is-active:hover {
+	background: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	opacity: 1;
+}
+
+.obsync-rail-btn:focus-visible {
+	opacity: 1;
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+/* Floats over a pane's changes: fold buttons clear of its scrollbar and the navigation ring. */
+.obsync-change-layer {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+}
+
+.obsync-change-ring {
+	position: absolute;
+	top: 0;
+	left: var(--size-2-1);
+	right: var(--size-4-3);
+	box-sizing: border-box;
+	border: 2px solid var(--interactive-accent);
+	border-radius: var(--radius-s);
+	animation: obsync-ring-fade 1.4s ease-out forwards;
+}
+
+/* A fade, not a motion, so it also plays with reduced motion: its end removes the ring. */
+@keyframes obsync-ring-fade {
+	60% {
+		opacity: 1;
+	}
+
+	100% {
+		opacity: 0;
+	}
+}
+
+.obsync-change-layer .obsync-rail-btn {
+	position: absolute;
+	top: var(--size-4-1);
+	right: var(--size-4-5);
+	box-shadow: var(--shadow-s);
+	pointer-events: auto;
+}
+
+/* Change lines inside the CodeMirror panes. */
+.cm-line.obsync-merge-line,
+.cm-line.obsync-diff-line {
+	background-color: rgba(var(--obsync-tone), 0.14);
+	box-shadow: inset 2px 0 0 rgba(var(--obsync-tone), 0.6);
+}
+
+.cm-line.obsync-merge-line.is-base {
+	background-color: rgba(var(--obsync-tone), 0.05);
+	box-shadow: inset 2px 0 0 rgba(var(--obsync-tone), 0.2);
+}
+
+.cm-line.obsync-merge-line.is-pending {
+	border-left: 2px dotted rgb(var(--obsync-tone-conflict));
+}
+
+.cm-line.obsync-merge-mark,
+.cm-line.obsync-diff-mark {
+	box-shadow: inset 0 2px 0 rgba(var(--obsync-tone), 0.6);
+}
+
+.cm-line.obsync-merge-mark.is-after,
+.cm-line.obsync-diff-mark.is-after {
+	box-shadow: inset 0 -2px 0 rgba(var(--obsync-tone), 0.6);
+}
+
+.cm-line.obsync-diff-line.is-chosen {
+	background-color: color-mix(
+		in srgb,
+		var(--interactive-accent) 14%,
+		transparent
+	);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.cm-line.obsync-diff-mark.is-chosen {
+	box-shadow: inset 0 2px 0 var(--interactive-accent);
+}
+
+.cm-line.obsync-diff-mark.is-after.is-chosen {
+	box-shadow: inset 0 -2px 0 var(--interactive-accent);
+}
+
+.obsync-compare-panel.is-combined .cm-line.obsync-diff-line.is-last {
+	border-bottom: 1px solid rgba(var(--obsync-tone), 0.4);
+}
+
+.obsync-merge-panel.is-combined .cm-line.obsync-merge-line,
+.obsync-compare-panel.is-combined .cm-line.obsync-diff-line {
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.obsync-code-mark {
+	border-radius: 2px;
+	background: rgba(var(--obsync-tone), 0.28);
+}
+
+/* Combined mode: one pane, source blocks instead of side panes. */
+.obsync-merge-panel.is-combined .obsync-merge-pane-heads,
+.obsync-compare-panel.is-combined .obsync-compare-heads {
+	display: none;
+}
+
+.obsync-merge-panel.is-combined .obsync-merge-body,
+.obsync-compare-panel.is-combined .obsync-compare-body {
+	display: block;
+}
+
+.obsync-merge-panel.is-combined .obsync-merge-editor-host.is-local,
+.obsync-merge-panel.is-combined .obsync-merge-editor-host.is-remote,
+.obsync-merge-panel.is-combined .obsync-merge-divider,
+.obsync-compare-panel.is-combined .obsync-compare-host.is-left,
+.obsync-compare-panel.is-combined .obsync-compare-divider {
+	display: none;
+}
+
+.obsync-merge-panel.is-combined .obsync-merge-editor-host.is-result,
+.obsync-compare-panel.is-combined .obsync-compare-host.is-right {
+	height: 100%;
+}
+
+/* A labelled block of one side's lines inside a combined pane or a preview. */
+.obsync-source {
+	display: block;
+	width: 100%;
+	background: rgba(var(--obsync-tone), 0.06);
+	font-family: var(--font-monospace);
+	font-size: inherit;
+	font-weight: normal;
+	border-inline: 1px solid var(--background-modifier-border);
+}
+
+.obsync-source-lines {
+	box-shadow: inset 2px 0 0 rgba(var(--obsync-tone), 0.6);
+}
+
+.obsync-source.is-opening {
+	border-top: 1px solid rgba(var(--obsync-tone), 0.4);
+}
+
+.obsync-source.is-closing {
+	border-bottom: 1px solid rgba(var(--obsync-tone), 0.4);
+}
+
+.obsync-source-head {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: 2px var(--size-4-2);
+	color: rgb(var(--obsync-tone));
+	background: color-mix(
+		in srgb,
+		rgb(var(--obsync-tone)) 10%,
+		var(--background-secondary)
+	);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-smallest);
+	font-weight: 600;
+}
+
+.obsync-source.is-chosen > .obsync-source-head:first-of-type {
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.obsync-source-head.is-trailer {
+	border-top: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	background: var(--background-secondary);
+}
+
+.obsync-source-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsync-source-actions {
+	display: flex;
+	gap: 2px;
+	margin-left: auto;
+}
+
+.obsync-counters {
+	display: inline-flex;
+	gap: var(--size-4-2);
+	font-family: var(--font-monospace);
+	font-weight: 700;
+	text-transform: none;
+	letter-spacing: normal;
+}
+
+.obsync-counters .is-added {
+	color: var(--color-green);
+}
+
+.obsync-counters .is-removed {
+	color: var(--color-red);
+}
+
+.obsync-source-lines.is-empty {
+	padding: var(--size-4-2) var(--size-4-3);
+	color: var(--text-faint);
+	font-family: var(--font-interface);
+	font-style: italic;
+}
+
+/* One line inside a source block or preview: number column, text, tone bar. */
+.obsync-code-line {
+	display: grid;
+	grid-template-columns: 3.5em minmax(0, 1fr);
+	min-height: 1.55em;
+	line-height: 1.55;
+}
+
+.obsync-code-number {
+	padding: 0 var(--size-4-2);
+	color: var(--text-faint);
+	background: var(--background-secondary-alt);
+	text-align: right;
+	user-select: none;
+}
+
+.obsync-code-text {
+	padding: 0 var(--size-4-2);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.obsync-code-line.is-removed {
+	background: rgba(var(--obsync-tone-removed), 0.13);
+}
+
+.obsync-code-line.is-added {
+	background: rgba(var(--obsync-tone-added), 0.13);
+}
+
+.obsync-code-line.is-removed .obsync-code-text {
+	box-shadow: inset 3px 0 rgba(var(--obsync-tone-removed), 0.7);
+}
+
+.obsync-code-line.is-added .obsync-code-text {
+	box-shadow: inset 3px 0 rgba(var(--obsync-tone-added), 0.7);
+}
+
+/* Collapsed run of unchanged lines; the fold row collapses it back. */
+.obsync-gap {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-4-1);
+	width: 100%;
+	margin: 0;
+	padding: 1px var(--size-4-3);
+	border: 0;
+	border-block: 1px solid var(--background-modifier-border);
+	border-radius: 0;
+	background: color-mix(
+		in srgb,
+		var(--interactive-accent) 8%,
+		var(--background-primary)
+	);
+	color: var(--text-muted);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-smallest);
+	text-align: center;
+	cursor: pointer;
+}
+
+.obsync-gap:hover {
+	background: color-mix(
+		in srgb,
+		var(--interactive-accent) 16%,
+		var(--background-primary)
+	);
+	color: var(--text-normal);
+}
+
+.obsync-gap-icon {
+	display: inline-flex;
+}
+
+.obsync-gap-icon svg {
+	width: 12px;
+	height: 12px;
+}
+
+.obsync-gap.is-fold {
+	border-block: 0;
+	background: transparent;
+	color: var(--text-faint);
+}
+
+.obsync-gap.is-fold:hover {
+	background: color-mix(
+		in srgb,
+		var(--interactive-accent) 8%,
+		var(--background-primary)
+	);
+	color: var(--text-normal);
+}
+
+/* Read-only hunk preview (restore confirmations). */
+.obsync-hunk-preview {
+	margin-bottom: var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	overflow: hidden;
+	background: var(--background-primary);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+@media (max-width: 700px) {
+	.obsync-layout-btn {
+		display: none;
+	}
+
+	.obsync-merge-toolbar,
+	.obsync-merge-legend,
+	.obsync-compare-toolbar {
+		padding-inline: var(--size-4-2);
+	}
+
+	.obsync-merge-legend {
+		gap: var(--size-4-2);
+	}
+}
 .obsync-unified-line {
 	display: block;
 }
@@ -460,14 +1358,18 @@
 	white-space: pre;
 }
 
+/*
+ * Tint from the theme's own hue, never `--background-modifier-error/success`:
+ * those are solid danger/confirm fills, and same-hue text on them is invisible.
+ */
 .obsync-unified-line.is-add {
-	background-color: rgba(0, 255, 0, 0.08);
-	color: var(--color-green);
+	background-color: rgba(var(--color-green-rgb), 0.15);
+	color: var(--text-normal);
 }
 
 .obsync-unified-line.is-del {
-	background-color: rgba(255, 0, 0, 0.08);
-	color: var(--color-red);
+	background-color: rgba(var(--color-red-rgb), 0.15);
+	color: var(--text-normal);
 }
 
 .obsync-transfer-url {
@@ -496,6 +1398,12 @@
 .nav-file-title.obsync-changed-deleted .nav-file-title-content {
 	color: var(--color-red);
 	text-decoration: line-through;
+}
+
+/* Ignored rows read as out-of-sync-scope the way IDEs dim them, not as a change. */
+.nav-file-title.obsync-explorer-ignored .nav-file-title-content,
+.nav-folder-title.obsync-explorer-ignored .nav-folder-title-content {
+	color: var(--text-faint);
 }
 
 .nav-file-title.obsync-changed-conflict .nav-file-title-content {
@@ -574,6 +1482,10 @@
 	color: var(--color-cyan);
 }
 
+.obsync-ignored-context {
+	color: var(--text-faint);
+}
+
 .obsync-presence-count {
 	display: inline-flex;
 	align-items: center;
@@ -642,14 +1554,15 @@
 	color: var(--color-red);
 }
 
-.obsync-status-spinner {
+.obsync-status-spinner,
+.obsync-file-row.is-opening::after {
 	display: inline-block;
 	width: 0.75rem;
 	height: 0.75rem;
 	border: 2px solid var(--background-modifier-border);
 	border-top-color: var(--interactive-accent);
 	border-radius: 50%;
-	animation: obsync-spin 0.8s linear infinite;
+	animation: obsync-spin 0.65s linear infinite;
 }
 
 .obsync-status-spinner.obsync-hidden,
@@ -672,8 +1585,35 @@
 @media (prefers-reduced-motion: reduce) {
 	.obsync-share-badge.obsync-share-syncing svg,
 	.obsync-share-syncing.obsync-context-action > svg,
-	.obsync-context-chip.obsync-share-syncing > svg {
+	.obsync-context-chip.obsync-share-syncing > svg,
+	.obsync-file-row.is-opening::after {
 		animation: none;
+	}
+}
+
+@container (min-width: 420px) {
+	.obsync-source-tab-label {
+		display: inline;
+	}
+
+	.obsync-source-tabs .obsync-settings-tab-button.is-active {
+		flex-grow: 1;
+	}
+}
+
+@container (max-width: 285px) {
+	.obsync-main-toolbar {
+		flex-wrap: wrap;
+	}
+}
+
+@container (max-width: 320px) {
+	.obsync-file-row.is-conflict {
+		flex-wrap: wrap;
+	}
+
+	.obsync-file-row.is-conflict .obsync-file-copy {
+		flex-basis: calc(100% - 2rem);
 	}
 }
 
@@ -697,18 +1637,14 @@
 	background-color: var(--color-red);
 }
 
-.obsync-relay-dot {
+.obsync-ribbon-icon.is-relay-connected::before {
+	content: "";
 	position: absolute;
 	bottom: 2px;
 	right: 2px;
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: transparent;
-	transition: background 0.2s;
-}
-
-.obsync-relay-dot.is-connected {
 	background: var(--color-green);
 }
 
@@ -742,7 +1678,6 @@
 	}
 
 	.obsync-file-row {
-		flex-wrap: wrap;
 		padding: var(--size-4-1) var(--size-4-2);
 	}
 }
@@ -838,24 +1773,9 @@
 	flex-wrap: wrap;
 }
 
-.obsync-history-deleted-badge {
-	color: var(--text-error);
-	font-weight: var(--font-normal);
-}
-
 .obsync-history-pinned-badge {
 	color: var(--text-accent);
 	font-weight: var(--font-normal);
-}
-
-.obsync-history-preview {
-	max-height: 50vh;
-	overflow: auto;
-	white-space: pre-wrap;
-	word-break: break-word;
-	background: var(--background-secondary);
-	padding: var(--size-4-2);
-	border-radius: var(--radius-s);
 }
 
 .cm-gutter.obsync-sign-gutter {
@@ -890,7 +1810,7 @@
 .cm-gutter.obsync-sign-gutter .cm-gutterElement:hover .obsync-sign {
 	transform: scaleX(1.75);
 	filter: saturate(1.08);
-	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+	box-shadow: 0 0 0 1px var(--background-modifier-border);
 }
 
 .obsync-sign-add {
@@ -942,7 +1862,7 @@
 	color: var(--text-normal);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-m);
-	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+	box-shadow: var(--shadow-l);
 	font-size: var(--font-ui-small);
 	overflow: hidden;
 }
@@ -991,12 +1911,12 @@
 }
 
 .obsync-hunk-popup-line-removed {
-	background: rgba(208, 74, 74, 0.12);
+	background: rgba(var(--color-red-rgb), 0.15);
 	color: var(--text-normal);
 }
 
 .obsync-hunk-popup-line-added {
-	background: rgba(43, 182, 115, 0.12);
+	background: rgba(var(--color-green-rgb), 0.15);
 	color: var(--text-normal);
 }
 
@@ -1100,4 +2020,88 @@
 	font-size: var(--font-ui-smaller);
 	word-break: break-all;
 	margin-top: var(--size-4-2);
+}
+
+.obsync-prompt-input {
+	width: 100%;
+	margin-bottom: var(--size-4-2);
+}
+
+.obsync-history-row-head {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.obsync-history-row-head .obsync-history-row-title {
+	flex: 1 1 auto;
+}
+
+.obsync-history-row-more {
+	flex: 0 0 auto;
+	padding: 0 var(--size-4-2);
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-weight: 700;
+}
+
+.obsync-history-row-more:hover {
+	background-color: var(--interactive-hover);
+	color: var(--text-normal);
+}
+
+.obsync-restore-summary {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-restore-diff {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	max-height: 50vh;
+	overflow-y: auto;
+	margin-bottom: var(--size-4-3);
+}
+
+.obsync-bulk-restore-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-bottom: var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-timeline-files {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	margin-top: var(--size-4-2);
+	padding-left: var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+	max-height: 40vh;
+	overflow-y: auto;
+}
+
+.obsync-timeline-file {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.obsync-settings-error {
+	color: var(--text-error);
+}
+
+.obsync-status-bar.is-offline {
+	color: var(--text-muted);
 }

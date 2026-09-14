@@ -1,3 +1,4 @@
+export { conflictCopyPath } from "@/sync/conflict-copy";
 export {
 	type BrokerAdmin,
 	isBrokerConfigured,
@@ -5,16 +6,15 @@ export {
 	listShareParticipants,
 	revokeAllShareTokens,
 	revokeShareToken,
-	type ShareParticipant,
 } from "./broker";
 export {
 	assertShareableStorage,
 	createSharedFolderConfig,
 	deriveShareStorageConfig,
-	isShareableStorage,
 	joinedSharedFolderConfig,
 	participantIdFromName,
 	shareNameToFolder,
+	withCurrentCredentials,
 } from "./create";
 export {
 	createShareInviteUrl,
@@ -29,13 +29,14 @@ export {
 	type ShareIndicatorState,
 	shareIndicatorState,
 } from "./presentation";
+export { ShareRealtimeManager } from "./realtime-manager";
 export { createShareScopePolicy } from "./scope";
 export { ScopedVaultAdapter } from "./scoped-adapter";
 export { type ShareServiceHost, ShareSyncService } from "./service";
+export { ShareSessionStore } from "./session-store";
+export { ShareStatusStore } from "./status-store";
 export {
-	conflictCopyPath,
 	runShareSyncCycle,
-	type ShareCycleHooks,
 	type ShareCycleOutcome,
 } from "./sync-cycle";
 export {

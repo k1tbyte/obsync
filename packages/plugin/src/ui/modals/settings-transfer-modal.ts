@@ -1,11 +1,6 @@
 import { type App, type ButtonComponent, Modal, Setting } from "obsidian";
 import * as QRCode from "qrcode";
 
-import {
-	IMPORT_CONFIRMATION_TEXT,
-	QR_ERROR_CORRECTION,
-	QR_SIZE,
-} from "@/constants";
 import { activeStorage, type ObsyncSettings } from "@/settings/model";
 import {
 	DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
@@ -16,6 +11,13 @@ import {
 } from "@/settings/transfer";
 import { errorMessage } from "@/shared/errors";
 import { describeStorageTarget } from "@/storage";
+import { openPromiseModal } from "./promise-modal";
+
+const IMPORT_CONFIRMATION_TEXT = "IMPORT";
+
+const QR_SIZE = 320;
+
+const QR_ERROR_CORRECTION = "L" as const;
 
 interface SettingsTransferExportModalOptions {
 	createPackage: (
@@ -95,7 +97,7 @@ const EXPORT_TOGGLES: ReadonlyArray<ExportToggle> = [
 	},
 	{
 		name: "Automation and history",
-		desc: "Include auto-pull, auto-push, file history, and related automation settings.",
+		desc: "Include autosync, queued push, file history, and related automation settings.",
 		get: (o) => o.includeAutomation,
 		set: (value, o) => ({ ...o, includeAutomation: value }),
 	},
@@ -107,7 +109,7 @@ const EXPORT_TOGGLES: ReadonlyArray<ExportToggle> = [
 	},
 ];
 
-export class SettingsTransferExportModal extends Modal {
+class SettingsTransferExportModal extends Modal {
 	private readonly createPackage: SettingsTransferExportModalOptions["createPackage"];
 	private options: SettingsTransferExportOptions = {
 		...DEFAULT_SETTINGS_TRANSFER_EXPORT_OPTIONS,
@@ -255,7 +257,7 @@ export class SettingsTransferExportModal extends Modal {
 	}
 }
 
-export class SettingsTransferImportModal extends Modal {
+class SettingsTransferImportModal extends Modal {
 	private readonly resolveValue: (value: string | null) => void;
 	private value = "";
 	private settled = false;
@@ -316,7 +318,7 @@ export class SettingsTransferImportModal extends Modal {
 	}
 }
 
-export class SettingsTransferConfirmModal extends Modal {
+class SettingsTransferConfirmModal extends Modal {
 	private readonly settings: ObsyncSettings;
 	private readonly resolveValue: (confirmed: boolean) => void;
 	private settled = false;
@@ -401,16 +403,18 @@ export function showSettingsTransferExport(
 }
 
 export function askSettingsTransferInput(app: App): Promise<string | null> {
-	return new Promise((resolve) => {
-		new SettingsTransferImportModal(app, resolve).open();
-	});
+	return openPromiseModal<string | null>(
+		(answer) => new SettingsTransferImportModal(app, answer),
+		null,
+	);
 }
 
 export function confirmSettingsTransferImport(
 	app: App,
 	settings: ObsyncSettings,
 ): Promise<boolean> {
-	return new Promise((resolve) => {
-		new SettingsTransferConfirmModal(app, settings, resolve).open();
-	});
+	return openPromiseModal<boolean>(
+		(answer) => new SettingsTransferConfirmModal(app, settings, answer),
+		false,
+	);
 }

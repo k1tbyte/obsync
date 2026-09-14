@@ -1,11 +1,12 @@
-import type { ChangeDesc, EditorState, Text } from "@codemirror/state";
+import { Chunk, type DiffConfig } from "@codemirror/merge";
+import type { ChangeDesc } from "@codemirror/state";
 import { type EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import { debounce, editorInfoField } from "obsidian";
+import { debounce } from "obsidian";
 
-import { buildChunks } from "./diff";
 import {
 	chunksField,
 	compareTextField,
+	pathFromState,
 	setChunksEffect,
 	setCompareTextEffect,
 } from "./state";
@@ -13,6 +14,7 @@ import {
 const DEBOUNCE_MS = 1000;
 const LARGE_CHANGE_THRESHOLD = 1000;
 const SLOW_DIFF_THRESHOLD_MS = 16;
+const DIFF_CONFIG: DiffConfig = { scanLimit: 1000, timeout: 200 };
 
 type Debounced = ReturnType<typeof debounce>;
 
@@ -100,11 +102,13 @@ export const computePlugin = ViewPlugin.fromClass(
 			}
 
 			const current = state.doc;
-			const result = buildChunks(baseline, current);
+			const start = performance.now();
+			const chunks = Chunk.build(baseline, current, DIFF_CONFIG);
+			const elapsedMs = performance.now() - start;
 			this.view.dispatch({
 				effects: setChunksEffect.of({
-					chunks: result.chunks,
-					lastDiffMs: result.elapsedMs,
+					chunks,
+					lastDiffMs: elapsedMs,
 				}),
 			});
 		}
@@ -118,13 +122,3 @@ function changeSize(changes: ChangeDesc): number {
 	});
 	return total;
 }
-
-export function pathFromState(state: EditorState): string | null {
-	try {
-		return state.field(editorInfoField, false)?.file?.path ?? null;
-	} catch {
-		return null;
-	}
-}
-
-export type CompareText = Text;

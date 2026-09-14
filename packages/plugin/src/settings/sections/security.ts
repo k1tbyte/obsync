@@ -1,18 +1,17 @@
 import { Setting } from "obsidian";
-import { clearCachedPassphrase } from "../../crypto/passphrase-cache";
-import type ObsyncPlugin from "../../main";
-import { PassphraseRotatedError } from "../../sync/keyfile";
-import { askNewPassphrase } from "../../ui/modals";
-import { notifyError, notifyInfo, reportError } from "../../ui/notices";
+import { clearCachedPassphrase } from "@/crypto/passphrase-cache";
+import type { PluginHost } from "@/plugin/host";
+import { PassphraseRotatedError } from "@/sync/keyfile";
+import { askNewPassphrase, notifyError, notifyInfo, reportError } from "@/ui";
 
 export function renderSecuritySection(
 	parent: HTMLElement,
-	plugin: ObsyncPlugin,
+	plugin: PluginHost,
 	onDisplay: () => void,
 ): void {
 	new Setting(parent).setName("Encryption").setHeading();
 
-	const status = plugin.hasPassphrase()
+	const status = plugin.passphrase.has()
 		? "Passphrase is loaded for this session."
 		: "Passphrase is not set. You will be prompted before the next sync.";
 
@@ -25,13 +24,16 @@ export function renderSecuritySection(
 		.addToggle((t) =>
 			t.setValue(plugin.settings.cachePassphrase).onChange(async (v) => {
 				Object.assign(plugin.settings, { cachePassphrase: v });
-				void plugin.saveSettings();
-				if (!v) {
-					await clearCachedPassphrase(
-						plugin.app.vault.adapter,
-						plugin.app.vault.configDir,
-					);
+				await plugin.saveSettings();
+				if (v) {
+					// Turning on with a loaded passphrase caches it immediately.
+					await plugin.passphrase.persistIfEnabled();
+					return;
 				}
+				await clearCachedPassphrase(
+					plugin.app.vault.adapter,
+					plugin.app.vault.configDir,
+				);
 			}),
 		);
 
@@ -40,9 +42,9 @@ export function renderSecuritySection(
 		.setDesc(status)
 		.addButton((b) =>
 			b
-				.setButtonText(plugin.hasPassphrase() ? "Replace" : "Set")
+				.setButtonText(plugin.passphrase.has() ? "Replace" : "Set")
 				.onClick(async () => {
-					await plugin.promptPassphrase(true);
+					await plugin.passphrase.prompt(true);
 					onDisplay();
 				}),
 		)
@@ -50,10 +52,10 @@ export function renderSecuritySection(
 			b
 				.setButtonText("Forget")
 				.setWarning()
-				.setDisabled(!plugin.hasPassphrase())
+				.setDisabled(!plugin.passphrase.has())
 				.onClick(async () => {
-					await plugin.forgetPassphrase();
-					notifyInfo("passphrase forgotten.");
+					await plugin.passphrase.forget();
+					notifyInfo("Passphrase forgotten.");
 					onDisplay();
 				}),
 		);
@@ -68,7 +70,7 @@ export function renderSecuritySection(
 				const next = await askNewPassphrase(plugin.app);
 				if (!next) return;
 				try {
-					const epoch = await plugin.changePassphrase(next);
+					const epoch = await plugin.passphrase.rotate(next);
 					if (epoch === null) return;
 					notifyInfo(`Passphrase changed (key epoch ${epoch}).`);
 					onDisplay();

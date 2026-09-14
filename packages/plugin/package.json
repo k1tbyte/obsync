@@ -1,6 +1,6 @@
 {
 	"name": "obsync",
-	"version": "0.0.4",
+	"version": "1.1.0",
 	"description": "Simple plugin to synchronize files to S3.",
 	"main": "main.js",
 	"type": "module",
@@ -13,24 +13,22 @@
 		"typecheck": "tsc -noEmit"
 	},
 	"dependencies": {
-		"@aws-sdk/client-s3": "^3.1114.0",
 		"@codemirror/merge": "^6.12.2",
 		"diff": "^9.0.0",
-		"diff2html": "^3.4.56",
 		"ignore": "^7.0.6",
-		"node-diff3": "^3.2.1",
 		"obsidian": "latest",
 		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {
+		"@codemirror/commands": "^6.8.1",
 		"@types/diff": "^7.0.2",
 		"@types/node": "^22.20.1",
 		"@types/qrcode": "^1.5.6",
-		"buffer": "^6.0.3",
 		"esbuild": "^0.25.12",
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
+		"@codemirror/commands": "^6.8.1",
 		"@codemirror/state": "^6.5.0",
 		"@codemirror/view": "^6.38.6"
 	}

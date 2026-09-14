@@ -1,6 +1,5 @@
 import { debounce } from "obsidian";
 
-import { REALTIME_SYNC_DEBOUNCE_MS } from "@/constants";
 import {
 	activeStorage,
 	isStorageConfigured,
@@ -10,9 +9,15 @@ import { storageIdentity } from "@/storage";
 import type { SyncController } from "@/sync/controller";
 import { RealtimeClient, type RealtimePresenceDevice } from "@/sync/realtime";
 
+const REALTIME_SYNC_DEBOUNCE_MS = 2_000;
+
 export class PluginRealtime {
 	private client: RealtimeClient | null = null;
+	private onRemoteSync: ReturnType<typeof debounce> | null = null;
+	/** Everything the connection depends on, so a change to any of it restarts. */
+	private connectionKey: string | null = null;
 	private connected = false;
+	private disposed = false;
 	private readonly listeners = new Set<(connected: boolean) => void>();
 	private devices: RealtimePresenceDevice[] = [];
 	private readonly deviceListeners = new Set<
@@ -44,34 +49,48 @@ export class PluginRealtime {
 		return () => this.deviceListeners.delete(listener);
 	}
 
+	/** Reconnects when the room or the credentials changed; otherwise leaves an
+	 * established connection alone. Called after every settings save, so a
+	 * backend switch cannot leave the client sitting in the old room. */
+	restartIfChanged(): void {
+		const next = connectionKeyOf(this.getSettings());
+		if (next === this.connectionKey && (this.client || next === null)) return;
+		this.restart();
+	}
+
 	restart(): void {
+		if (this.disposed) return;
 		this.client?.dispose();
 		this.client = null;
+		this.onRemoteSync?.cancel();
+		this.onRemoteSync = null;
 		this.emitDevices([]);
 		this.emitStatus(false);
 
 		const settings = this.getSettings();
-		if (!settings.realtimeSync) return;
-		if (!settings.realtimeServerUrl) return;
-		if (!isStorageConfigured(settings)) return;
+		this.connectionKey = connectionKeyOf(settings);
+		if (this.connectionKey === null) return;
 
 		const channelId = storageIdentity(activeStorage(settings));
 		const currentDevice = this.controller.currentDevice();
+		// resetTimer is deliberately off: a steady stream of remote signals must
+		// still let a pull through instead of pushing the deadline out forever.
+		this.onRemoteSync = debounce(
+			() => {
+				void this.controller.refreshAndAutoPull();
+			},
+			REALTIME_SYNC_DEBOUNCE_MS,
+			false,
+		);
 		this.client = new RealtimeClient({
 			serverUrl: settings.realtimeServerUrl,
 			channelId,
 			token: settings.realtimeToken || undefined,
-			deviceId: currentDevice?.id,
-			deviceName: currentDevice?.name,
-			onRemoteSync: debounce(
-				() => {
-					void this.controller.refreshAndAutoPull();
-				},
-				REALTIME_SYNC_DEBOUNCE_MS,
-				true,
-			),
+			deviceId: currentDevice.id,
+			deviceName: currentDevice.name,
+			onRemoteSync: () => this.onRemoteSync?.(),
 			onPresenceChange: (devices) =>
-				this.emitDevices(filterCurrentDevice(devices, currentDevice?.id)),
+				this.emitDevices(filterCurrentDevice(devices, currentDevice.id)),
 			onConnectionChange: (connected) => {
 				if (!connected) this.emitDevices([]);
 				this.emitStatus(connected);
@@ -85,8 +104,12 @@ export class PluginRealtime {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.client?.dispose();
 		this.client = null;
+		this.onRemoteSync?.cancel();
+		this.onRemoteSync = null;
+		this.connectionKey = null;
 		this.connected = false;
 		this.devices = [];
 		this.listeners.clear();
@@ -107,9 +130,8 @@ export class PluginRealtime {
 
 function filterCurrentDevice(
 	devices: readonly RealtimePresenceDevice[],
-	currentDeviceId: string | undefined,
+	currentDeviceId: string,
 ): RealtimePresenceDevice[] {
-	if (!currentDeviceId) return [...devices];
 	return devices.filter((device) => device.id !== currentDeviceId);
 }
 
@@ -122,4 +144,16 @@ function sameDevices(
 		(device, index) =>
 			device.id === next[index]?.id && device.name === next[index]?.name,
 	);
+}
+
+/** Null when realtime cannot run at all with these settings. */
+function connectionKeyOf(settings: ObsyncSettings): string | null {
+	if (!settings.realtimeSync) return null;
+	if (!settings.realtimeServerUrl) return null;
+	if (!isStorageConfigured(settings)) return null;
+	return [
+		storageIdentity(activeStorage(settings)),
+		settings.realtimeServerUrl,
+		settings.realtimeToken,
+	].join("|");
 }

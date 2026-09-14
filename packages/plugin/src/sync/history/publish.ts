@@ -1,63 +1,67 @@
-import type { EncryptionKey } from "../../crypto";
-import type { ObjectStorage } from "../../storage/types";
-import type { Manifest } from "../../types";
-import { publishManifestWithGuard } from "../manifest";
+import type { EncryptionKey } from "@/crypto";
+import { reportWarning } from "@/shared/diagnostics";
+import type { ObjectStorage } from "@/storage/types";
+import { publishManifestWithGuard } from "@/sync/manifest";
+import type { Manifest } from "@/sync/types";
+import { diffManifests } from "./changes";
 import { collectGarbage, shouldRunGc } from "./gc";
-import {
-	archiveManifest,
-	prependIndexEntry,
-	readSnapshotIndex,
-	writeSnapshotIndex,
-} from "./store";
-import type { HistoryConfig } from "./types";
+import { prependSnapshot, updateHistoryLog } from "./store";
+import type { HistoryConfig, SnapshotEntry } from "./types";
 
 /**
- * Publishes the manifest through the normal optimistic-concurrency guard, then
- * — only on the writer that won the guard — archives the snapshot and updates
- * the index. History work is best-effort: a failure here is logged but never
- * fails the push (the manifest is already published and the sync is correct).
+ * Publishes via the concurrency guard, then - only on the winner - records the
+ * parent-relative change set. The guard has already proven remote head equals
+ * `parent`, so the diff is the snapshot's true delta.
  *
- * Running GC here is safe against concurrent writers: the guard serialises
- * publishers, and GC never deletes objects reachable from HEAD or any retained
- * snapshot, so a device that starts a push afterwards (which compares against
- * the new HEAD) can never reference a swept object.
+ * History is best-effort: failures log but never fail the push.
+ * GC here is safe: the guard serialises publishers, and GC never deletes objects
+ * reachable from HEAD.
  */
 export async function publishManifestWithHistory(
 	storage: ObjectStorage,
 	key: EncryptionKey,
 	manifest: Manifest,
-	expectedParentSnapshotId: string | null,
+	parent: Manifest | null,
 	history: HistoryConfig | undefined,
+	baseline: Manifest | null = null,
 ): Promise<void> {
 	await publishManifestWithGuard(
 		storage,
 		key,
 		manifest,
-		expectedParentSnapshotId,
+		parent?.snapshotId ?? null,
+		baseline,
 	);
 	if (!history) return;
 	try {
-		await archiveManifest(storage, key, manifest);
-		const index = prependIndexEntry(await readSnapshotIndex(storage, key), {
-			snapshotId: manifest.snapshotId,
-			parentSnapshotId: manifest.parentSnapshotId,
+		const entry: SnapshotEntry = {
+			id: manifest.snapshotId,
+			parentId: manifest.parentSnapshotId,
 			createdAt: manifest.createdAt,
 			deviceId: manifest.deviceId,
 			deviceName: manifest.deviceName,
-		});
-		const nonPinned = index.entries.filter((e) => !e.pinned).length;
+		};
+		const changes = diffManifests(parent, manifest);
+		const log = await updateHistoryLog(
+			storage,
+			key,
+			(current) => prependSnapshot(current, entry, changes),
+			(current) => current.snapshots.some((s) => s.id === entry.id),
+		);
+		const nonPinned = log.snapshots.filter((s) => !s.pinned).length;
 		if (shouldRunGc(nonPinned, history.maxSnapshots)) {
 			await collectGarbage({
 				storage,
 				key,
-				index,
+				log,
 				maxSnapshots: history.maxSnapshots,
 				headManifest: manifest,
 			});
-		} else {
-			await writeSnapshotIndex(storage, key, index);
 		}
 	} catch (err) {
-		console.warn("[obsync] file history update failed (push succeeded)", err);
+		reportWarning(
+			"File history could not be updated; the push itself succeeded.",
+			err,
+		);
 	}
 }
