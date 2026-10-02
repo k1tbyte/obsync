@@ -151,7 +151,7 @@ async function importPrompt(page: Page, link: string): Promise<void> {
 	await page.locator(".modal:has-text('Type IMPORT')").waitFor();
 	await sleep(200);
 	await liftVeil(page);
-	await sleep(3000);
+	await sleep(1200);
 }
 
 /** Side by side on screen, so neither window is hidden under the other. */
