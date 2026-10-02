@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+	* { box-sizing: border-box; margin: 0; }
+	html, body { width: 1280px; height: 640px; overflow: hidden; }
+	body {
+		font-family: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif;
+		color: #fff;
+		background:
+			radial-gradient(860px 520px at 80% 14%, rgb(124 92 255 / 40%), transparent 62%),
+			radial-gradient(720px 460px at 8% 104%, rgb(45 212 191 / 16%), transparent 62%),
+			linear-gradient(135deg, #0d0b16 0%, #16122e 55%, #0d0b16 100%);
+	}
+	.copy {
+		position: absolute; left: 64px; top: 0; bottom: 0; width: 380px;
+		display: flex; flex-direction: column; justify-content: center; gap: 22px;
+	}
+	.badge {
+		align-self: flex-start; font-size: 14px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
+		color: #cbbcff; border: 1px solid rgb(203 188 255 / 35%); border-radius: 999px; padding: 6px 14px;
+		background: rgb(124 92 255 / 14%);
+	}
+	h1 {
+		font-size: 96px; line-height: 1; font-weight: 800; letter-spacing: -.035em;
+		background: linear-gradient(180deg, #fff 25%, #b4a0ff 100%); -webkit-background-clip: text; color: transparent;
+	}
+	p { font-size: 26px; line-height: 1.32; color: #d8d3e8; font-weight: 500; }
+	.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+	.chips span {
+		font-size: 15px; font-weight: 500; padding: 7px 13px; border-radius: 10px;
+		background: rgb(255 255 255 / 7%); border: 1px solid rgb(255 255 255 / 13%); color: #ece8f8;
+	}
+	.chips.main span { background: rgb(124 92 255 / 24%); border-color: rgb(165 140 255 / 55%); }
+	.card {
+		position: absolute; overflow: hidden; border-radius: 14px;
+		border: 1px solid rgb(255 255 255 / 16%);
+		box-shadow: 0 44px 80px -12px rgb(0 0 0 / 70%), 0 0 0 1px rgb(0 0 0 / 45%);
+	}
+	.card img { display: block; width: 100%; height: 100%; object-fit: cover; }
+	.merge { left: 650px; top: 28px; width: 590px; height: 369px; }
+	.changes { left: 482px; top: 168px; width: 560px; height: 350px; }
+	.live { left: 704px; top: 396px; width: 520px; height: 230px; }
+</style>
+<div class="copy">
+	<div class="badge">Obsidian plugin</div>
+	<h1>Obsync</h1>
+	<p>Serverless, end-to-end encrypted vault sync.</p>
+	<div class="chips main"><span>S3</span><span>WebDAV</span><span>Google Drive</span></div>
+	<div class="chips"><span>File history</span><span>Live editing</span><span>Shared folders</span></div>
+</div>
+<div class="card merge"><img src="../../artifacts/demos/hero-src/merge.png" alt=""></div>
+<div class="card changes"><img src="../../artifacts/demos/hero-src/changes.png" alt=""></div>
+<div class="card live"><img src="../../artifacts/demos/hero-src/live.png" alt=""></div>
