@@ -140,6 +140,20 @@ export async function record(page: Page): Promise<Recording> {
 	};
 }
 
+/** Takes of different windows played one after another as a single take. */
+export function sequence(...takes: Frame[][]): Frame[] {
+	let offset = 0;
+	return takes.flatMap((frames) => {
+		const first = frames[0]?.at ?? 0;
+		const shifted = frames.map((frame) => ({
+			...frame,
+			at: frame.at - first + offset,
+		}));
+		offset = shifted.at(-1)?.at ?? offset;
+		return shifted;
+	});
+}
+
 /** One window's frames, or several side by side in the order given. */
 export function encode(name: string, ...takes: Frame[][]): string {
 	const dir = join(OUT_DIR, `${name}-frames`);
