@@ -2,10 +2,10 @@
 
 import type { Page } from "playwright-core";
 
-import { open } from "../e2e/editor";
-import { excalidrawPlugin } from "../e2e/excalidraw";
-import { poll, sleep } from "../e2e/harness";
-import type { Obsidian } from "../e2e/obsidian";
+import { open } from "../../tests/e2e/editor";
+import { excalidrawPlugin } from "../../tests/e2e/excalidraw";
+import { poll, sleep } from "../../tests/e2e/harness";
+import type { Obsidian } from "../../tests/e2e/obsidian";
 import { joinShare, nameOwner, runPair } from "./pair";
 import { glide } from "./recorder";
 

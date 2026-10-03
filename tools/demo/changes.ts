@@ -2,9 +2,9 @@
 
 import type { Page } from "playwright-core";
 
-import { CLEAN, sync, write } from "../e2e/device";
-import { check, sleep } from "../e2e/harness";
-import type { Obsidian } from "../e2e/obsidian";
+import { CLEAN, sync, write } from "../../tests/e2e/device";
+import { check, sleep } from "../../tests/e2e/harness";
+import type { Obsidian } from "../../tests/e2e/obsidian";
 import { click, glide } from "./recorder";
 import { create, openAndCompare, rowShown, runDemo } from "./stage";
 

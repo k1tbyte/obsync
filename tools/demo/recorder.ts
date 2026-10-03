@@ -11,7 +11,7 @@ import {
 	type Page,
 } from "playwright-core";
 
-import { poll, sleep } from "../e2e/harness";
+import { poll, sleep } from "../../tests/e2e/harness";
 import { installCursor } from "./cursor";
 
 const APP_URL = "app://obsidian.md";

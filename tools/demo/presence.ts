@@ -2,8 +2,8 @@
 
 import type { Page } from "playwright-core";
 
-import { sleep } from "../e2e/harness";
-import type { Obsidian } from "../e2e/obsidian";
+import { sleep } from "../../tests/e2e/harness";
+import type { Obsidian } from "../../tests/e2e/obsidian";
 import { file, folder, joinShare, nameOwner, runPair } from "./pair";
 import { click } from "./recorder";
 import { clickLineEnd, runCommand } from "./stage";

@@ -2,8 +2,8 @@
 
 import type { Page } from "playwright-core";
 
-import { CLEAN, sync, write } from "../e2e/device";
-import { check, poll, sleep } from "../e2e/harness";
+import { CLEAN, sync, write } from "../../tests/e2e/device";
+import { check, poll, sleep } from "../../tests/e2e/harness";
 import { click, glide } from "./recorder";
 import { openAndCompare, rowShown, runDemo } from "./stage";
 

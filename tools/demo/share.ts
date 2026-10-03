@@ -2,7 +2,7 @@
 
 import type { Page } from "playwright-core";
 
-import { sleep } from "../e2e/harness";
+import { sleep } from "../../tests/e2e/harness";
 import { file, folder, runPair } from "./pair";
 import { click, pickMenuItem } from "./recorder";
 

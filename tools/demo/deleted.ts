@@ -2,8 +2,8 @@
 
 import type { Page } from "playwright-core";
 
-import { CLEAN, sync } from "../e2e/device";
-import { check, sleep } from "../e2e/harness";
+import { CLEAN, sync } from "../../tests/e2e/device";
+import { check, sleep } from "../../tests/e2e/harness";
 import { click, openTab } from "./recorder";
 import {
 	backdate,

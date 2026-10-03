@@ -2,12 +2,18 @@
 
 import type { Page } from "playwright-core";
 
-import { CLEAN, loaded, sync, unlock } from "../e2e/device";
-import { check, runScenario, sleep } from "../e2e/harness";
-import { launchObsidian, type Obsidian } from "../e2e/obsidian";
-import { startRelay } from "../e2e/relay";
-import { type S3, startS3 } from "../e2e/s3";
-import { accept, invite, mounted, s3Vault, shareFolder } from "../e2e/sharing";
+import { CLEAN, loaded, sync, unlock } from "../../tests/e2e/device";
+import { check, runScenario, sleep } from "../../tests/e2e/harness";
+import { launchObsidian, type Obsidian } from "../../tests/e2e/obsidian";
+import { startRelay } from "../../tests/e2e/relay";
+import { type S3, startS3 } from "../../tests/e2e/s3";
+import {
+	accept,
+	invite,
+	mounted,
+	s3Vault,
+	shareFolder,
+} from "../../tests/e2e/sharing";
 import { attachPage, encode, frameWindow, type Pane, record } from "./recorder";
 
 // biome-ignore lint/suspicious/noExplicitAny: the renderer's app is untyped here.

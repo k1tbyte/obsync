@@ -2,11 +2,11 @@
 
 import type { Page } from "playwright-core";
 
-import { unlock } from "../e2e/device";
-import { runScenario, sleep } from "../e2e/harness";
-import { launchObsidian, type Obsidian } from "../e2e/obsidian";
-import { startS3 } from "../e2e/s3";
-import { s3Vault } from "../e2e/sharing";
+import { unlock } from "../../tests/e2e/device";
+import { runScenario, sleep } from "../../tests/e2e/harness";
+import { launchObsidian, type Obsidian } from "../../tests/e2e/obsidian";
+import { startS3 } from "../../tests/e2e/s3";
+import { s3Vault } from "../../tests/e2e/sharing";
 import {
 	attachPage,
 	click,
