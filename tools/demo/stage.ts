@@ -117,7 +117,7 @@ export async function openAndCompare(
 		await app.workspace
 			.getLeaf(false)
 			.openFile(app.vault.getFileByPath(target));
-		await app.commands.executeCommandById("obsync:compare");
+		await app.commands.executeCommandById("mdsync:compare");
 	}, path);
 }
 
@@ -165,8 +165,8 @@ export async function clickLineEnd(page: Page, text: string): Promise<void> {
 
 /** Opens every collapsed folder of the change list, one visible click each, as each click redraws it. */
 export async function openFolders(page: Page): Promise<void> {
-	const folder = page.locator(".obsync-tree-folder.is-collapsed");
-	await page.locator(".obsync-tree-folder").first().waitFor();
+	const folder = page.locator(".mdsync-tree-folder.is-collapsed");
+	await page.locator(".mdsync-tree-folder").first().waitFor();
 	for (let opened = 0; opened < 10 && (await folder.count()) > 0; opened++) {
 		await click(page, folder.first(), 600);
 		await sleep(300);
@@ -211,7 +211,7 @@ export function backdate(device: Obsidian, ms: number): Promise<void> {
 /** History and conflict copies name devices; the default is the OS. */
 function rename(device: Obsidian, name: string): Promise<void> {
 	return device.evaluate(
-		(value) => app.plugins.plugins.obsync.device.rename(value),
+		(value) => app.plugins.plugins.mdsync.device.rename(value),
 		name,
 	);
 }
@@ -223,7 +223,7 @@ export function rowShown(laptop: Obsidian, path: string): Promise<true> {
 		async () =>
 			(await laptop.evaluate(
 				(target) =>
-					document.querySelector(`[data-obsync-path="${target}"]`) !== null,
+					document.querySelector(`[data-mdsync-path="${target}"]`) !== null,
 				path,
 			)) || undefined,
 	);

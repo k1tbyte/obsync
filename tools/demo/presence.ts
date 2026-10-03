@@ -59,11 +59,11 @@ async function scene(owner: Page, guest: Page): Promise<void> {
 	await runCommand(guest, "Push all local changes");
 	await sleep(800);
 	await click(guest, file(`Shared/${BUDGET}`), 700);
-	await owner.locator(".obsync-unseen-dot").waitFor();
+	await owner.locator(".mdsync-unseen-dot").waitFor();
 	await sleep(2200);
 
 	await click(owner, file(NOTES), 800);
-	await owner.locator(".obsync-unseen-dot").waitFor({ state: "detached" });
+	await owner.locator(".mdsync-unseen-dot").waitFor({ state: "detached" });
 	await sleep(2200);
 }
 

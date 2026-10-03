@@ -47,21 +47,21 @@ await runDemo("history", {
 });
 
 async function scene(page: Page): Promise<void> {
-	const cards = page.locator(".obsync-history-list .obsync-timeline-card");
+	const cards = page.locator(".mdsync-history-list .mdsync-timeline-card");
 	await sleep(600);
 	await openTab(page, "History");
 	await cards.nth(3).waitFor();
 	await sleep(1200);
 
-	await click(page, cards.nth(2).locator(".obsync-timeline-head"));
-	await page.locator(".obsync-compare-panel").waitFor();
+	await click(page, cards.nth(2).locator(".mdsync-timeline-head"));
+	await page.locator(".mdsync-compare-panel").waitFor();
 	await sleep(2000);
 	await versionAction(page, cards.nth(1), "Compare with previous");
 	await sleep(2000);
 
 	// A pin moves up under its own heading, so it is the first card from here on.
 	await versionAction(page, cards.nth(3), "Pin this snapshot");
-	await cards.nth(0).locator(".obsync-history-pinned-badge").waitFor();
+	await cards.nth(0).locator(".mdsync-history-pinned-badge").waitFor();
 	await sleep(1400);
 	await versionAction(page, cards.nth(0), "Rename pin…");
 	await page.locator(".modal input").waitFor();
@@ -73,7 +73,7 @@ async function scene(page: Page): Promise<void> {
 	await sleep(1200);
 
 	await versionAction(page, cards.nth(0), "Restore this version");
-	const restore = ".modal .obsync-modal-buttons button:has-text('Restore')";
+	const restore = ".modal .mdsync-modal-buttons button:has-text('Restore')";
 	await page.locator(restore).waitFor();
 	await sleep(1800);
 	await click(page, restore, 700);

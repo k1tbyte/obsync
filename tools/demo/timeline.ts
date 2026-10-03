@@ -66,23 +66,23 @@ await runDemo("timeline", {
 });
 
 async function scene(page: Page): Promise<void> {
-	const cards = page.locator(".obsync-timeline-list .obsync-timeline-card");
+	const cards = page.locator(".mdsync-timeline-list .mdsync-timeline-card");
 	await sleep(600);
 	await openTab(page, "Timeline");
 	await cards.nth(4).waitFor();
 	await sleep(1400);
 
-	await click(page, cards.nth(2).locator(".obsync-timeline-head"));
+	await click(page, cards.nth(2).locator(".mdsync-timeline-head"));
 	await sleep(1200);
 	await pickMenuItem(
 		page,
 		`[aria-label='Actions for ${WEBSITE}']`,
 		"Show changes in this push",
 	);
-	await page.locator(".obsync-compare-panel").waitFor();
+	await page.locator(".mdsync-compare-panel").waitFor();
 	await sleep(2200);
 
-	await click(page, cards.nth(1).locator(".obsync-timeline-head"));
+	await click(page, cards.nth(1).locator(".mdsync-timeline-head"));
 	await sleep(1500);
 
 	await pickMenuItem(
@@ -91,7 +91,7 @@ async function scene(page: Page): Promise<void> {
 		"Restore vault to this snapshot…",
 	);
 	const restore =
-		".modal .obsync-modal-buttons button:has-text('Restore vault')";
+		".modal .mdsync-modal-buttons button:has-text('Restore vault')";
 	await page.locator(restore).waitFor();
 	await sleep(2600);
 	await click(page, restore, 700);

@@ -63,8 +63,8 @@ async function scene(owner: Page, guest: Page): Promise<void> {
 	// What the OS does with the link once it is clicked.
 	await guest.evaluate((url) => {
 		const params = Object.fromEntries(new URL(url).searchParams);
-		app.workspace.protocolHandler.handlers.get("obsync-share")({
-			action: "obsync-share",
+		app.workspace.protocolHandler.handlers.get("mdsync-share")({
+			action: "mdsync-share",
 			...params,
 		});
 	}, link);

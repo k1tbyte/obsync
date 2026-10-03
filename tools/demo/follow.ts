@@ -38,7 +38,7 @@ await runPair("follow", {
 
 async function scene(owner: Page, guest: Page): Promise<void> {
 	await sleep(1500);
-	await pickMenuItem(owner, ".obsync-note-presence", "Bob");
+	await pickMenuItem(owner, ".mdsync-note-presence", "Bob");
 	await sleep(1200);
 
 	await quickOpen(guest, "Notes");
@@ -62,7 +62,7 @@ async function showNote(device: Obsidian, path: string): Promise<void> {
 	await device.waitFor(
 		"the other person in the note",
 		() =>
-			app.plugins.plugins.obsync.realtime.people.inNote(
+			app.plugins.plugins.mdsync.realtime.people.inNote(
 				app.workspace.getActiveFile().path,
 			).length,
 		(count: number) => count > 0,

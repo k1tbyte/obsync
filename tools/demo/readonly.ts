@@ -45,7 +45,7 @@ async function scene(owner: Page, guest: Page): Promise<void> {
 	await click(guest, folder("Shared"), 700);
 	await click(guest, folder("Shared/Team"), 500);
 	await click(guest, file(`Shared/${PLAN}`), 600);
-	await guest.locator(".obsync-note-lock").waitFor();
+	await guest.locator(".mdsync-note-lock").waitFor();
 	await sleep(1200);
 	// The lock holds: typing in the note changes nothing.
 	await clickLineEnd(guest, "Send the invites");
@@ -63,7 +63,7 @@ async function scene(owner: Page, guest: Page): Promise<void> {
 	await click(guest, file(`Shared/${NOTES}`), 600);
 	await guest.waitForFunction(
 		(path) =>
-			app.plugins.plugins.obsync.realtime.live.noteState(path) === "live",
+			app.plugins.plugins.mdsync.realtime.live.noteState(path) === "live",
 		`Shared/${NOTES}`,
 	);
 	await sleep(1400);
@@ -122,8 +122,8 @@ async function acceptInvite(
 	// What the OS does with the link once it is clicked.
 	await guest.evaluate((url) => {
 		const params = Object.fromEntries(new URL(url).searchParams);
-		app.workspace.protocolHandler.handlers.get("obsync-share")({
-			action: "obsync-share",
+		app.workspace.protocolHandler.handlers.get("mdsync-share")({
+			action: "mdsync-share",
 			...params,
 		});
 	}, link);
@@ -149,7 +149,7 @@ async function revoke(owner: Page): Promise<void> {
 	await owner.locator(bob).waitFor();
 	await sleep(2200);
 	await click(owner, `${bob} button:has-text('Revoke')`, 700);
-	const confirm = ".obsync-modal-buttons button:text-is('Revoke')";
+	const confirm = ".mdsync-modal-buttons button:text-is('Revoke')";
 	await owner.locator(confirm).waitFor();
 	await sleep(1800);
 	await click(owner, confirm, 600);

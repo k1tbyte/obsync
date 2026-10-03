@@ -134,7 +134,7 @@ export async function joinShare(
 /** How the people in the owner's shares see them, instead of "Owner". */
 export function nameOwner(owner: Obsidian, name: string): Promise<void> {
 	return owner.evaluate(async (value) => {
-		const { spaces, controller } = app.plugins.plugins.obsync;
+		const { spaces, controller } = app.plugins.plugins.mdsync;
 		for (const record of spaces.list()) {
 			if (record.closed || record.access.kind !== "owner") continue;
 			await spaces.renew(
@@ -174,7 +174,7 @@ function shoot(pages: Page[], name: string, when: string): Promise<unknown> {
 
 function rename(device: Obsidian, name: string): Promise<void> {
 	return device.evaluate(
-		(value) => app.plugins.plugins.obsync.device.rename(value),
+		(value) => app.plugins.plugins.mdsync.device.rename(value),
 		name,
 	);
 }

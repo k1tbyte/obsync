@@ -56,7 +56,7 @@ await runDemo("changes", {
 async function scene(page: Page): Promise<void> {
 	await sleep(700);
 	await click(page, row("Ideas.md"));
-	await page.locator(".obsync-compare-panel").waitFor();
+	await page.locator(".mdsync-compare-panel").waitFor();
 	await sleep(1800);
 	await click(page, row(READING));
 	await sleep(1200);
@@ -75,8 +75,8 @@ async function scene(page: Page): Promise<void> {
 	await page.keyboard.press("Backspace");
 	await sleep(800);
 
-	await click(page, `${row("Ideas.md")} .obsync-file-checkbox`);
-	await click(page, `${row(GARDEN)} .obsync-file-checkbox`);
+	await click(page, `${row("Ideas.md")} .mdsync-file-checkbox`);
+	await click(page, `${row(GARDEN)} .mdsync-file-checkbox`);
 	await sleep(500);
 	await click(page, "button:has-text('Push selected')");
 	await page.locator(row("Ideas.md")).waitFor({ state: "detached" });
@@ -90,10 +90,10 @@ async function scene(page: Page): Promise<void> {
 /** Picks the added line on the diff's connector, then applies it. */
 async function pullOneChange(page: Page): Promise<void> {
 	const divider = await page
-		.locator(".obsync-compare-panel .obsync-divider-canvas")
+		.locator(".mdsync-compare-panel .mdsync-divider-canvas")
 		.boundingBox();
 	const line = await page
-		.locator(".obsync-compare-panel .cm-line:has-text('Ricardo Reis')")
+		.locator(".mdsync-compare-panel .cm-line:has-text('Ricardo Reis')")
 		.boundingBox();
 	if (!divider || !line) throw new Error("no connector for the added line");
 	// At the strip's edge the connector is as tall as the line it touches.
@@ -103,12 +103,12 @@ async function pullOneChange(page: Page): Promise<void> {
 		800,
 	);
 	const pull =
-		".obsync-divider-action.is-popup [aria-label='Pull this change from the remote']";
+		".mdsync-divider-action.is-popup [aria-label='Pull this change from the remote']";
 	await page.locator(pull).waitFor();
 	await sleep(500);
 	await click(page, pull, 500);
 	await sleep(700);
-	await click(page, ".obsync-compare-panel [aria-label^='Apply']", 800);
+	await click(page, ".mdsync-compare-panel [aria-label^='Apply']", 800);
 }
 
 /** Folders start collapsed; one click each, as each click redraws the list. */
@@ -116,7 +116,7 @@ async function expandFolders(laptop: Obsidian): Promise<void> {
 	await laptop.evaluate(async () => {
 		for (;;) {
 			const folder = document.querySelector<HTMLElement>(
-				".obsync-tree-folder.is-collapsed",
+				".mdsync-tree-folder.is-collapsed",
 			);
 			if (!folder) return;
 			folder.click();
@@ -126,5 +126,5 @@ async function expandFolders(laptop: Obsidian): Promise<void> {
 }
 
 function row(path: string): string {
-	return `.obsync-file-row[data-obsync-path="${path}"]`;
+	return `.mdsync-file-row[data-mdsync-path="${path}"]`;
 }

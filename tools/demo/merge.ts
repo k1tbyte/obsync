@@ -45,15 +45,15 @@ await runDemo("merge", {
 
 async function scene(page: Page): Promise<void> {
 	await sleep(800);
-	await click(page, ".obsync-file-row:has-text('Lisbon trip')");
+	await click(page, ".mdsync-file-row:has-text('Lisbon trip')");
 	await page.locator("button:has-text('Merge…')").waitFor();
 	await sleep(1200);
 	await click(page, "button:has-text('Merge…')");
-	await page.locator(".obsync-merge-panel").waitFor();
+	await page.locator(".mdsync-merge-panel").waitFor();
 	await sleep(1000);
 	// Room for the three panes side by side.
 	await click(page, ".sidebar-toggle-button.mod-right", 800);
-	const dividers = page.locator(".obsync-divider-canvas");
+	const dividers = page.locator(".mdsync-divider-canvas");
 	await poll("side-by-side panes", async () =>
 		(await dividers.count()) === 2 ? true : undefined,
 	);
@@ -71,7 +71,7 @@ async function scene(page: Page): Promise<void> {
 	await glide(page, "[aria-label='Save and push']", 900);
 	await sleep(500);
 	await click(page, "[aria-label='Save and push']", 100);
-	await page.locator(".obsync-merge-panel").waitFor({ state: "detached" });
+	await page.locator(".mdsync-merge-panel").waitFor({ state: "detached" });
 	await sleep(1000);
 }
 
@@ -82,7 +82,7 @@ async function resolve(
 	action: string,
 ): Promise<void> {
 	await click(page, connector, 900);
-	const button = `.obsync-divider-action.is-popup [aria-label='${action}']`;
+	const button = `.mdsync-divider-action.is-popup [aria-label='${action}']`;
 	await page.locator(button).waitFor();
 	await sleep(600);
 	await click(page, button, 500);

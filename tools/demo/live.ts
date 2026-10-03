@@ -83,7 +83,7 @@ async function showNote(device: Obsidian, path: string): Promise<void> {
 	await device.waitFor(
 		"the other person in the note",
 		() =>
-			app.plugins.plugins.obsync.realtime.people.inNote(
+			app.plugins.plugins.mdsync.realtime.people.inNote(
 				app.workspace.getActiveFile().path,
 			).length,
 		(count: number) => count > 0,

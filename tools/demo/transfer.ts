@@ -27,7 +27,7 @@ const LAPTOP_PORT = 9223;
 const PHONE_PORT = 9224;
 const OUT_DIR = "artifacts/demos";
 const NOTE = "Ideas.md";
-const QR = "canvas.obsync-transfer-qr";
+const QR = "canvas.mdsync-transfer-qr";
 const GENERATE = ".modal button:has-text('Generate export')";
 /** The exported setup names a real-looking bucket, not the local test server. */
 const BUCKET = {
@@ -62,7 +62,7 @@ await runScenario("transfer demo", async () => {
 		await Promise.all([unlock(laptop, PASSPHRASE), unlock(phone, PASSPHRASE)]);
 		await laptop.evaluate((target) => {
 			Object.assign(
-				app.plugins.plugins.obsync.settings.storageConfigs.s3,
+				app.plugins.plugins.mdsync.settings.storageConfigs.s3,
 				target,
 			);
 		}, BUCKET);
@@ -117,7 +117,7 @@ async function exportSetup(page: Page): Promise<string> {
 	// The settings window opens apart from the main one, out of this recording's reach: the modal its Export button opens is opened directly.
 	await page.evaluate(() =>
 		app.setting.pluginTabs
-			.find((tab: { id: string }) => tab.id === "obsync")
+			.find((tab: { id: string }) => tab.id === "mdsync")
 			.handleExportSettings(),
 	);
 	await page.locator(GENERATE).waitFor();
@@ -146,7 +146,7 @@ async function scrollToMiddle(page: Page, selector: string): Promise<void> {
 /** What the OS hands the plugin once a scanned link opens; the prompt waits for a typed IMPORT. */
 async function importPrompt(page: Page, link: string): Promise<void> {
 	await page.evaluate((url) => {
-		void app.plugins.plugins.obsync.transfer.importFrom(url);
+		void app.plugins.plugins.mdsync.transfer.importFrom(url);
 	}, link);
 	await page.locator(".modal:has-text('Type IMPORT')").waitFor();
 	await sleep(200);

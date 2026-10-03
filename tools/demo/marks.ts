@@ -42,22 +42,22 @@ async function scene(page: Page): Promise<void> {
 	await page.keyboard.press("Backspace");
 	await sleep(1200);
 
-	await openMark(page, ".obsync-sign-change");
+	await openMark(page, ".mdsync-sign-change");
 	await click(page, popupButton("Revert hunk"), 600);
-	await page.locator(".obsync-sign-change").waitFor({ state: "detached" });
+	await page.locator(".mdsync-sign-change").waitFor({ state: "detached" });
 	await sleep(1000);
-	await openMark(page, ".obsync-sign-add");
+	await openMark(page, ".mdsync-sign-add");
 	await click(page, popupButton("Push hunk"), 600);
-	await page.locator(".obsync-sign-add").waitFor({ state: "detached" });
+	await page.locator(".mdsync-sign-add").waitFor({ state: "detached" });
 	await sleep(800);
 }
 
 async function openMark(page: Page, mark: string): Promise<void> {
 	await click(page, mark, 800);
-	await page.locator(".obsync-hunk-popup").waitFor();
+	await page.locator(".mdsync-hunk-popup").waitFor();
 	await sleep(1400);
 }
 
 function popupButton(text: string): string {
-	return `.obsync-hunk-popup button:has-text('${text}')`;
+	return `.mdsync-hunk-popup button:has-text('${text}')`;
 }

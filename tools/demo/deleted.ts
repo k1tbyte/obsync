@@ -47,15 +47,15 @@ await runDemo("deleted", {
 });
 
 async function scene(page: Page): Promise<void> {
-	const rows = page.locator(".obsync-history-row");
-	const restore = ".modal .obsync-modal-buttons button:has-text('Restore')";
+	const rows = page.locator(".mdsync-history-row");
+	const restore = ".modal .mdsync-modal-buttons button:has-text('Restore')";
 	await sleep(600);
 	await openTab(page, "Deleted");
 	await rows.nth(2).waitFor();
 	await sleep(1800);
 
 	await click(page, `[aria-label='Preview ${DAILY}']`);
-	await page.locator(".obsync-compare-panel").waitFor();
+	await page.locator(".mdsync-compare-panel").waitFor();
 	await sleep(2200);
 
 	await click(page, `[aria-label='Restore ${DAILY}']`);
